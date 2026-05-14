@@ -106,6 +106,26 @@ func NewTaskService(q *db.Queries, tx TxStarter, hub *realtime.Hub, bus *events.
 	return &TaskService{Queries: q, TxStarter: tx, Hub: hub, Bus: bus, Wakeup: wakeup}
 }
 
+var trivialDoneMarkers = []string{
+	"done",
+	"готово",
+	"готова",
+	"сделано",
+	"完成",
+	"完了",
+}
+
+func isTrivialDoneOutput(output string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(output))
+	normalized = strings.Trim(normalized, ".!！。… ")
+	for _, marker := range trivialDoneMarkers {
+		if normalized == marker {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *TaskService) captureTaskQueued(ctx context.Context, task db.AgentTaskQueue) {
 	s.captureTaskEvent(ctx, analytics.AgentTaskQueued(s.taskAnalyticsContext(ctx, task)))
 }
@@ -972,7 +992,15 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 					// decoded into real newlines before the comment hits the DB. See
 					// util.UnescapeBackslashEscapes for the exact contract.
 					body := util.UnescapeBackslashEscapes(payload.Output)
-					s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(body), "comment", task.TriggerCommentID)
+					if task.TriggerCommentID.Valid && isTrivialDoneOutput(body) {
+						slog.Warn("suppressing trivial comment-trigger fallback output",
+							"task_id", util.UUIDToString(task.ID),
+							"issue_id", util.UUIDToString(task.IssueID),
+							"agent_id", util.UUIDToString(task.AgentID),
+						)
+					} else {
+						s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(body), "comment", task.TriggerCommentID)
+					}
 				}
 			}
 		}
