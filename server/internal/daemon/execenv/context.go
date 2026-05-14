@@ -16,6 +16,7 @@ import (
 // Codex:    skills → handled separately in Prepare via codex-home
 // Copilot:  skills → {workDir}/.github/skills/{name}/SKILL.md  (native project-level discovery)
 // OpenCode: skills → {workDir}/.opencode/skills/{name}/SKILL.md  (native discovery)
+// OpenClaw: skills → {workDir}/.agent_context/skills/{name}/SKILL.md  (NO native auto-discovery — see note in resolveSkillsDir)
 // Pi:       skills → {workDir}/.pi/skills/{name}/SKILL.md  (native discovery)
 // Cursor:   skills → {workDir}/.cursor/skills/{name}/SKILL.md  (native discovery)
 // Kimi:     skills → {workDir}/.kimi/skills/{name}/SKILL.md  (native discovery)
