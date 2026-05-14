@@ -36,6 +36,7 @@ import {
   recordMentionUsage,
   sortUserItemsByRecency,
 } from "./mention-recency";
+import { matchesPinyin } from "./pinyin-match";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -400,7 +401,7 @@ export function createMentionSuggestion(qc: QueryClient): Omit<
         : [];
 
     const memberItems: MentionItem[] = members
-      .filter((m) => m.name.toLowerCase().includes(q))
+      .filter((m) => m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q))
       .map((m) => ({
         id: m.user_id,
         label: m.name,
@@ -411,7 +412,7 @@ export function createMentionSuggestion(qc: QueryClient): Omit<
       .filter(
         (a) =>
           !a.archived_at &&
-          a.name.toLowerCase().includes(q) &&
+          (a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q)) &&
           canAssignAgentToIssue(a, { userId, role: myRole }).allowed,
       )
       .map((a) => ({ id: a.id, label: a.name, type: "agent" as const }));
