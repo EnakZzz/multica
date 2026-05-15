@@ -182,7 +182,9 @@
     "task_completed_other": "完成了 task（{{count}} 次）",
     "task_failed_one": "task 失败",
     "task_failed_other": "task 失败（{{count}} 次）",
-    "coalesced_badge": "×{{count}}"
+    "coalesced_badge": "×{{count}}",
+    "activity_count_one": "{{count}} 条动态",
+    "activity_count_other": "{{count}} 条动态"
   },
   "comment": {
     "delete_title": "删除评论",

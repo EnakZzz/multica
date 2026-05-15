@@ -183,7 +183,9 @@
     "task_completed_other": "completed the task ({{count}} times)",
     "task_failed_one": "task failed",
     "task_failed_other": "task failed ({{count}} times)",
-    "coalesced_badge": "×{{count}}"
+    "coalesced_badge": "×{{count}}",
+    "activity_count_one": "{{count}} activity",
+    "activity_count_other": "{{count}} activities"
   },
   "comment": {
     "delete_title": "Delete comment",
