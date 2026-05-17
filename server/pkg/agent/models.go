@@ -869,19 +869,28 @@ func openclawEntriesToModels(entries []openclawAgentEntry) []Model {
 	models := make([]Model, 0, len(entries))
 	seen := map[string]bool{}
 	for _, e := range entries {
-		name := e.Name
-		if name == "" {
-			name = e.ID
+		// Use ID as the model identifier because openclaw resolves
+		// --agent by id, not by display name. Names may contain spaces
+		// (e.g. "Sub2API OPS") which openclaw's normalizeAgentId would
+		// mangle into a different string ("sub2api-ops"), causing a
+		// lookup miss and "no parseable output" errors.
+		id := e.ID
+		if id == "" {
+			id = e.Name
 		}
-		if name == "" || seen[name] {
+		if id == "" || seen[id] {
 			continue
 		}
-		seen[name] = true
-		label := name
-		if e.Model != "" {
-			label = name + " (" + e.Model + ")"
+		seen[id] = true
+		displayName := e.Name
+		if displayName == "" {
+			displayName = id
 		}
-		models = append(models, Model{ID: name, Label: label, Provider: "openclaw"})
+		label := displayName
+		if e.Model != "" {
+			label = displayName + " (" + e.Model + ")"
+		}
+		models = append(models, Model{ID: id, Label: label, Provider: "openclaw"})
 	}
 	return models
 }
