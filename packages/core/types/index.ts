@@ -102,4 +102,8 @@ export type {
   ListAutopilotsResponse,
   GetAutopilotResponse,
   ListAutopilotRunsResponse,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  WebhookSignatureStatus,
+  ListWebhookDeliveriesResponse,
 } from "./autopilot";
