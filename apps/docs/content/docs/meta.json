@@ -18,6 +18,7 @@
     "skills",
     "---How agents run---",
     "daemon-runtimes",
+    "install-agent-runtime",
     "tasks",
     "providers",
     "---Collaborating with agents---",
