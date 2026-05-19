@@ -10,6 +10,7 @@ WHERE workspace_id = $1
   AND (sqlc.narg('assignee_ids')::uuid[] IS NULL OR assignee_id = ANY(sqlc.narg('assignee_ids')::uuid[]))
   AND (sqlc.narg('creator_id')::uuid IS NULL OR creator_id = sqlc.narg('creator_id'))
   AND (sqlc.narg('project_id')::uuid IS NULL OR project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('scheduled')::bool IS NULL OR (start_date IS NOT NULL OR due_date IS NOT NULL))
 ORDER BY position ASC, created_at DESC
 LIMIT $2 OFFSET $3;
 
@@ -107,7 +108,8 @@ WHERE workspace_id = $1
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR assignee_id = sqlc.narg('assignee_id'))
   AND (sqlc.narg('assignee_ids')::uuid[] IS NULL OR assignee_id = ANY(sqlc.narg('assignee_ids')::uuid[]))
   AND (sqlc.narg('creator_id')::uuid IS NULL OR creator_id = sqlc.narg('creator_id'))
-  AND (sqlc.narg('project_id')::uuid IS NULL OR project_id = sqlc.narg('project_id'));
+  AND (sqlc.narg('project_id')::uuid IS NULL OR project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('scheduled')::bool IS NULL OR (start_date IS NOT NULL OR due_date IS NOT NULL));
 
 -- name: ListChildIssues :many
 SELECT * FROM issue

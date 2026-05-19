@@ -191,10 +191,10 @@ func assigneeGroupID(assigneeType pgtype.Text, assigneeID pgtype.UUID) string {
 // SearchIssueResponse extends IssueResponse with search metadata.
 type SearchIssueResponse struct {
 	IssueResponse
-	MatchSource                string  `json:"match_source"`
-	MatchedSnippet             *string `json:"matched_snippet,omitempty"`
-	MatchedDescriptionSnippet  *string `json:"matched_description_snippet,omitempty"`
-	MatchedCommentSnippet      *string `json:"matched_comment_snippet,omitempty"`
+	MatchSource               string  `json:"match_source"`
+	MatchedSnippet            *string `json:"matched_snippet,omitempty"`
+	MatchedDescriptionSnippet *string `json:"matched_description_snippet,omitempty"`
+	MatchedCommentSnippet     *string `json:"matched_comment_snippet,omitempty"`
 }
 
 // extractSnippet extracts a snippet of text around the first occurrence of query.
@@ -798,6 +798,14 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		statusFilter = pgtype.Text{String: s, Valid: true}
 	}
 
+	// scheduled=true restricts the result to issues that have at least one of
+	// start_date / due_date set. Used by the Project Gantt view, which only
+	// renders schedulable rows and shouldn't pay for the full project list.
+	var scheduledFilter pgtype.Bool
+	if r.URL.Query().Get("scheduled") == "true" {
+		scheduledFilter = pgtype.Bool{Bool: true, Valid: true}
+	}
+
 	issues, err := h.Queries.ListIssues(ctx, db.ListIssuesParams{
 		WorkspaceID: wsUUID,
 		Limit:       int32(limit),
@@ -808,6 +816,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		AssigneeIds: assigneeIdsFilter,
 		CreatorID:   creatorFilter,
 		ProjectID:   projectFilter,
+		Scheduled:   scheduledFilter,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list issues")
@@ -823,6 +832,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		AssigneeIds: assigneeIdsFilter,
 		CreatorID:   creatorFilter,
 		ProjectID:   projectFilter,
+		Scheduled:   scheduledFilter,
 	})
 	if err != nil {
 		total = int64(len(issues))

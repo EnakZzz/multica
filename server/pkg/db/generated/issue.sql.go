@@ -102,6 +102,7 @@ WHERE workspace_id = $1
   AND ($5::uuid[] IS NULL OR assignee_id = ANY($5::uuid[]))
   AND ($6::uuid IS NULL OR creator_id = $6)
   AND ($7::uuid IS NULL OR project_id = $7)
+  AND ($8::bool IS NULL OR (start_date IS NOT NULL OR due_date IS NOT NULL))
 `
 
 type CountIssuesParams struct {
@@ -112,6 +113,7 @@ type CountIssuesParams struct {
 	AssigneeIds []pgtype.UUID `json:"assignee_ids"`
 	CreatorID   pgtype.UUID   `json:"creator_id"`
 	ProjectID   pgtype.UUID   `json:"project_id"`
+	Scheduled   pgtype.Bool   `json:"scheduled"`
 }
 
 func (q *Queries) CountIssues(ctx context.Context, arg CountIssuesParams) (int64, error) {
@@ -123,6 +125,7 @@ func (q *Queries) CountIssues(ctx context.Context, arg CountIssuesParams) (int64
 		arg.AssigneeIds,
 		arg.CreatorID,
 		arg.ProjectID,
+		arg.Scheduled,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -577,6 +580,7 @@ WHERE workspace_id = $1
   AND ($7::uuid[] IS NULL OR assignee_id = ANY($7::uuid[]))
   AND ($8::uuid IS NULL OR creator_id = $8)
   AND ($9::uuid IS NULL OR project_id = $9)
+  AND ($10::bool IS NULL OR (start_date IS NOT NULL OR due_date IS NOT NULL))
 ORDER BY position ASC, created_at DESC
 LIMIT $2 OFFSET $3
 `
@@ -591,6 +595,7 @@ type ListIssuesParams struct {
 	AssigneeIds []pgtype.UUID `json:"assignee_ids"`
 	CreatorID   pgtype.UUID   `json:"creator_id"`
 	ProjectID   pgtype.UUID   `json:"project_id"`
+	Scheduled   pgtype.Bool   `json:"scheduled"`
 }
 
 type ListIssuesRow struct {
@@ -625,6 +630,7 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 		arg.AssigneeIds,
 		arg.CreatorID,
 		arg.ProjectID,
+		arg.Scheduled,
 	)
 	if err != nil {
 		return nil, err
