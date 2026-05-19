@@ -120,6 +120,7 @@ import {
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
+  EMPTY_USER,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   GroupedIssuesResponseSchema,
@@ -129,6 +130,7 @@ import {
   OnboardingRuntimeBootstrapResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
+  UserSchema,
   WebhookDeliveryResponseSchema,
 } from "./schemas";
 
@@ -376,7 +378,10 @@ export class ApiClient {
   }
 
   async getMe(): Promise<User> {
-    return this.fetch("/api/me");
+    const raw = await this.fetch<unknown>("/api/me");
+    return parseWithFallback(raw, UserSchema, EMPTY_USER, {
+      endpoint: "GET /api/me",
+    });
   }
 
   async markOnboardingComplete(payload?: {
@@ -446,9 +451,12 @@ export class ApiClient {
   }
 
   async updateMe(data: UpdateMeRequest): Promise<User> {
-    return this.fetch("/api/me", {
+    const raw = await this.fetch<unknown>("/api/me", {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, UserSchema, EMPTY_USER, {
+      endpoint: "PATCH /api/me",
     });
   }
 

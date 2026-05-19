@@ -174,7 +174,15 @@ type AgentTaskResponse struct {
 	AutopilotSource         string                `json:"autopilot_source,omitempty"`          // manual, schedule, webhook, or api
 	AutopilotTriggerPayload json.RawMessage       `json:"autopilot_trigger_payload,omitempty"` // optional trigger payload for webhook/api runs
 	QuickCreatePrompt       string                `json:"quick_create_prompt,omitempty"`       // user's natural-language input for quick-create tasks
-	Kind                    string                `json:"kind"`                                // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+	// RequestingUserName + RequestingUserProfileDescription mirror the user
+	// the agent is acting on behalf of (see daemon/types.go). v1 sources them
+	// from the runtime owner so they're populated for daemon runtimes and
+	// empty otherwise. The daemon emits both into the brief under
+	// `## Requesting User`; the heading is skipped entirely when description
+	// is empty.
+	RequestingUserName               string `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
+	Kind                             string `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
 }
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in
