@@ -26,6 +26,7 @@ func computeNextRun(cronExpr, timezone string) (time.Time, error) {
 type AutopilotResponse struct {
 	ID                 string  `json:"id"`
 	WorkspaceID        string  `json:"workspace_id"`
+	ProjectID          *string `json:"project_id"`
 	Title              string  `json:"title"`
 	Description        *string `json:"description"`
 	AssigneeID         string  `json:"assignee_id"`
@@ -97,6 +98,7 @@ func autopilotToResponse(a db.Autopilot) AutopilotResponse {
 	return AutopilotResponse{
 		ID:                 uuidToString(a.ID),
 		WorkspaceID:        uuidToString(a.WorkspaceID),
+		ProjectID:          uuidToPtr(a.ProjectID),
 		Title:              a.Title,
 		Description:        textToPtr(a.Description),
 		AssigneeID:         uuidToString(a.AssigneeID),
@@ -206,6 +208,7 @@ func runToResponseSlim(r db.AutopilotRun) AutopilotRunResponse {
 
 type CreateAutopilotRequest struct {
 	Title              string  `json:"title"`
+	ProjectID          *string `json:"project_id"`
 	Description        *string `json:"description"`
 	AssigneeID         string  `json:"assignee_id"`
 	ExecutionMode      string  `json:"execution_mode"`
@@ -214,6 +217,7 @@ type CreateAutopilotRequest struct {
 
 type UpdateAutopilotRequest struct {
 	Title              *string `json:"title"`
+	ProjectID          *string `json:"project_id"`
 	Description        *string `json:"description"`
 	AssigneeID         *string `json:"assignee_id"`
 	Status             *string `json:"status"`
@@ -379,6 +383,11 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	projectID, ok := h.parseOptionalProjectIDPtr(w, r, req.ProjectID, wsUUID)
+	if !ok {
+		return
+	}
+
 	autopilot, err := h.Queries.CreateAutopilot(r.Context(), db.CreateAutopilotParams{
 		WorkspaceID:        wsUUID,
 		Title:              req.Title,
@@ -387,6 +396,7 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		ExecutionMode:      req.ExecutionMode,
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(userID),
+		ProjectID:          projectID,
 		Description:        ptrToText(req.Description),
 		IssueTitleTemplate: ptrToText(req.IssueTitleTemplate),
 	})
@@ -429,6 +439,7 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 
 	params := db.UpdateAutopilotParams{
 		ID:                 prev.ID,
+		ProjectID:          prev.ProjectID,
 		Description:        prev.Description,
 		AssigneeID:         prev.AssigneeID,
 		IssueTitleTemplate: prev.IssueTitleTemplate,
@@ -453,6 +464,13 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		params.IssueTitleTemplate = ptrToText(req.IssueTitleTemplate)
+	}
+	if _, ok := rawFields["project_id"]; ok {
+		projectID, ok := h.parseOptionalProjectIDPtr(w, r, req.ProjectID, prev.WorkspaceID)
+		if !ok {
+			return
+		}
+		params.ProjectID = projectID
 	}
 	if _, ok := rawFields["assignee_id"]; ok {
 		if req.AssigneeID != nil {

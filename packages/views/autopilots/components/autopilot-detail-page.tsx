@@ -57,6 +57,7 @@ import { TranscriptButton } from "../../common/task-transcript";
 import { AutopilotDialog } from "./autopilot-dialog";
 import { WebhookPayloadPreview } from "./webhook-payload-preview";
 import { WebhookDeliveriesSection } from "./webhook-deliveries-section";
+import { ProjectPicker } from "../../projects/components/project-picker";
 import { useT } from "../../i18n";
 
 function formatDate(date: string): string {
@@ -734,6 +735,20 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
                   {t(($) => $.execution_mode[autopilot.execution_mode as AutopilotExecutionMode])}
                 </div>
               </div>
+              <div>
+                <label className="text-xs text-muted-foreground">{t(($) => $.detail.field_project)}</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <ProjectPicker
+                    projectId={autopilot.project_id}
+                    onUpdate={(updates) =>
+                      updateAutopilot.mutate({
+                        id: autopilotId,
+                        project_id: updates.project_id ?? null,
+                      })
+                    }
+                  />
+                </div>
+              </div>
               {autopilot.description && (
                 <div className="col-span-2">
                   <label className="text-xs text-muted-foreground">{t(($) => $.detail.field_prompt)}</label>
@@ -828,6 +843,7 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
           initial={{
             title: autopilot.title,
             description: autopilot.description ?? "",
+            project_id: autopilot.project_id,
             assignee_id: autopilot.assignee_id,
             execution_mode: autopilot.execution_mode as AutopilotExecutionMode,
           }}

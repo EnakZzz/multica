@@ -20,6 +20,7 @@ export type AutopilotRunSource = "schedule" | "manual" | "webhook" | "api";
 export interface Autopilot {
   id: string;
   workspace_id: string;
+  project_id: string | null;
   title: string;
   description: string | null;
   assignee_id: string;
@@ -74,6 +75,7 @@ export interface AutopilotRun {
 
 export interface CreateAutopilotRequest {
   title: string;
+  project_id?: string | null;
   description?: string;
   assignee_id: string;
   execution_mode: AutopilotExecutionMode;
@@ -82,6 +84,7 @@ export interface CreateAutopilotRequest {
 
 export interface UpdateAutopilotRequest {
   title?: string;
+  project_id?: string | null;
   description?: string | null;
   assignee_id?: string;
   status?: AutopilotStatus;
