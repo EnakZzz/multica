@@ -1,4 +1,4 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueReaction } from "./issue";
+export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueReaction, IssueDependencySummary, IssueDependenciesResponse } from "./issue";
 export type {
   Agent,
   AgentStatus,
@@ -74,11 +74,36 @@ export type {
   ListProjectsResponse,
   ProjectResource,
   ProjectResourceType,
+  GitRepoResourceRef,
   GithubRepoResourceRef,
   CreateProjectResourceRequest,
   ListProjectResourcesResponse,
 } from "./project";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
+export type {
+  Plan,
+  PlanItem,
+  PlanStatus,
+  ListPlansResponse,
+  CreatePlanRequest,
+  UpdatePlanRequest,
+  UpdatePlanItemRequest,
+} from "./plan";
+export type {
+  Pipeline,
+  PipelineNode,
+  PipelineNodeType,
+  PipelineRun,
+  PipelineRunNode,
+  ListPipelinesResponse,
+  CreatePipelineRequest,
+  ImportPipelineYamlRequest,
+  PipelineImportPreview,
+  PipelineImportValidationResponse,
+  UpdatePipelineRequest,
+  RunPipelineRequest,
+  UpsertPipelineNodeRequest,
+} from "./pipeline";
 export type {
   GitHubInstallation,
   GitHubMergeableState,

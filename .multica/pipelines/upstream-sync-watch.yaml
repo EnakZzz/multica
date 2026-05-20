@@ -1,0 +1,98 @@
+version: 1
+name: Upstream sync watch
+description: >
+  Periodic workflow for a fork of multica-ai/multica. Inspect upstream changes,
+  summarize new commits by importance and merge value, let the owner choose what
+  to bring over, then review and deploy after selected changes are merged. The
+  schedule should be handled by Multica automation.
+nodes:
+  - key: fetch-upstream
+    type: issue
+    repos:
+      - multica
+      - upstream
+    title: Fetch upstream multica-ai/multica changes
+    description: >
+      Ensure the upstream remote points to https://github.com/multica-ai/multica
+      and fetch it. Compare the local main branch with upstream/main without
+      merging anything yet.
+    position:
+      x: 120
+      y: 120
+
+  - key: prioritize-commits
+    type: issue
+    repos:
+      - multica
+      - upstream
+    title: Generate prioritized upstream change report
+    description: >
+      Analyze commits present in upstream/main but missing from this fork.
+      Produce a concise priority table covering user impact, bug/security risk,
+      migration or schema impact, conflict risk, affected areas, and a recommended
+      action: merge now, inspect manually, defer, or ignore.
+    depends_on:
+      - fetch-upstream
+    position:
+      x: 480
+      y: 120
+
+  - key: select-changes
+    type: manual
+    title: Choose upstream commits to merge
+    description: >
+      Owner decision point. Review the prioritized report and choose which
+      upstream commits or range should be merged into the fork.
+    depends_on:
+      - prioritize-commits
+    position:
+      x: 840
+      y: 120
+
+  - key: merge-selected-upstream
+    type: issue
+    repos:
+      - multica
+      - upstream
+    title: Merge selected upstream changes
+    description: >
+      Merge or cherry-pick the selected upstream changes into a dedicated branch.
+      Resolve conflicts in favor of preserving local Multica customizations unless
+      the upstream change is intentionally replacing them. Run focused tests for
+      affected areas.
+    depends_on:
+      - select-changes
+    position:
+      x: 1200
+      y: 120
+
+  - key: review-upstream-merge
+    type: issue
+    repo: multica
+    title: Agent review upstream merge
+    description: >
+      Review the upstream merge branch for regressions, local customization loss,
+      migration risks, Docker/self-hosting impact, and test gaps. Fix or document
+      all review findings before deployment.
+    depends_on:
+      - merge-selected-upstream
+    position:
+      x: 1560
+      y: 120
+
+  - key: deploy-upstream-update
+    type: issue
+    repo: multica
+    title: Deploy after upstream merge
+    description: >
+      After the reviewed upstream merge reaches main, run the deployment update
+      from the repository root:
+
+      .\scripts\docker-selfhost.ps1 update
+
+      Report the update result, image/container state, and any manual follow-up.
+    depends_on:
+      - review-upstream-merge
+    position:
+      x: 1920
+      y: 120

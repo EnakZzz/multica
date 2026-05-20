@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleCheck,
+  GitBranch,
   MoreHorizontal,
   PanelRight,
   Pin,
@@ -41,7 +42,15 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, Command
 import { AvatarGroup, AvatarGroupCount } from "@multica/ui/components/ui/avatar";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { PropRow } from "../../common/prop-row";
-import type { Attachment, Issue, IssueStatus, IssuePriority, TimelineEntry, UpdateIssueRequest } from "@multica/core/types";
+import type {
+  Attachment,
+  Issue,
+  IssueDependencySummary,
+  IssueStatus,
+  IssuePriority,
+  TimelineEntry,
+  UpdateIssueRequest,
+} from "@multica/core/types";
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { toast } from "sonner";
@@ -61,7 +70,14 @@ import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { issueListOptions, issueDetailOptions, childIssuesOptions, issueUsageOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
+import {
+  issueListOptions,
+  issueDetailOptions,
+  childIssuesOptions,
+  issueUsageOptions,
+  issueAttachmentsOptions,
+  issueDependenciesOptions,
+} from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
@@ -235,6 +251,9 @@ function formatActivity(
     case "description_updated":
       return t(($) => $.activity.description_updated);
     case "task_completed":
+      if (details.branch_name) {
+        return t(($) => $.activity.task_pushed_branch, { branch: details.branch_name });
+      }
       return t(($) => $.activity.task_completed, { count: entry.coalesced_count ?? 1 });
     case "task_failed":
       return t(($) => $.activity.task_failed, { count: entry.coalesced_count ?? 1 });
@@ -471,10 +490,13 @@ function ActivityBlock({
 function SubIssueRow({ child }: { child: Issue }) {
   const { t } = useT("issues");
   const paths = useWorkspacePaths();
+  const wsId = useWorkspaceId();
   const updateIssue = useUpdateIssue();
   const selected = useIssueSelectionStore((s) => s.selectedIds.has(child.id));
   const toggleSelected = useIssueSelectionStore((s) => s.toggle);
   const isDone = child.status === "done" || child.status === "cancelled";
+  const { data: dependencies } = useQuery(issueDependenciesOptions(wsId, child.id));
+  const openBlockers = (dependencies?.blocked_by ?? []).filter((dep) => dep.status !== "done");
 
   const handleUpdate = useCallback(
     (updates: Partial<UpdateIssueRequest>) => {
@@ -532,20 +554,32 @@ function SubIssueRow({ child }: { child: Issue }) {
       />
       <AppLink
         href={paths.issueDetail(child.id)}
-        className="flex min-w-0 flex-1 items-center gap-2.5"
+        className="flex min-w-0 flex-1 items-start gap-2.5"
       >
         <span className="text-[11px] text-muted-foreground tabular-nums font-medium shrink-0">
           {child.identifier}
         </span>
-        <span
-          className={cn(
-            "text-sm truncate flex-1",
-            isDone
-              ? "text-muted-foreground"
-              : "group-hover/row:text-foreground",
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span
+            className={cn(
+              "text-sm truncate",
+              isDone
+                ? "text-muted-foreground"
+                : "group-hover/row:text-foreground",
+            )}
+          >
+            {child.title}
+          </span>
+          {openBlockers.length > 0 && (
+            <span className="inline-flex min-w-0 items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+              <GitBranch className="h-3 w-3 shrink-0" />
+              <span className="truncate">
+                {t(($) => $.detail.blocked_by_summary, {
+                  items: openBlockers.map((dep) => dep.identifier).join(", "),
+                })}
+              </span>
+            </span>
           )}
-        >
-          {child.title}
         </span>
       </AppLink>
       <AssigneePicker
@@ -571,6 +605,87 @@ function SubIssueRow({ child }: { child: Issue }) {
       />
     </div>
   );
+}
+
+function IssueDependenciesPanel({
+  blockedBy,
+  blocks,
+}: {
+  blockedBy: IssueDependencySummary[];
+  blocks: IssueDependencySummary[];
+}) {
+  const { t } = useT("issues");
+  const paths = useWorkspacePaths();
+  const openBlockers = blockedBy.filter((dep) => dep.status !== "done");
+  if (blockedBy.length === 0 && blocks.length === 0) return null;
+
+  return (
+    <div className="mt-4 rounded-lg border bg-card/40 p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+        <GitBranch className="h-4 w-4 text-muted-foreground" />
+        {t(($) => $.detail.dependencies_label)}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <div className="mb-1 text-xs font-medium text-muted-foreground">
+            {t(($) => $.detail.blocked_by_label)}
+          </div>
+          {blockedBy.length === 0 ? (
+            <div className="text-xs text-muted-foreground">{t(($) => $.detail.no_dependencies)}</div>
+          ) : (
+            <DependencyList items={blockedBy} emphasizeOpen />
+          )}
+          {blockedBy.length > 0 && openBlockers.length === 0 && (
+            <div className="mt-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              {t(($) => $.detail.all_prerequisites_done)}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="mb-1 text-xs font-medium text-muted-foreground">
+            {t(($) => $.detail.blocks_label)}
+          </div>
+          {blocks.length === 0 ? (
+            <div className="text-xs text-muted-foreground">{t(($) => $.detail.blocks_empty)}</div>
+          ) : (
+            <DependencyList items={blocks} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  function DependencyList({
+    items,
+    emphasizeOpen = false,
+  }: {
+    items: IssueDependencySummary[];
+    emphasizeOpen?: boolean;
+  }) {
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((dep) => {
+          const isOpen = dep.status !== "done";
+          return (
+            <AppLink
+              key={dep.id}
+              href={paths.issueDetail(dep.issue_id)}
+              className={cn(
+                "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors hover:bg-accent",
+                emphasizeOpen && isOpen
+                  ? "border-amber-400/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                  : "border-border bg-background text-muted-foreground",
+              )}
+            >
+              <StatusIcon status={dep.status as IssueStatus} className="h-3.5 w-3.5 shrink-0" />
+              <span className="shrink-0 tabular-nums">{dep.identifier}</span>
+              <span className="truncate">{dep.title}</span>
+            </AppLink>
+          );
+        })}
+      </div>
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -925,6 +1040,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // `src`/`href` against this list to resolve an attachment id before
   // calling `/api/attachments/{id}`.
   const { data: issueAttachments } = useQuery(issueAttachmentsOptions(id));
+  const { data: issueDependencies } = useQuery({
+    ...issueDependenciesOptions(wsId, id),
+    enabled: !!issue,
+  });
 
   // Sub-issue queries
   const parentIssueId = issue?.parent_issue_id;
@@ -1653,6 +1772,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               })()}
             </AppLink>
           )}
+
+          <IssueDependenciesPanel
+            blockedBy={issueDependencies?.blocked_by ?? []}
+            blocks={issueDependencies?.blocks ?? []}
+          />
 
           <div {...descDropZoneProps} className="relative mt-5 rounded-lg">
             <ContentEditor

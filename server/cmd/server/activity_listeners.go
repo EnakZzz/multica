@@ -262,6 +262,17 @@ func handleTaskActivity(ctx context.Context, bus *events.Bus, queries *db.Querie
 	if issueID == "" {
 		return
 	}
+	details := map[string]string{}
+	if branchName, _ := payload["branch_name"].(string); branchName != "" {
+		details["branch_name"] = branchName
+	}
+	if commitSHA, _ := payload["branch_commit_sha"].(string); commitSHA != "" {
+		details["branch_commit_sha"] = commitSHA
+	}
+	if pushedAt, _ := payload["branch_pushed_at"].(string); pushedAt != "" {
+		details["branch_pushed_at"] = pushedAt
+	}
+	detailsJSON, _ := json.Marshal(details)
 
 	// Look up issue to get workspace_id
 	issue, err := queries.GetIssue(ctx, parseUUID(issueID))
@@ -277,7 +288,7 @@ func handleTaskActivity(ctx context.Context, bus *events.Bus, queries *db.Querie
 		ActorType:   util.StrToText("agent"),
 		ActorID:     parseUUID(agentID),
 		Action:      action,
-		Details:     []byte("{}"),
+		Details:     detailsJSON,
 	})
 	if err != nil {
 		slog.Error("activity: failed to record task activity",

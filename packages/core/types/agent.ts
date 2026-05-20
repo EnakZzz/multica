@@ -76,7 +76,7 @@ export interface AgentTask {
   dispatched_at: string | null;
   started_at: string | null;
   completed_at: string | null;
-  result: unknown;
+  result: AgentTaskResult | null;
   error: string | null;
   // Empty string when the task is not in a failed state (the backend uses
   // `omitempty`, so the field may also be missing on non-failed tasks).
@@ -106,12 +106,23 @@ export interface AgentTask {
    * tasks that have no linked issue (so e.g. quick-create tasks render
    * with a meaningful title instead of falling through to "Untracked").
    */
-  kind?: "comment" | "autopilot" | "chat" | "quick_create" | "direct";
+  kind?: "comment" | "autopilot" | "chat" | "quick_create" | "issue_plan" | "direct";
   /**
    * Local working directory pinned for this task by the daemon. Empty until
    * the daemon reports a work_dir (typically once execution starts).
    */
   work_dir?: string;
+}
+
+export interface AgentTaskResult {
+  output?: string;
+  pr_url?: string;
+  branch_name?: string;
+  branch_commit_sha?: string;
+  branch_pushed_at?: string;
+  session_id?: string;
+  work_dir?: string;
+  [key: string]: unknown;
 }
 
 export interface Agent {

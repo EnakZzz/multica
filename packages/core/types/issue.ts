@@ -45,3 +45,20 @@ export interface Issue {
   created_at: string;
   updated_at: string;
 }
+
+export interface IssueDependencySummary {
+  id: string;
+  type: "blocked_by" | "blocks" | "related" | string;
+  issue_id: string;
+  identifier: string;
+  title: string;
+  status: IssueStatus | string;
+  assignee_type: IssueAssigneeType | null;
+  assignee_id: string | null;
+  dependency_type: "blocked_by" | "blocks" | "related" | string;
+}
+
+export interface IssueDependenciesResponse {
+  blocked_by: IssueDependencySummary[];
+  blocks: IssueDependencySummary[];
+}

@@ -59,6 +59,70 @@ UPDATE issue SET
 WHERE id = $1
 RETURNING *;
 
+-- name: CreateIssueDependency :one
+INSERT INTO issue_dependency (issue_id, depends_on_issue_id, type)
+VALUES ($1, $2, $3)
+ON CONFLICT (issue_id, depends_on_issue_id, type) DO UPDATE
+SET type = EXCLUDED.type
+RETURNING *;
+
+-- name: CountOpenDependenciesForIssue :one
+SELECT count(*)::bigint
+FROM issue_dependency d
+JOIN issue dep ON dep.id = d.depends_on_issue_id
+WHERE d.issue_id = $1
+  AND d.type = 'blocked_by'
+  AND dep.status != 'done';
+
+-- name: ListIssuesUnblockedByIssue :many
+SELECT i.*
+FROM issue_dependency d
+JOIN issue i ON i.id = d.issue_id
+WHERE d.depends_on_issue_id = $1
+  AND d.type = 'blocked_by'
+  AND i.status NOT IN ('backlog', 'done', 'cancelled')
+  AND NOT EXISTS (
+      SELECT 1
+      FROM issue_dependency other_d
+      JOIN issue dep ON dep.id = other_d.depends_on_issue_id
+      WHERE other_d.issue_id = i.id
+        AND other_d.type = 'blocked_by'
+        AND dep.status != 'done'
+  )
+ORDER BY i.position ASC, i.created_at ASC;
+
+-- name: ListIssueBlockedByDependencies :many
+SELECT
+    d.id AS dependency_id,
+    d.type AS dependency_type,
+    i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
+    i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
+    i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position,
+    i.due_date, i.created_at, i.updated_at, i.number, i.project_id,
+    i.origin_type, i.origin_id, i.first_executed_at
+FROM issue_dependency d
+JOIN issue i ON i.id = d.depends_on_issue_id
+WHERE d.issue_id = $1
+  AND d.type = 'blocked_by'
+  AND i.workspace_id = $2
+ORDER BY i.status = 'done', i.position ASC, i.created_at ASC;
+
+-- name: ListIssueBlocksDependencies :many
+SELECT
+    d.id AS dependency_id,
+    d.type AS dependency_type,
+    i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
+    i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
+    i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position,
+    i.due_date, i.created_at, i.updated_at, i.number, i.project_id,
+    i.origin_type, i.origin_id, i.first_executed_at
+FROM issue_dependency d
+JOIN issue i ON i.id = d.issue_id
+WHERE d.depends_on_issue_id = $1
+  AND d.type = 'blocked_by'
+  AND i.workspace_id = $2
+ORDER BY i.status = 'done', i.position ASC, i.created_at ASC;
+
 -- name: CreateIssueWithOrigin :one
 INSERT INTO issue (
     workspace_id, title, description, status, priority,

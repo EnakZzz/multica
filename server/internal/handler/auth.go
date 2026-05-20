@@ -319,6 +319,11 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.Queries.MarkUnusedVerificationCodesUsedByEmail(r.Context(), email); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to invalidate previous verification codes")
+		return
+	}
+
 	_, err = h.Queries.CreateVerificationCode(r.Context(), db.CreateVerificationCodeParams{
 		Email:     email,
 		Code:      code,

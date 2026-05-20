@@ -132,6 +132,22 @@ func (q *Queries) CountIssues(ctx context.Context, arg CountIssuesParams) (int64
 	return count, err
 }
 
+const countOpenDependenciesForIssue = `-- name: CountOpenDependenciesForIssue :one
+SELECT count(*)::bigint
+FROM issue_dependency d
+JOIN issue dep ON dep.id = d.depends_on_issue_id
+WHERE d.issue_id = $1
+  AND d.type = 'blocked_by'
+  AND dep.status != 'done'
+`
+
+func (q *Queries) CountOpenDependenciesForIssue(ctx context.Context, issueID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenDependenciesForIssue, issueID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createIssue = `-- name: CreateIssue :one
 INSERT INTO issue (
     workspace_id, title, description, status, priority,
@@ -203,6 +219,32 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+	)
+	return i, err
+}
+
+const createIssueDependency = `-- name: CreateIssueDependency :one
+INSERT INTO issue_dependency (issue_id, depends_on_issue_id, type)
+VALUES ($1, $2, $3)
+ON CONFLICT (issue_id, depends_on_issue_id, type) DO UPDATE
+SET type = EXCLUDED.type
+RETURNING id, issue_id, depends_on_issue_id, type
+`
+
+type CreateIssueDependencyParams struct {
+	IssueID          pgtype.UUID `json:"issue_id"`
+	DependsOnIssueID pgtype.UUID `json:"depends_on_issue_id"`
+	Type             string      `json:"type"`
+}
+
+func (q *Queries) CreateIssueDependency(ctx context.Context, arg CreateIssueDependencyParams) (IssueDependency, error) {
+	row := q.db.QueryRow(ctx, createIssueDependency, arg.IssueID, arg.DependsOnIssueID, arg.Type)
+	var i IssueDependency
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.DependsOnIssueID,
+		&i.Type,
 	)
 	return i, err
 }
@@ -568,6 +610,194 @@ func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID pgtype.UUID
 	return items, nil
 }
 
+const listIssueBlockedByDependencies = `-- name: ListIssueBlockedByDependencies :many
+SELECT
+    d.id AS dependency_id,
+    d.type AS dependency_type,
+    i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
+    i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
+    i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position,
+    i.due_date, i.created_at, i.updated_at, i.number, i.project_id,
+    i.origin_type, i.origin_id, i.first_executed_at
+FROM issue_dependency d
+JOIN issue i ON i.id = d.depends_on_issue_id
+WHERE d.issue_id = $1
+  AND d.type = 'blocked_by'
+  AND i.workspace_id = $2
+ORDER BY i.status = 'done', i.position ASC, i.created_at ASC
+`
+
+type ListIssueBlockedByDependenciesParams struct {
+	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type ListIssueBlockedByDependenciesRow struct {
+	DependencyID       pgtype.UUID        `json:"dependency_id"`
+	DependencyType     string             `json:"dependency_type"`
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Title              string             `json:"title"`
+	Description        pgtype.Text        `json:"description"`
+	Status             string             `json:"status"`
+	Priority           string             `json:"priority"`
+	AssigneeType       pgtype.Text        `json:"assignee_type"`
+	AssigneeID         pgtype.UUID        `json:"assignee_id"`
+	CreatorType        string             `json:"creator_type"`
+	CreatorID          pgtype.UUID        `json:"creator_id"`
+	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
+	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
+	ContextRefs        []byte             `json:"context_refs"`
+	Position           float64            `json:"position"`
+	DueDate            pgtype.Timestamptz `json:"due_date"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	Number             int32              `json:"number"`
+	ProjectID          pgtype.UUID        `json:"project_id"`
+	OriginType         pgtype.Text        `json:"origin_type"`
+	OriginID           pgtype.UUID        `json:"origin_id"`
+	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
+}
+
+func (q *Queries) ListIssueBlockedByDependencies(ctx context.Context, arg ListIssueBlockedByDependenciesParams) ([]ListIssueBlockedByDependenciesRow, error) {
+	rows, err := q.db.Query(ctx, listIssueBlockedByDependencies, arg.IssueID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListIssueBlockedByDependenciesRow{}
+	for rows.Next() {
+		var i ListIssueBlockedByDependenciesRow
+		if err := rows.Scan(
+			&i.DependencyID,
+			&i.DependencyType,
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.ProjectID,
+			&i.OriginType,
+			&i.OriginID,
+			&i.FirstExecutedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIssueBlocksDependencies = `-- name: ListIssueBlocksDependencies :many
+SELECT
+    d.id AS dependency_id,
+    d.type AS dependency_type,
+    i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
+    i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
+    i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position,
+    i.due_date, i.created_at, i.updated_at, i.number, i.project_id,
+    i.origin_type, i.origin_id, i.first_executed_at
+FROM issue_dependency d
+JOIN issue i ON i.id = d.issue_id
+WHERE d.depends_on_issue_id = $1
+  AND d.type = 'blocked_by'
+  AND i.workspace_id = $2
+ORDER BY i.status = 'done', i.position ASC, i.created_at ASC
+`
+
+type ListIssueBlocksDependenciesParams struct {
+	DependsOnIssueID pgtype.UUID `json:"depends_on_issue_id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+}
+
+type ListIssueBlocksDependenciesRow struct {
+	DependencyID       pgtype.UUID        `json:"dependency_id"`
+	DependencyType     string             `json:"dependency_type"`
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Title              string             `json:"title"`
+	Description        pgtype.Text        `json:"description"`
+	Status             string             `json:"status"`
+	Priority           string             `json:"priority"`
+	AssigneeType       pgtype.Text        `json:"assignee_type"`
+	AssigneeID         pgtype.UUID        `json:"assignee_id"`
+	CreatorType        string             `json:"creator_type"`
+	CreatorID          pgtype.UUID        `json:"creator_id"`
+	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
+	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
+	ContextRefs        []byte             `json:"context_refs"`
+	Position           float64            `json:"position"`
+	DueDate            pgtype.Timestamptz `json:"due_date"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	Number             int32              `json:"number"`
+	ProjectID          pgtype.UUID        `json:"project_id"`
+	OriginType         pgtype.Text        `json:"origin_type"`
+	OriginID           pgtype.UUID        `json:"origin_id"`
+	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
+}
+
+func (q *Queries) ListIssueBlocksDependencies(ctx context.Context, arg ListIssueBlocksDependenciesParams) ([]ListIssueBlocksDependenciesRow, error) {
+	rows, err := q.db.Query(ctx, listIssueBlocksDependencies, arg.DependsOnIssueID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListIssueBlocksDependenciesRow{}
+	for rows.Next() {
+		var i ListIssueBlocksDependenciesRow
+		if err := rows.Scan(
+			&i.DependencyID,
+			&i.DependencyType,
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.ProjectID,
+			&i.OriginType,
+			&i.OriginID,
+			&i.FirstExecutedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listIssues = `-- name: ListIssues :many
 SELECT id, workspace_id, title, description, status, priority,
        assignee_type, assignee_id, creator_type, creator_id,
@@ -658,6 +888,67 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 			&i.UpdatedAt,
 			&i.Number,
 			&i.ProjectID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIssuesUnblockedByIssue = `-- name: ListIssuesUnblockedByIssue :many
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at
+FROM issue_dependency d
+JOIN issue i ON i.id = d.issue_id
+WHERE d.depends_on_issue_id = $1
+  AND d.type = 'blocked_by'
+  AND i.status NOT IN ('backlog', 'done', 'cancelled')
+  AND NOT EXISTS (
+      SELECT 1
+      FROM issue_dependency other_d
+      JOIN issue dep ON dep.id = other_d.depends_on_issue_id
+      WHERE other_d.issue_id = i.id
+        AND other_d.type = 'blocked_by'
+        AND dep.status != 'done'
+  )
+ORDER BY i.position ASC, i.created_at ASC
+`
+
+func (q *Queries) ListIssuesUnblockedByIssue(ctx context.Context, dependsOnIssueID pgtype.UUID) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listIssuesUnblockedByIssue, dependsOnIssueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.ProjectID,
+			&i.OriginType,
+			&i.OriginID,
+			&i.FirstExecutedAt,
 		); err != nil {
 			return nil, err
 		}

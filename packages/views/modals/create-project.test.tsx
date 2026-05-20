@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 const longRepoUrl =
-  "https://github.com/multica-ai/a-very-long-repository-name-that-needs-a-tooltip";
+  "git@gitlab.internal.example.com:platform/a-very-long-repository-name-that-needs-a-tooltip.git";
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: [] }),

@@ -406,6 +406,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/reactions", h.RemoveIssueReaction)
 					r.Get("/attachments", h.ListAttachments)
 					r.Get("/children", h.ListChildIssues)
+					r.Get("/dependencies", h.ListIssueDependencies)
 					r.Get("/labels", h.ListLabelsForIssue)
 					r.Post("/labels", h.AttachLabel)
 					r.Delete("/labels/{labelId}", h.DetachLabel)
@@ -439,6 +440,32 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/resources", h.ListProjectResources)
 					r.Post("/resources", h.CreateProjectResource)
 					r.Delete("/resources/{resourceId}", h.DeleteProjectResource)
+				})
+			})
+
+			// Plans
+			r.Route("/api/plans", func(r chi.Router) {
+				r.Get("/", h.ListPlans)
+				r.Post("/", h.CreatePlan)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetPlan)
+					r.Patch("/", h.UpdatePlan)
+					r.Post("/rerun", h.RerunPlan)
+					r.Post("/commit", h.CommitPlan)
+				})
+			})
+
+			// Pipelines
+			r.Route("/api/pipelines", func(r chi.Router) {
+				r.Get("/", h.ListPipelines)
+				r.Post("/", h.CreatePipeline)
+				r.Post("/import", h.ImportPipelineYAML)
+				r.Post("/import/validate", h.ValidatePipelineYAMLImport)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetPipeline)
+					r.Patch("/", h.UpdatePipeline)
+					r.Delete("/", h.DeletePipeline)
+					r.Post("/run", h.RunPipeline)
 				})
 			})
 

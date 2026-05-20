@@ -205,6 +205,7 @@ const mockApiObj = vi.hoisted(() => ({
   listTasksByIssue: vi.fn().mockResolvedValue([]),
   listTaskMessages: vi.fn().mockResolvedValue([]),
   listChildIssues: vi.fn().mockResolvedValue({ issues: [] }),
+  listIssueDependencies: vi.fn().mockResolvedValue({ blocked_by: [], blocks: [] }),
   listIssues: vi.fn().mockResolvedValue({ issues: [], total: 0 }),
   uploadFile: vi.fn(),
   listIssueReactions: vi.fn().mockResolvedValue([]),
@@ -499,6 +500,7 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssueReactions.mockResolvedValue([]);
     mockApiObj.listIssueSubscribers.mockResolvedValue([]);
     mockApiObj.listChildIssues.mockResolvedValue({ issues: [] });
+    mockApiObj.listIssueDependencies.mockResolvedValue({ blocked_by: [], blocks: [] });
     mockApiObj.listIssues.mockResolvedValue({ issues: [], total: 0 });
     mockApiObj.getActiveTasksForIssue.mockResolvedValue({ tasks: [] });
     mockApiObj.listTasksByIssue.mockResolvedValue([]);
@@ -647,6 +649,103 @@ describe("IssueDetail (shared)", () => {
     // No parent → no standalone Parent issue section either.
     expect(screen.queryByText("Parent issue")).not.toBeInTheDocument();
     expect(screen.getByText("Add property")).toBeInTheDocument();
+  });
+
+  it("shows blocked-by and blocks dependencies on issue detail", async () => {
+    mockApiObj.listIssueDependencies.mockResolvedValue({
+      blocked_by: [
+        {
+          id: "dep-1",
+          type: "blocked_by",
+          issue_id: "issue-12",
+          identifier: "TES-12",
+          title: "Backend API",
+          status: "in_progress",
+          assignee_type: null,
+          assignee_id: null,
+          dependency_type: "blocked_by",
+        },
+      ],
+      blocks: [
+        {
+          id: "dep-2",
+          type: "blocked_by",
+          issue_id: "issue-18",
+          identifier: "TES-18",
+          title: "System acceptance",
+          status: "todo",
+          assignee_type: null,
+          assignee_id: null,
+          dependency_type: "blocked_by",
+        },
+      ],
+    });
+
+    renderIssueDetail();
+
+    await waitFor(() => {
+      expect(screen.getByText("Dependencies")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Blocked by")).toBeInTheDocument();
+    expect(screen.getByText("TES-12")).toBeInTheDocument();
+    expect(screen.getByText("Blocks")).toBeInTheDocument();
+    expect(screen.getByText("TES-18")).toBeInTheDocument();
+  });
+
+  it("shows blocked-by summary on sub-issue rows", async () => {
+    mockApiObj.listChildIssues.mockResolvedValue({
+      issues: [
+        {
+          ...mockIssue,
+          id: "issue-18",
+          identifier: "TES-18",
+          title: "System acceptance",
+          status: "todo",
+          parent_issue_id: "issue-1",
+        },
+      ],
+    });
+    mockApiObj.listIssueDependencies.mockImplementation((issueId: string) => {
+      if (issueId === "issue-18") {
+        return Promise.resolve({
+          blocked_by: [
+            {
+              id: "dep-12",
+              type: "blocked_by",
+              issue_id: "issue-12",
+              identifier: "TES-12",
+              title: "Backend API",
+              status: "in_progress",
+              assignee_type: null,
+              assignee_id: null,
+              dependency_type: "blocked_by",
+            },
+            {
+              id: "dep-17",
+              type: "blocked_by",
+              issue_id: "issue-17",
+              identifier: "TES-17",
+              title: "QA pass",
+              status: "todo",
+              assignee_type: null,
+              assignee_id: null,
+              dependency_type: "blocked_by",
+            },
+          ],
+          blocks: [],
+        });
+      }
+      return Promise.resolve({ blocked_by: [], blocks: [] });
+    });
+
+    renderIssueDetail();
+
+    await waitFor(() => {
+      expect(screen.getByText("System acceptance")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Blocked by TES-12, TES-17")).toBeInTheDocument();
+    });
   });
 
   it("uses a non-resizable layout with the sidebar sheet closed by default on mobile", async () => {

@@ -274,6 +274,205 @@ func TestParseCustomArgsErrorSanitization(t *testing.T) {
 	}
 }
 
+func TestLocalSkillFolderName(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{
+			name: "Review Helper",
+			id:   "1234567890abcdef",
+			want: "review-helper-12345678",
+		},
+		{
+			name: " 设计 / 测试 ",
+			id:   "abcdef",
+			want: "skill-abcdef",
+		},
+		{
+			name: "Pipeline: QA + Release",
+			id:   "019e2205-a0b9-74a2-9faf-8f2cd77b7627",
+			want: "pipeline-qa-release-019e2205",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := localSkillFolderName(tc.name, tc.id); got != tc.want {
+				t.Fatalf("localSkillFolderName(%q, %q) = %q, want %q", tc.name, tc.id, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCleanSkillExportPath(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "nested file",
+			raw:  "docs/example.md",
+			want: "docs/example.md",
+		},
+		{
+			name: "normalizes current segments",
+			raw:  "docs/./nested/../example.md",
+			want: "docs/example.md",
+		},
+		{
+			name:    "empty path",
+			raw:     "",
+			wantErr: true,
+		},
+		{
+			name:    "relative escape",
+			raw:     "../secret.txt",
+			wantErr: true,
+		},
+		{
+			name:    "nested escape",
+			raw:     "docs/../../secret.txt",
+			wantErr: true,
+		},
+		{
+			name:    "absolute path",
+			raw:     filepath.Join(t.TempDir(), "secret.txt"),
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := cleanSkillExportPath(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("cleanSkillExportPath(%q): expected error, got %q", tc.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("cleanSkillExportPath(%q): unexpected error: %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Fatalf("cleanSkillExportPath(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWriteSkillBundle(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills", "review-helper-12345678")
+	skill := map[string]any{
+		"name":    "Review Helper",
+		"content": "# Review Helper\n\nUse this during review.\n",
+		"files": []any{
+			map[string]any{"path": "docs/example.md", "content": "example"},
+			map[string]any{"path": "SKILL.md", "content": "ignored duplicate"},
+		},
+	}
+
+	if err := writeSkillBundle(dir, skill); err != nil {
+		t.Fatalf("writeSkillBundle(): unexpected error: %v", err)
+	}
+	skillBody, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read SKILL.md: %v", err)
+	}
+	if got, want := string(skillBody), "# Review Helper\n\nUse this during review.\n"; got != want {
+		t.Fatalf("SKILL.md = %q, want %q", got, want)
+	}
+	extraBody, err := os.ReadFile(filepath.Join(dir, "docs", "example.md"))
+	if err != nil {
+		t.Fatalf("read extra file: %v", err)
+	}
+	if got, want := string(extraBody), "example"; got != want {
+		t.Fatalf("extra file = %q, want %q", got, want)
+	}
+}
+
+func TestWriteSkillBundleRejectsEscapingFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skill")
+	err := writeSkillBundle(dir, map[string]any{
+		"name":    "Unsafe Skill",
+		"content": "# Unsafe Skill\n",
+		"files": []any{
+			map[string]any{"path": "../outside.md", "content": "escape"},
+		},
+	})
+	if err == nil {
+		t.Fatal("writeSkillBundle(): expected escaping file path error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid skill file path") {
+		t.Fatalf("writeSkillBundle() error = %q, want invalid path error", err.Error())
+	}
+}
+
+func TestAgentSkillsExportWritesAssignedSkillFiles(t *testing.T) {
+	var sawAssigned, sawSkill bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agents/agent-123/skills":
+			sawAssigned = true
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "skill-1234567890", "name": "Review Helper"},
+			})
+		case "/api/skills/skill-1234567890":
+			sawSkill = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":      "skill-1234567890",
+				"name":    "Review Helper",
+				"content": "# Review Helper\n",
+				"files": []map[string]any{
+					{"path": "docs/example.md", "content": "example"},
+				},
+			})
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	targetDir := t.TempDir()
+	cmd := &cobra.Command{Use: "export"}
+	cmd.Flags().String("dir", "", "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().String("profile", "", "")
+	if err := cmd.Flags().Set("dir", targetDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runAgentSkillsExport(cmd, []string{"agent-123"}); err != nil {
+		t.Fatalf("runAgentSkillsExport(): %v", err)
+	}
+	if !sawAssigned || !sawSkill {
+		t.Fatalf("expected assigned skill list and skill detail endpoints to be called, got assigned=%v skill=%v", sawAssigned, sawSkill)
+	}
+	skillDir := filepath.Join(targetDir, "review-helper-skill-12")
+	body, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read exported SKILL.md: %v", err)
+	}
+	if got, want := string(body), "# Review Helper\n"; got != want {
+		t.Fatalf("exported SKILL.md = %q, want %q", got, want)
+	}
+	fileBody, err := os.ReadFile(filepath.Join(skillDir, "docs", "example.md"))
+	if err != nil {
+		t.Fatalf("read exported extra file: %v", err)
+	}
+	if got, want := string(fileBody), "example"; got != want {
+		t.Fatalf("exported extra file = %q, want %q", got, want)
+	}
+}
+
 // TestAgentCreateAndUpdateExposeSecretSafeFlags guarantees the
 // --custom-env-stdin and --custom-env-file alternatives stay wired
 // up on both commands. They exist specifically so callers can keep
@@ -752,7 +951,6 @@ func TestAgentAvatarUpdateFailure(t *testing.T) {
 	}
 }
 
-
 // TestAgentAvatarMissingFileFlag rejects when --file is not provided.
 func TestAgentAvatarMissingFileFlag(t *testing.T) {
 	t.Setenv("MULTICA_SERVER_URL", "http://127.0.0.1:0")
@@ -889,13 +1087,13 @@ func TestAgentGetTableIncludesAvatarURL(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"id":         "agent-123",
-			"name":       "TestAgent",
-			"status":     "active",
+			"id":           "agent-123",
+			"name":         "TestAgent",
+			"status":       "active",
 			"runtime_mode": "cloud",
-			"visibility": "workspace",
-			"avatar_url": "https://cdn.example.com/avatar.png",
-			"description": "A test agent",
+			"visibility":   "workspace",
+			"avatar_url":   "https://cdn.example.com/avatar.png",
+			"description":  "A test agent",
 		})
 	}))
 	defer srv.Close()

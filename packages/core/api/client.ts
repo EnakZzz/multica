@@ -96,6 +96,19 @@ import type {
   GitHubPullRequest,
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
+  Plan,
+  CreatePlanRequest,
+  UpdatePlanRequest,
+  ListPlansResponse,
+  Pipeline,
+  PipelineImportValidationResponse,
+  PipelineRun,
+  CreatePipelineRequest,
+  ImportPipelineYamlRequest,
+  UpdatePipelineRequest,
+  RunPipelineRequest,
+  ListPipelinesResponse,
+  IssueDependenciesResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import { type Logger, noopLogger } from "../logger";
@@ -118,16 +131,30 @@ import {
   EMPTY_ATTACHMENT,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
+  EMPTY_ISSUE_DEPENDENCIES_RESPONSE,
+  EMPTY_LIST_PIPELINES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
+  EMPTY_LIST_PLANS_RESPONSE,
+  EMPTY_PIPELINE,
+  EMPTY_PIPELINE_IMPORT_VALIDATION_RESPONSE,
+  EMPTY_PIPELINE_RUN,
+  EMPTY_PLAN,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   GroupedIssuesResponseSchema,
+  IssueDependenciesResponseSchema,
+  ListPipelinesResponseSchema,
   ListIssuesResponseSchema,
   ListWebhookDeliveriesResponseSchema,
+  ListPlansResponseSchema,
   OnboardingNoRuntimeBootstrapResponseSchema,
   OnboardingRuntimeBootstrapResponseSchema,
+  PipelineImportValidationResponseSchema,
+  PipelineRunSchema,
+  PipelineSchema,
+  PlanSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
   UserSchema,
@@ -326,7 +353,7 @@ export class ApiClient {
     if (!res.ok) {
       if (res.status === 401) this.handleUnauthorized();
       const { message, body } = await this.parseErrorBody(res, `API error: ${res.status} ${res.statusText}`);
-      const logLevel = res.status === 404 ? "warn" : "error";
+      const logLevel = res.status >= 500 ? "error" : "warn";
       this.logger[logLevel](`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
       throw new ApiError(message, res.status, res.statusText, body);
     }
@@ -545,6 +572,137 @@ export class ApiClient {
     });
   }
 
+  async listPlans(): Promise<ListPlansResponse> {
+    const raw = await this.fetch<unknown>("/api/plans");
+    return parseWithFallback<ListPlansResponse>(
+      raw,
+      ListPlansResponseSchema,
+      EMPTY_LIST_PLANS_RESPONSE,
+      { endpoint: "GET /api/plans" },
+    );
+  }
+
+  async getPlan(id: string): Promise<Plan> {
+    const raw = await this.fetch<unknown>(`/api/plans/${id}`);
+    return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
+      endpoint: "GET /api/plans/{id}",
+    });
+  }
+
+  async createPlan(data: CreatePlanRequest): Promise<Plan> {
+    const raw = await this.fetch<unknown>("/api/plans", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
+      endpoint: "POST /api/plans",
+    });
+  }
+
+  async updatePlan(id: string, data: UpdatePlanRequest): Promise<Plan> {
+    const raw = await this.fetch<unknown>(`/api/plans/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
+      endpoint: "PATCH /api/plans/{id}",
+    });
+  }
+
+  async rerunPlan(id: string): Promise<Plan> {
+    const raw = await this.fetch<unknown>(`/api/plans/${id}/rerun`, {
+      method: "POST",
+    });
+    return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
+      endpoint: "POST /api/plans/{id}/rerun",
+    });
+  }
+
+  async commitPlan(id: string): Promise<Plan> {
+    const raw = await this.fetch<unknown>(`/api/plans/${id}/commit`, {
+      method: "POST",
+    });
+    return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
+      endpoint: "POST /api/plans/{id}/commit",
+    });
+  }
+
+  async listPipelines(): Promise<ListPipelinesResponse> {
+    const raw = await this.fetch<unknown>("/api/pipelines");
+    return parseWithFallback<ListPipelinesResponse>(
+      raw,
+      ListPipelinesResponseSchema,
+      EMPTY_LIST_PIPELINES_RESPONSE,
+      { endpoint: "GET /api/pipelines" },
+    );
+  }
+
+  async getPipeline(id: string): Promise<Pipeline> {
+    const raw = await this.fetch<unknown>(`/api/pipelines/${id}`);
+    return parseWithFallback<Pipeline>(raw, PipelineSchema, EMPTY_PIPELINE, {
+      endpoint: "GET /api/pipelines/{id}",
+    });
+  }
+
+  async createPipeline(data: CreatePipelineRequest): Promise<Pipeline> {
+    const raw = await this.fetch<unknown>("/api/pipelines", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<Pipeline>(raw, PipelineSchema, EMPTY_PIPELINE, {
+      endpoint: "POST /api/pipelines",
+    });
+  }
+
+  async updatePipeline(id: string, data: UpdatePipelineRequest): Promise<Pipeline> {
+    const raw = await this.fetch<unknown>(`/api/pipelines/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<Pipeline>(raw, PipelineSchema, EMPTY_PIPELINE, {
+      endpoint: "PATCH /api/pipelines/{id}",
+    });
+  }
+
+  async deletePipeline(id: string): Promise<void> {
+    await this.fetch(`/api/pipelines/${id}`, { method: "DELETE" });
+  }
+
+  async validatePipelineYamlImport(
+    data: ImportPipelineYamlRequest,
+  ): Promise<PipelineImportValidationResponse> {
+    const raw = await this.fetch<unknown>("/api/pipelines/import/validate", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<PipelineImportValidationResponse>(
+      raw,
+      PipelineImportValidationResponseSchema,
+      EMPTY_PIPELINE_IMPORT_VALIDATION_RESPONSE,
+      { endpoint: "POST /api/pipelines/import/validate" },
+    );
+  }
+
+  async importPipelineYaml(data: ImportPipelineYamlRequest): Promise<Pipeline> {
+    const raw = await this.fetch<unknown>("/api/pipelines/import", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<Pipeline>(raw, PipelineSchema, EMPTY_PIPELINE, {
+      endpoint: "POST /api/pipelines/import",
+    });
+  }
+
+  async runPipeline(id: string, data: RunPipelineRequest = {}): Promise<PipelineRun> {
+    const raw = await this.fetch<unknown>(`/api/pipelines/${id}/run`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<PipelineRun>(raw, PipelineRunSchema, EMPTY_PIPELINE_RUN, {
+      endpoint: "POST /api/pipelines/{id}/run",
+    });
+  }
+
   async createFeedback(data: {
     message: string;
     url?: string;
@@ -568,6 +726,16 @@ export class ApiClient {
     return parseWithFallback(raw, ChildIssuesResponseSchema, { issues: [] }, {
       endpoint: "GET /api/issues/:id/children",
     });
+  }
+
+  async listIssueDependencies(id: string): Promise<IssueDependenciesResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${id}/dependencies`);
+    return parseWithFallback<IssueDependenciesResponse>(
+      raw,
+      IssueDependenciesResponseSchema,
+      EMPTY_ISSUE_DEPENDENCIES_RESPONSE,
+      { endpoint: "GET /api/issues/:id/dependencies" },
+    );
   }
 
   async getChildIssueProgress(): Promise<{ progress: { parent_issue_id: string; total: number; done: number }[] }> {

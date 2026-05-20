@@ -421,6 +421,104 @@ type PinnedItem struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type Pipeline struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description"`
+	DefaultProjectID pgtype.UUID        `json:"default_project_id"`
+	CreatedBy        pgtype.UUID        `json:"created_by"`
+	ArchivedAt       pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PipelineRole struct {
+	ID               pgtype.UUID        `json:"id"`
+	PipelineID       pgtype.UUID        `json:"pipeline_id"`
+	Key              string             `json:"key"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	RequiredSkillIds []pgtype.UUID      `json:"required_skill_ids"`
+	Position         int32              `json:"position"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PipelineRun struct {
+	ID            pgtype.UUID        `json:"id"`
+	PipelineID    pgtype.UUID        `json:"pipeline_id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	ParentIssueID pgtype.UUID        `json:"parent_issue_id"`
+	Status        string             `json:"status"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type PipelineRunStage struct {
+	ID              pgtype.UUID        `json:"id"`
+	PipelineRunID   pgtype.UUID        `json:"pipeline_run_id"`
+	PipelineStageID pgtype.UUID        `json:"pipeline_stage_id"`
+	StageKey        string             `json:"stage_key"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type PipelineStage struct {
+	ID                 pgtype.UUID        `json:"id"`
+	PipelineID         pgtype.UUID        `json:"pipeline_id"`
+	Key                string             `json:"key"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	RoleKey            string             `json:"role_key"`
+	NodeType           string             `json:"node_type"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	DependsOnStageKeys []string           `json:"depends_on_stage_keys"`
+	Position           int32              `json:"position"`
+	PositionX          int32              `json:"position_x"`
+	PositionY          int32              `json:"position_y"`
+	RepoKeys           []string           `json:"repo_keys"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Plan struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	Title             string             `json:"title"`
+	Prompt            string             `json:"prompt"`
+	Status            string             `json:"status"`
+	PlannerAgentID    pgtype.UUID        `json:"planner_agent_id"`
+	TaskID            pgtype.UUID        `json:"task_id"`
+	ProjectID         pgtype.UUID        `json:"project_id"`
+	ParentTitle       pgtype.Text        `json:"parent_title"`
+	ParentDescription pgtype.Text        `json:"parent_description"`
+	ParentIssueID     pgtype.UUID        `json:"parent_issue_id"`
+	Error             pgtype.Text        `json:"error"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PlanItem struct {
+	ID                 pgtype.UUID        `json:"id"`
+	PlanID             pgtype.UUID        `json:"plan_id"`
+	Position           int32              `json:"position"`
+	Title              string             `json:"title"`
+	Description        string             `json:"description"`
+	RecommendedAgentID pgtype.UUID        `json:"recommended_agent_id"`
+	MatchScore         int32              `json:"match_score"`
+	MatchReason        string             `json:"match_reason"`
+	MissingCapability  string             `json:"missing_capability"`
+	DependsOnPositions []int32            `json:"depends_on_positions"`
+	Selected           bool               `json:"selected"`
+	GeneratedIssueID   pgtype.UUID        `json:"generated_issue_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Project struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`

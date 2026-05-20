@@ -1,12 +1,18 @@
 # Dependencies
 node_modules
+**/node_modules
 .pnpm-store
 
 # Build outputs
 .next
+**/.next
 dist
+**/dist
 server/bin
 server/tmp
+.turbo
+**/.turbo
+*.tsbuildinfo
 
 # Git
 .git
@@ -30,9 +36,15 @@ Thumbs.db
 # Test
 e2e/test-results
 coverage
+**/coverage
 
 # Docs
 docs/
+apps/docs
+
+# Logs and local runtime state
+.logs
+*.log
 
 # Desktop app (not needed for web self-hosting)
 apps/desktop

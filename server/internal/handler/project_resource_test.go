@@ -27,11 +27,11 @@ func TestProjectResourceLifecycle(t *testing.T) {
 		testHandler.DeleteProject(httptest.NewRecorder(), req)
 	}()
 
-	// Attach a github_repo resource.
+	// Attach a git_repo resource.
 	w = httptest.NewRecorder()
 	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
-		"resource_type": "github_repo",
-		"resource_ref":  map[string]any{"url": "https://github.com/multica-ai/multica"},
+		"resource_type": "git_repo",
+		"resource_ref":  map[string]any{"url": "ssh://git@gitlab.internal.example.com/platform/multica.git"},
 	})
 	req = withURLParam(req, "id", project.ID)
 	testHandler.CreateProjectResource(w, req)
@@ -42,8 +42,8 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
 		t.Fatalf("decode CreateProjectResource: %v", err)
 	}
-	if created.ResourceType != "github_repo" {
-		t.Errorf("created.ResourceType = %q, want github_repo", created.ResourceType)
+	if created.ResourceType != "git_repo" {
+		t.Errorf("created.ResourceType = %q, want git_repo", created.ResourceType)
 	}
 	var ref struct {
 		URL string `json:"url"`
@@ -51,7 +51,7 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	if err := json.Unmarshal(created.ResourceRef, &ref); err != nil {
 		t.Fatalf("decode resource_ref: %v", err)
 	}
-	if ref.URL != "https://github.com/multica-ai/multica" {
+	if ref.URL != "ssh://git@gitlab.internal.example.com/platform/multica.git" {
 		t.Errorf("created.ResourceRef.url = %q", ref.URL)
 	}
 
@@ -80,8 +80,8 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	// Duplicate attach must conflict (UNIQUE on project_id + type + ref).
 	w = httptest.NewRecorder()
 	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
-		"resource_type": "github_repo",
-		"resource_ref":  map[string]any{"url": "https://github.com/multica-ai/multica"},
+		"resource_type": "git_repo",
+		"resource_ref":  map[string]any{"url": "ssh://git@gitlab.internal.example.com/platform/multica.git"},
 	})
 	req = withURLParam(req, "id", project.ID)
 	testHandler.CreateProjectResource(w, req)
@@ -92,7 +92,7 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	// Invalid URL must reject at the validator level.
 	w = httptest.NewRecorder()
 	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
-		"resource_type": "github_repo",
+		"resource_type": "git_repo",
 		"resource_ref":  map[string]any{"url": "not-a-url"},
 	})
 	req = withURLParam(req, "id", project.ID)
@@ -237,8 +237,8 @@ func TestCreateProjectAttachesResources(t *testing.T) {
 		"title": "Project with bundled resources",
 		"resources": []map[string]any{
 			{
-				"resource_type": "github_repo",
-				"resource_ref":  map[string]any{"url": "https://github.com/multica-ai/multica"},
+				"resource_type": "git_repo",
+				"resource_ref":  map[string]any{"url": "git@gitlab.internal.example.com:platform/multica.git"},
 			},
 		},
 	})
@@ -259,8 +259,48 @@ func TestCreateProjectAttachesResources(t *testing.T) {
 		testHandler.DeleteProject(httptest.NewRecorder(), r)
 	}()
 
-	if len(resp.Resources) != 1 || resp.Resources[0].ResourceType != "github_repo" {
+	if len(resp.Resources) != 1 || resp.Resources[0].ResourceType != "git_repo" {
 		t.Fatalf("response resources mismatch: %+v", resp.Resources)
+	}
+}
+
+func TestValidateGitRepoRefSupportsSelfHostedGitLabURLForms(t *testing.T) {
+	tests := []string{
+		"https://gitlab.internal.example.com/platform/multica.git",
+		"ssh://git@gitlab.internal.example.com/platform/multica.git",
+		"git@gitlab.internal.example.com:platform/multica.git",
+	}
+
+	for _, rawURL := range tests {
+		t.Run(rawURL, func(t *testing.T) {
+			ref, err := json.Marshal(map[string]any{"url": rawURL})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			normalized, err := validateAndNormalizeResourceRef("git_repo", ref)
+			if err != nil {
+				t.Fatalf("validateAndNormalizeResourceRef: %v", err)
+			}
+			var got struct {
+				URL string `json:"url"`
+			}
+			if err := json.Unmarshal(normalized, &got); err != nil {
+				t.Fatalf("decode normalized ref: %v", err)
+			}
+			if got.URL != rawURL {
+				t.Errorf("normalized url = %q, want %q", got.URL, rawURL)
+			}
+		})
+	}
+}
+
+func TestValidateGitRepoRefKeepsLegacyGithubRepoType(t *testing.T) {
+	ref, err := json.Marshal(map[string]any{"url": "https://github.com/multica-ai/multica"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, err := validateAndNormalizeResourceRef("github_repo", ref); err != nil {
+		t.Fatalf("legacy github_repo should remain valid: %v", err)
 	}
 }
 
@@ -374,7 +414,7 @@ func TestCreateProjectWithResourcesEchoesCount(t *testing.T) {
 		"title": "Create echo with resource_count",
 		"resources": []map[string]any{
 			{
-				"resource_type": "github_repo",
+				"resource_type": "git_repo",
 				"resource_ref":  map[string]any{"url": "https://github.com/multica-ai/echo-count"},
 			},
 		},
@@ -407,7 +447,7 @@ func TestCreateProjectRollsBackOnInvalidResource(t *testing.T) {
 		"title": "Project that should not exist",
 		"resources": []map[string]any{
 			{
-				"resource_type": "github_repo",
+				"resource_type": "git_repo",
 				"resource_ref":  map[string]any{"url": "not-a-url"},
 			},
 		},
@@ -437,4 +477,3 @@ func TestCreateProjectRollsBackOnInvalidResource(t *testing.T) {
 		}
 	}
 }
-

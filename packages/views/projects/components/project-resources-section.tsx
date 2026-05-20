@@ -12,7 +12,7 @@ import {
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import type {
-  GithubRepoResourceRef,
+  GitRepoResourceRef,
   ProjectResource,
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -30,7 +30,7 @@ import { useT } from "../../i18n";
 
 // Project Resources sidebar section.
 //
-// Today only renders github_repo, but the rendering layer is type-dispatched
+// Today renders Git repo resources, but the rendering layer is type-dispatched
 // so adding a new type means: (1) extend the API validator, (2) add a render
 // case here. No changes to the schema or query layer.
 export function ProjectResourcesSection({ projectId }: { projectId: string }) {
@@ -48,14 +48,14 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
 
   const attachedUrls = new Set(
     resources
-      .filter((r) => r.resource_type === "github_repo")
-      .map((r) => (r.resource_ref as GithubRepoResourceRef).url),
+      .filter(isGitRepoResource)
+      .map((r) => (r.resource_ref as GitRepoResourceRef).url),
   );
 
   const handleAttach = async (url: string) => {
     try {
       await createResource.mutateAsync({
-        resource_type: "github_repo",
+        resource_type: "git_repo",
         resource_ref: { url },
       });
       toast.success(t(($) => $.resources.toast_attached));
@@ -181,22 +181,15 @@ function ResourceRow({
   onRemove: () => void;
 }) {
   const { t } = useT("projects");
-  if (resource.resource_type === "github_repo") {
-    const ref = resource.resource_ref as GithubRepoResourceRef;
+  if (isGitRepoResource(resource)) {
+    const ref = resource.resource_ref as GitRepoResourceRef;
     return (
       <div className="flex items-center gap-2 text-xs group">
         <FolderGit className="size-3.5 text-muted-foreground shrink-0" />
         <Tooltip>
           <TooltipTrigger
             render={
-              <a
-                href={ref.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="truncate flex-1 hover:underline"
-              >
-                {resource.label || ref.url}
-              </a>
+              <RepoLink url={ref.url} label={resource.label || ref.url} />
             }
           />
           <TooltipContent side="top">{ref.url}</TooltipContent>
@@ -227,6 +220,26 @@ function ResourceRow({
       </button>
     </div>
   );
+}
+
+function isGitRepoResource(resource: ProjectResource) {
+  return resource.resource_type === "git_repo" || resource.resource_type === "github_repo";
+}
+
+function RepoLink({ url, label }: { url: string; label: string }) {
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="truncate flex-1 hover:underline"
+      >
+        {label}
+      </a>
+    );
+  }
+  return <span className="truncate flex-1">{label}</span>;
 }
 
 function CustomRepoForm({

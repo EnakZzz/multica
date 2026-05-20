@@ -17,6 +17,12 @@ UPDATE verification_code
 SET used = TRUE
 WHERE id = $1;
 
+-- name: MarkUnusedVerificationCodesUsedByEmail :exec
+UPDATE verification_code
+SET used = TRUE
+WHERE email = $1
+  AND used = FALSE;
+
 -- name: IncrementVerificationCodeAttempts :exec
 UPDATE verification_code
 SET attempts = attempts + 1

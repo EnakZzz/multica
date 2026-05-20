@@ -63,6 +63,7 @@ export function onIssueUpdated(
   // metadata (title, status, assignee). Cheaper to invalidate the prefix
   // than to mirror the server filter here.
   qc.invalidateQueries({ queryKey: issueKeys.projectGanttAll(wsId) });
+  qc.invalidateQueries({ queryKey: issueKeys.dependenciesAll(wsId) });
   qc.setQueryData<Issue>(issueKeys.detail(wsId, issue.id), (old) =>
     old ? { ...old, ...issue } : old,
   );
@@ -141,4 +142,5 @@ export function onIssueDeleted(
   cleanupDeletedIssueCaches(qc, wsId, issueId);
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
+  qc.invalidateQueries({ queryKey: issueKeys.dependenciesAll(wsId) });
 }

@@ -193,6 +193,16 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>] [--attachment <path>]` — Create a new issue; `--attachment` may be repeated.\n")
 	b.WriteString("- `multica issue update <id> [--title X] [--description X | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>]` — Update issue fields; use `--parent \"\"` to clear parent.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out a repository into the working directory (creates a git worktree with a dedicated branch; use `--ref` for review/QA on a specific branch, tag, or commit)\n")
+	b.WriteString("- `multica repo import-context [--project-id <id>] [--role <role_key=agent_id>]` — Import `.multica/project.yaml` plus referenced pipeline YAML from the current git checkout into Multica. Missing role bindings leave those pipeline nodes unassigned; `repo checkout` runs this automatically after checkout, and `MULTICA_PROJECT_ROLE_BINDINGS` can provide JSON role bindings for auto-import.\n")
+	b.WriteString("- `multica repo sync-context [--skill-id <id>] [--project-id <id>] [--pipeline-id <id>]` — Write project-specific Multica skills and selected/project pipeline YAML into the current git checkout under `.multica/` so the definitions can be committed and reused by local agents or human testers. Assigned agent skills are exported only when their skill config marks them as repo/project context; generic cross-project agent skills stay runtime-only.\n")
+	b.WriteString("- `multica issue runs <issue-id> [--full-id] --output json` — List all execution runs for an issue (status, timestamps, errors); table task IDs are short prefixes unless `--full-id` is set\n")
+	b.WriteString("- `multica issue run-messages <task-id> [--issue <issue-id>] [--since <seq>] --output json` — List messages for a specific execution run; full task UUIDs work directly, copied short task prefixes must be scoped with `--issue <issue-id>`\n")
+	b.WriteString("- `multica attachment download <id> [-o <dir>]` — Download an attachment file locally by ID\n")
+	b.WriteString("- `multica autopilot list [--status X] [--full-id] [--output json]` — List autopilots (scheduled/triggered agent automations) in the workspace; copied short IDs are accepted by autopilot subcommands when unique\n")
+	b.WriteString("- `multica autopilot get <id> --output json` — Get autopilot details including triggers\n")
+	b.WriteString("- `multica autopilot runs <id> [--limit N] --output json` — List execution history for an autopilot\n")
+	b.WriteString("- `multica project get <id> --output json` — Get project details. Includes `resource_count`; the resources themselves live at the sub-collection below.\n")
+	b.WriteString("- `multica project resource list <project-id> --output json` — List resources (e.g. github_repo) attached to a project. Use this when `resource_count > 0` and you need the actual refs.\n\n")
 	b.WriteString("- `multica issue status <id> <status>` — Shortcut for `issue update --status` when you only need to flip status (todo, in_progress, in_review, done, blocked, backlog, cancelled)\n")
 	// Available Commands lists `multica issue comment add` neutrally —
 	// three input modes, pick what fits.
@@ -210,7 +220,24 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// escaping correctly and can pick whichever flag suits their
 	// content. The `--content-file` line in the menu doubles as a
 	// pointer at the Windows-safe path.
-	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment <path>]` — Post a comment. Pick the input mode that preserves your content; run `multica issue comment add --help` for details.\n\n")
+	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment <path>]` — Post a comment. Three input modes, pick whichever fits the content:\n")
+	b.WriteString("  - `--content \"...\"` for short single-line text. The CLI decodes `\\n`, `\\r`, `\\t`, `\\\\` so escaped multi-line is OK; do not embed raw newlines in the argument.\n")
+	b.WriteString("  - `--content-stdin` to pipe the body via HEREDOC. Preserves multi-line and special characters verbatim. Cleanest in `bash` / `zsh`.\n")
+	b.WriteString("  - `--content-file <path>` to read a UTF-8 file off disk. Preserves bytes verbatim regardless of the shell — use this on Windows when stdin would re-encode non-ASCII (Chinese, Japanese, Cyrillic, accents, emoji) through the console codepage and drop them as `?`.\n")
+	b.WriteString("  - Use `--parent` to reply to a specific comment; `--attachment` may be repeated.\n")
+	b.WriteString("- `multica issue create` / `multica issue update` accept the same three modes for `--description`: `--description \"...\"`, `--description-stdin`, or `--description-file <path>`.\n")
+	b.WriteString("- `multica issue comment delete <comment-id>` — Delete a comment\n")
+	b.WriteString("- `multica label create --name \"...\" --color \"#hex\"` — Define a new workspace label (use this only when the label you need does not exist yet; reuse existing labels via `multica label list` first)\n")
+	b.WriteString("- `multica autopilot create --title \"...\" --agent <name> --mode create_issue|run_only [--description \"...\"]` — Create an autopilot\n")
+	b.WriteString("- `multica autopilot update <id> [--title X] [--description X] [--status active|paused] [--mode create_issue|run_only]` — Update an autopilot\n")
+	b.WriteString("- `multica autopilot trigger <id>` — Manually trigger an autopilot to run once\n")
+	b.WriteString("- `multica autopilot delete <id>` — Delete an autopilot\n\n")
+	b.WriteString("### Git Safety\n")
+	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out code into a dedicated `agent/<agent>/<issue>-<task>` branch. `--ref` is only the base ref; it never makes main/master the working branch.\n")
+	b.WriteString("- `multica repo import-context` loads committed `.multica/project.yaml` and pipeline YAML into Multica. Manifest roles may be bound with `--role developer=<agent-id>`; roles not bound yet intentionally stay unassigned so project setup can proceed before every role agent exists.\n")
+	b.WriteString("- `multica repo sync-context` writes commit-ready `.multica/skills/` and `.multica/pipelines/` files. Use it before committing when Multica-designed project-specific skills or UI-created project pipelines must travel with the code branch; generic cross-project agent skills should stay out of the repository.\n")
+	b.WriteString("- `multica repo publish` — Push the current `agent/*` branch to origin and record branch metadata for the task result. This command refuses `main`, `master`, and any non-`agent/*` branch.\n")
+	b.WriteString("- Agents must never run `git push origin main`, `git push origin master`, or push directly to protected branches. Final comments for code changes must include `Branch: agent/...` and `Status: ready for review`.\n\n")
 
 	if provider == "codex" {
 		b.WriteString("## Codex-Specific Comment Formatting\n\n")
@@ -229,11 +256,11 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	if len(ctx.Repos) > 0 {
 		b.WriteString("## Repositories\n\n")
 		b.WriteString("The following code repositories are available in this workspace.\n")
-		b.WriteString("Use `multica repo checkout <url>` to check out a repository into your working directory. Add `--ref <branch-or-sha>` when you need an exact branch, tag, or commit.\n\n")
+		b.WriteString("Use `multica repo checkout <url>` to check out a repository into your working directory. Add `--ref <branch-or-sha>` when you need an exact branch, tag, or commit as the base.\n\n")
 		for _, repo := range ctx.Repos {
 			fmt.Fprintf(&b, "- %s\n", repo.URL)
 		}
-		b.WriteString("\nThe checkout command creates a git worktree with a dedicated branch. You can check out one or more repos as needed, and can pass `--ref` for review/QA on a non-default branch or commit.\n\n")
+		b.WriteString("\nThe checkout command creates a git worktree with a dedicated `agent/*` branch. Publish code with `multica repo publish`; do not push directly to main/master.\n\n")
 	}
 
 	// Inject project-scoped context (resources attached to the issue's project).
@@ -266,7 +293,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- If asked about issues, use `multica issue list --output json` or `multica issue get <id> --output json`\n")
 		b.WriteString("- If asked about the workspace, use `multica workspace get --output json`\n")
 		b.WriteString("- If asked to perform actions (create issues, update status, etc.), use the appropriate CLI commands\n")
-		b.WriteString("- If the task requires code changes, use `multica repo checkout <url>` to get the code first. Use `--ref <branch-or-sha>` when you need an exact revision\n")
+		b.WriteString("- If the task requires code changes, use `multica repo checkout <url>` to get the code first, then `multica repo publish` after committing. Use `--ref <branch-or-sha>` only as the base revision\n")
 		b.WriteString("- Keep responses concise and direct\n\n")
 	} else if ctx.QuickCreatePrompt != "" {
 		// Quick-create task: detailed field / output rules live in the
@@ -329,9 +356,10 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		fmt.Fprintf(&b, "2. Run `multica issue comment list %s --output json` to read the full comment history (returns all comments, capped server-side at 2000) — this is mandatory, not optional. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions. When the flat dump is too large to ingest in one shot, treat `--recent 20 --output json` plus the `--before` / `--before-id` cursor (from the stderr `Next thread cursor:` line) as a paging strategy: keep walking older threads until you have read enough history to satisfy this mandatory step. `--recent` is a way to read the full history page-by-page, not a shortcut that replaces it.\n", ctx.IssueID)
 		fmt.Fprintf(&b, "3. Run `multica issue status %s in_progress`\n", ctx.IssueID)
 		b.WriteString("4. Follow your Skills and Agent Identity to complete the task (write code, investigate, etc.)\n")
-		fmt.Fprintf(&b, "5. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
-		fmt.Fprintf(&b, "6. When done, run `multica issue status %s in_review`\n", ctx.IssueID)
-		fmt.Fprintf(&b, "7. If blocked, run `multica issue status %s blocked` and post a comment explaining why\n\n", ctx.IssueID)
+		b.WriteString("5. For code changes, run `multica repo checkout <url>`, commit on the generated `agent/*` branch, then run `multica repo publish`. The publish command is the required push path and records the branch for review.\n")
+		fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. For code changes the comment must include `Branch: agent/...` and `Status: ready for review`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
+		fmt.Fprintf(&b, "7. Only after a code branch has been published, run `multica issue status %s in_review`. If no branch was produced, do not mark the issue `in_review` just to finish a run.\n", ctx.IssueID)
+		fmt.Fprintf(&b, "8. If blocked, run `multica issue status %s blocked` and post a comment explaining why\n\n", ctx.IssueID)
 	}
 
 	// Parent / Sub-issue Protocol — best-effort convention, not a server-side

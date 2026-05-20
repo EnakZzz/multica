@@ -180,10 +180,16 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, sessionID, workDir string) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, branchCommitSHA, branchPushedAt, sessionID, workDir string) error {
 	body := map[string]any{"output": output}
 	if branchName != "" {
 		body["branch_name"] = branchName
+	}
+	if branchCommitSHA != "" {
+		body["branch_commit_sha"] = branchCommitSHA
+	}
+	if branchPushedAt != "" {
+		body["branch_pushed_at"] = branchPushedAt
 	}
 	if sessionID != "" {
 		body["session_id"] = sessionID

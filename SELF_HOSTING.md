@@ -58,6 +58,26 @@ By default it pulls the latest stable release images from GHCR. To build the bac
 If the selected GHCR tag has not been published yet, `make selfhost` now tells you to fall back to `make selfhost-build`.
 `make selfhost-build` uses local `multica-backend:dev` / `multica-web:dev` tags, so it does not overwrite the pulled `:latest` images.
 
+For a local source checkout that should behave like a Docker deployment, use:
+
+```bash
+make docker-deploy   # first deploy from this checkout
+make docker-update   # rebuild images and restart containers after source changes
+make docker-status   # inspect service state
+make docker-logs     # follow container logs
+```
+
+On Windows without `make`, use the PowerShell wrapper:
+
+```powershell
+.\scripts\docker-selfhost.ps1 deploy
+.\scripts\docker-selfhost.ps1 update
+.\scripts\docker-selfhost.ps1 status
+.\scripts\docker-selfhost.ps1 logs
+```
+
+This path builds immutable Docker images from the current checkout. It does not mount the source tree into the containers and it does not run the Next.js or Go dev servers, so editing a file on disk will not affect the running app until you run `make docker-update` or `.\scripts\docker-selfhost.ps1 update`.
+
 Once ready:
 
 - **Frontend:** http://localhost:3000
@@ -147,7 +167,10 @@ If you cloned the repo manually:
 
 ```bash
 # Stop the Docker Compose services (backend, frontend, database)
-make selfhost-stop
+make docker-stop
+
+# Windows PowerShell equivalent
+.\scripts\docker-selfhost.ps1 stop
 
 # Stop the local daemon
 multica daemon stop
@@ -174,6 +197,8 @@ docker compose -f docker-compose.selfhost.yml up -d
 
 Pin `MULTICA_IMAGE_TAG` in `.env` to an exact version like `v0.2.4` if you want to stay on a specific release. Migrations run automatically on backend startup.
 If the selected GHCR tag has not been published yet, fall back to `make selfhost-build` or `docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build`.
+
+If you are deploying your own source checkout with the local `multica-backend:dev` / `multica-web:dev` images, upgrade it by running `make docker-update` or `.\scripts\docker-selfhost.ps1 update` on Windows. The running containers keep using the previous images until this command rebuilds and recreates them.
 
 ---
 

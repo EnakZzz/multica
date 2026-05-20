@@ -37,6 +37,7 @@ type Task struct {
 	AgentID                 string                `json:"agent_id"`
 	RuntimeID               string                `json:"runtime_id"`
 	IssueID                 string                `json:"issue_id"`
+	IssueIdentifier         string                `json:"issue_identifier,omitempty"`
 	WorkspaceID             string                `json:"workspace_id"`
 	Agent                   *AgentData            `json:"agent,omitempty"`
 	Repos                   []RepoData            `json:"repos,omitempty"`
@@ -65,8 +66,19 @@ type Task struct {
 	// no owner (cloud / system runtimes) or the user hasn't set a description.
 	// Injected into the brief under `## Requesting User`; omitted entirely
 	// when description is empty so the agent doesn't see a useless heading.
-	RequestingUserName               string `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
+	RequestingUserName               string          `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string          `json:"requesting_user_profile_description,omitempty"`
+	IssuePlanPrompt                  string          `json:"issue_plan_prompt,omitempty"` // user's natural-language input for plan tasks
+	IssuePlanID                      string          `json:"issue_plan_id,omitempty"`     // plan row receiving the structured output
+	AvailableAgents                  []PlanAgentData `json:"available_agents,omitempty"`  // assignable agents planner may recommend
+}
+
+type PlanAgentData struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Instructions string   `json:"instructions,omitempty"`
+	Skills       []string `json:"skills,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon
@@ -119,13 +131,15 @@ type TaskUsageEntry struct {
 
 // TaskResult is the outcome of executing a task.
 type TaskResult struct {
-	Status        string           `json:"status"`
-	Comment       string           `json:"comment"`
-	BranchName    string           `json:"branch_name,omitempty"`
-	EnvType       string           `json:"env_type,omitempty"`
-	SessionID     string           `json:"session_id,omitempty"` // Claude session ID for future resumption
-	WorkDir       string           `json:"work_dir,omitempty"`   // working directory used during execution
-	EnvRoot       string           `json:"-"`                    // env root dir for writing GC metadata (not sent to server)
-	FailureReason string           `json:"-"`                    // classifier forwarded to FailTask on the blocked path; empty falls back to 'agent_error'
-	Usage         []TaskUsageEntry `json:"usage,omitempty"`      // per-model token usage
+	Status          string           `json:"status"`
+	Comment         string           `json:"comment"`
+	BranchName      string           `json:"branch_name,omitempty"`
+	BranchCommitSHA string           `json:"branch_commit_sha,omitempty"`
+	BranchPushedAt  string           `json:"branch_pushed_at,omitempty"`
+	EnvType         string           `json:"env_type,omitempty"`
+	SessionID       string           `json:"session_id,omitempty"` // Claude session ID for future resumption
+	WorkDir         string           `json:"work_dir,omitempty"`   // working directory used during execution
+	EnvRoot         string           `json:"-"`                    // env root dir for writing GC metadata (not sent to server)
+	FailureReason   string           `json:"-"`                    // classifier forwarded to FailTask on the blocked path; empty falls back to 'agent_error'
+	Usage           []TaskUsageEntry `json:"usage,omitempty"`      // per-model token usage
 }

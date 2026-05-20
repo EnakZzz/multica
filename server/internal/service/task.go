@@ -310,6 +310,11 @@ func (s *TaskService) taskAnalyticsContext(ctx context.Context, task db.AgentTas
 		tc.UserID = qc.RequesterID
 		tc.Source = analytics.SourceManual
 	}
+	if ip, ok := s.parseIssuePlanContext(task); ok {
+		tc.WorkspaceID = ip.WorkspaceID
+		tc.UserID = ip.RequesterID
+		tc.Source = analytics.SourceManual
+	}
 	s.storeTaskAnalyticsContext(task, tc)
 	return tc
 }
@@ -500,6 +505,42 @@ type QuickCreateContext struct {
 // QuickCreateContextType marks a task as a quick-create job.
 const QuickCreateContextType = "quick_create"
 
+// IssuePlanContext is the JSON payload stored on a planner task. The task has
+// no issue link: it produces a structured plan that the server validates and
+// writes into plan / plan_item rows.
+type IssuePlanContext struct {
+	Type        string `json:"type"`
+	PlanID      string `json:"plan_id"`
+	Prompt      string `json:"prompt"`
+	RequesterID string `json:"requester_id"`
+	WorkspaceID string `json:"workspace_id"`
+	ProjectID   string `json:"project_id,omitempty"`
+}
+
+const IssuePlanContextType = "issue_plan"
+
+type issuePlanResult struct {
+	Title       string                `json:"title"`
+	ParentIssue issuePlanParent       `json:"parent_issue"`
+	Items       []issuePlanResultItem `json:"items"`
+}
+
+type issuePlanParent struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+type issuePlanResultItem struct {
+	Title              string  `json:"title"`
+	Description        string  `json:"description"`
+	RecommendedAgentID string  `json:"recommended_agent_id"`
+	MatchScore         int32   `json:"match_score"`
+	MatchReason        string  `json:"match_reason"`
+	MissingCapability  string  `json:"missing_capability"`
+	DependsOnPositions []int32 `json:"depends_on_positions"`
+	Selected           *bool   `json:"selected"`
+}
+
 // EnqueueQuickCreateTask creates a queued task that has no issue / chat /
 // autopilot link — the user's natural-language prompt is stored in the
 // task's context JSONB and the agent is expected to translate it into a
@@ -558,6 +599,56 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	// cycle. Without this the user perceives "quick create never
 	// triggered" because the modal closes immediately and the task
 	// sits in 'queued' until the next sleepWithContextOrWakeup tick.
+	s.NotifyTaskEnqueued(ctx, task)
+	return task, nil
+}
+
+func (s *TaskService) EnqueueIssuePlanTask(ctx context.Context, workspaceID, requesterID, planID pgtype.UUID, agentID pgtype.UUID, prompt string, projectID pgtype.UUID) (db.AgentTaskQueue, error) {
+	agent, err := s.Queries.GetAgent(ctx, agentID)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+	}
+	if agent.ArchivedAt.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
+	}
+	if !agent.RuntimeID.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	}
+
+	payload := IssuePlanContext{
+		Type:        IssuePlanContextType,
+		PlanID:      util.UUIDToString(planID),
+		Prompt:      prompt,
+		RequesterID: util.UUIDToString(requesterID),
+		WorkspaceID: util.UUIDToString(workspaceID),
+	}
+	if projectID.Valid {
+		payload.ProjectID = util.UUIDToString(projectID)
+	}
+	contextJSON, err := json.Marshal(payload)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("marshal issue-plan context: %w", err)
+	}
+
+	task, err := s.Queries.CreateContextTask(ctx, db.CreateContextTaskParams{
+		AgentID:           agentID,
+		RuntimeID:         agent.RuntimeID,
+		Priority:          priorityToInt("high"),
+		Context:           contextJSON,
+		ForceFreshSession: pgtype.Bool{Bool: true, Valid: true},
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("create issue-plan task: %w", err)
+	}
+
+	slog.Info("issue-plan task enqueued",
+		"task_id", util.UUIDToString(task.ID),
+		"plan_id", payload.PlanID,
+		"agent_id", util.UUIDToString(agentID),
+		"requester_id", util.UUIDToString(requesterID),
+		"workspace_id", util.UUIDToString(workspaceID),
+		"project_id", payload.ProjectID,
+	)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }
@@ -1019,6 +1110,9 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	// parsing the agent's stdout for an identifier.
 	if qc, ok := s.parseQuickCreateContext(task); ok {
 		s.notifyQuickCreateCompleted(ctx, task, qc)
+	}
+	if ip, ok := s.parseIssuePlanContext(task); ok {
+		s.applyIssuePlanCompleted(ctx, task, ip, result)
 	}
 
 	// For chat tasks, save assistant reply and broadcast chat:done. The
@@ -1689,8 +1783,25 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 		"issue_id": util.UUIDToString(task.IssueID),
 		"status":   task.Status,
 	}
+	if task.Result != nil {
+		var result map[string]any
+		if json.Unmarshal(task.Result, &result) == nil {
+			if branchName, ok := result["branch_name"].(string); ok && strings.TrimSpace(branchName) != "" {
+				payload["branch_name"] = branchName
+			}
+			if commitSHA, ok := result["branch_commit_sha"].(string); ok && strings.TrimSpace(commitSHA) != "" {
+				payload["branch_commit_sha"] = commitSHA
+			}
+			if pushedAt, ok := result["branch_pushed_at"].(string); ok && strings.TrimSpace(pushedAt) != "" {
+				payload["branch_pushed_at"] = pushedAt
+			}
+		}
+	}
 	if task.ChatSessionID.Valid {
 		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
+	}
+	if ip, ok := s.parseIssuePlanContext(task); ok {
+		payload["plan_id"] = ip.PlanID
 	}
 	s.Bus.Publish(events.Event{
 		Type:        eventType,
@@ -1730,6 +1841,9 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	// broadcasts, which is why quick-create tasks appeared stuck queued.
 	if qc, ok := s.parseQuickCreateContext(task); ok {
 		return qc.WorkspaceID
+	}
+	if ip, ok := s.parseIssuePlanContext(task); ok {
+		return ip.WorkspaceID
 	}
 	return ""
 }
@@ -1927,6 +2041,161 @@ func (s *TaskService) parseQuickCreateContext(task db.AgentTaskQueue) (QuickCrea
 		return QuickCreateContext{}, false
 	}
 	return qc, true
+}
+
+func (s *TaskService) parseIssuePlanContext(task db.AgentTaskQueue) (IssuePlanContext, bool) {
+	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+		return IssuePlanContext{}, false
+	}
+	if len(task.Context) == 0 {
+		return IssuePlanContext{}, false
+	}
+	var ip IssuePlanContext
+	if err := json.Unmarshal(task.Context, &ip); err != nil {
+		return IssuePlanContext{}, false
+	}
+	if ip.Type != IssuePlanContextType {
+		return IssuePlanContext{}, false
+	}
+	return ip, true
+}
+
+func (s *TaskService) applyIssuePlanCompleted(ctx context.Context, task db.AgentTaskQueue, ip IssuePlanContext, result []byte) {
+	planID, err := util.ParseUUID(ip.PlanID)
+	if err != nil {
+		slog.Warn("issue-plan completion: invalid plan id", "task_id", util.UUIDToString(task.ID), "plan_id", ip.PlanID, "error", err)
+		return
+	}
+	var payload protocol.TaskCompletedPayload
+	if err := json.Unmarshal(result, &payload); err != nil {
+		s.markIssuePlanFailed(ctx, planID, fmt.Sprintf("invalid task result: %v", err))
+		return
+	}
+	output := strings.TrimSpace(util.UnescapeBackslashEscapes(payload.Output))
+	parsed, err := parseIssuePlanOutput(output)
+	if err != nil {
+		s.markIssuePlanFailed(ctx, planID, err.Error())
+		return
+	}
+	if err := s.writeIssuePlanResult(ctx, planID, parsed); err != nil {
+		slog.Warn("issue-plan completion: failed to write result", "task_id", util.UUIDToString(task.ID), "plan_id", ip.PlanID, "error", err)
+		s.markIssuePlanFailed(ctx, planID, "failed to save planner result")
+		return
+	}
+}
+
+func parseIssuePlanOutput(output string) (issuePlanResult, error) {
+	var out issuePlanResult
+	if output == "" {
+		return out, fmt.Errorf("planner returned empty output")
+	}
+	start := strings.Index(output, "{")
+	end := strings.LastIndex(output, "}")
+	if start < 0 || end < start {
+		return out, fmt.Errorf("planner output did not contain a JSON object; update or restart the planner daemon so it supports Plans")
+	}
+	raw := output[start : end+1]
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return out, fmt.Errorf("planner output JSON is invalid: %v", err)
+	}
+	if strings.TrimSpace(out.ParentIssue.Title) == "" {
+		out.ParentIssue.Title = strings.TrimSpace(out.Title)
+	}
+	if strings.TrimSpace(out.ParentIssue.Title) == "" {
+		return out, fmt.Errorf("planner output missing parent_issue.title")
+	}
+	if len(out.Items) == 0 {
+		return out, fmt.Errorf("planner output missing items")
+	}
+	for i, item := range out.Items {
+		if strings.TrimSpace(item.Title) == "" {
+			return out, fmt.Errorf("planner output item %d missing title", i+1)
+		}
+		if item.MatchScore < 0 || item.MatchScore > 100 {
+			return out, fmt.Errorf("planner output item %d match_score must be 0-100", i+1)
+		}
+		seenDeps := make(map[int32]bool)
+		normalizedDeps := make([]int32, 0, len(item.DependsOnPositions))
+		for _, dep := range item.DependsOnPositions {
+			if dep <= 0 || dep >= int32(i+1) {
+				return out, fmt.Errorf("planner output item %d depends_on_positions must reference earlier item positions", i+1)
+			}
+			if seenDeps[dep] {
+				return out, fmt.Errorf("planner output item %d has duplicate dependency position %d", i+1, dep)
+			}
+			seenDeps[dep] = true
+			normalizedDeps = append(normalizedDeps, dep)
+		}
+		out.Items[i].DependsOnPositions = normalizedDeps
+	}
+	return out, nil
+}
+
+func (s *TaskService) writeIssuePlanResult(ctx context.Context, planID pgtype.UUID, result issuePlanResult) error {
+	return s.runInTx(ctx, func(qtx *db.Queries) error {
+		title := strings.TrimSpace(result.Title)
+		if title == "" {
+			title = strings.TrimSpace(result.ParentIssue.Title)
+		}
+		plan, err := qtx.MarkPlanReady(ctx, db.MarkPlanReadyParams{
+			ID:                planID,
+			Title:             title,
+			ParentTitle:       pgtype.Text{String: strings.TrimSpace(result.ParentIssue.Title), Valid: true},
+			ParentDescription: pgtype.Text{String: strings.TrimSpace(result.ParentIssue.Description), Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("mark plan ready: %w", err)
+		}
+		if err := qtx.DeletePlanItems(ctx, plan.ID); err != nil {
+			return fmt.Errorf("delete old plan items: %w", err)
+		}
+		for i, item := range result.Items {
+			selected := true
+			if item.Selected != nil {
+				selected = *item.Selected
+			}
+			score := item.MatchScore
+			var recommended pgtype.UUID
+			if strings.TrimSpace(item.RecommendedAgentID) != "" && score >= 60 {
+				agentID, err := util.ParseUUID(strings.TrimSpace(item.RecommendedAgentID))
+				if err == nil {
+					if agent, loadErr := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+						ID:          agentID,
+						WorkspaceID: plan.WorkspaceID,
+					}); loadErr == nil && !agent.ArchivedAt.Valid {
+						recommended = agentID
+					}
+				}
+			}
+			if !recommended.Valid && score >= 60 {
+				score = 0
+			}
+			if !recommended.Valid {
+				selected = true
+			}
+			if _, err := qtx.CreatePlanItem(ctx, db.CreatePlanItemParams{
+				PlanID:             plan.ID,
+				Position:           int32(i + 1),
+				Title:              strings.TrimSpace(item.Title),
+				Description:        strings.TrimSpace(item.Description),
+				RecommendedAgentID: recommended,
+				MatchScore:         score,
+				MatchReason:        strings.TrimSpace(item.MatchReason),
+				MissingCapability:  strings.TrimSpace(item.MissingCapability),
+				DependsOnPositions: item.DependsOnPositions,
+				Selected:           selected,
+			}); err != nil {
+				return fmt.Errorf("create plan item: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *TaskService) markIssuePlanFailed(ctx context.Context, planID pgtype.UUID, msg string) {
+	if _, err := s.Queries.MarkPlanFailed(ctx, db.MarkPlanFailedParams{ID: planID, Error: pgtype.Text{String: msg, Valid: true}}); err != nil {
+		slog.Warn("issue-plan completion: failed to mark plan failed", "plan_id", util.UUIDToString(planID), "error", err)
+	}
 }
 
 // notifyQuickCreateCompleted writes a success inbox notification to the

@@ -161,6 +161,7 @@ type DaemonRegisterRequest struct {
 	DeviceName      string   `json:"device_name"`
 	CLIVersion      string   `json:"cli_version"` // multica CLI version
 	LaunchedBy      string   `json:"launched_by"` // "desktop" when spawned by the Electron app
+	Capabilities    []string `json:"capabilities"`
 	// Timezone is the daemon host's IANA timezone (e.g. "Asia/Shanghai"),
 	// detected client-side from time.Local. The server stores it on each
 	// agent_runtime row created for this daemon so token-usage rollups
@@ -340,9 +341,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			status = "offline"
 		}
 		metadata, _ := json.Marshal(map[string]any{
-			"version":     runtime.Version,
-			"cli_version": req.CLIVersion,
-			"launched_by": req.LaunchedBy,
+			"version":      runtime.Version,
+			"cli_version":  req.CLIVersion,
+			"launched_by":  req.LaunchedBy,
+			"capabilities": req.Capabilities,
 		})
 
 		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
@@ -1175,14 +1177,17 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 
 	// Include workspace ID and repos so the daemon can set up worktrees.
 	//
-	// Repo precedence: project-bound github_repo resources override workspace
+	// Repo precedence: project-bound Git repo resources override workspace
 	// repos when present. Mixing both would just confuse the agent — if a
 	// project explicitly attached its repos, those are the authoritative set
-	// for issues inside that project. When the project has no github_repo
+	// for issues inside that project. When the project has no Git repo
 	// resources (or no project at all), we fall back to the workspace repos.
 	if task.IssueID.Valid {
 		if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
 			resp.WorkspaceID = uuidToString(issue.WorkspaceID)
+			if prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID); prefix != "" && issue.Number > 0 {
+				resp.IssueIdentifier = fmt.Sprintf("%s-%d", prefix, issue.Number)
+			}
 
 			var projectRepos []RepoData
 			if issue.ProjectID.Valid {
@@ -1207,10 +1212,10 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 							ResourceRef:  ref,
 							Label:        label,
 						})
-						// Lift github_repo resources into the daemon's repo list
+						// Lift project Git repo resources into the daemon's repo list
 						// so `multica repo checkout` and the meta-skill render
 						// them as the issue's repos.
-						if row.ResourceType == "github_repo" {
+						if isProjectGitRepoResource(row.ResourceType) {
 							var payload struct {
 								URL string `json:"url"`
 							}
@@ -1388,6 +1393,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// prompt come from the task's context JSONB. Resolve workspace from
 	// there so the isolation check below has something to compare.
 	hasQuickCreate := false
+	hasIssuePlan := false
 	if task.Context != nil && !task.IssueID.Valid && !task.ChatSessionID.Valid && !task.AutopilotRunID.Valid {
 		var qc service.QuickCreateContext
 		if json.Unmarshal(task.Context, &qc) == nil && qc.Type == service.QuickCreateContextType {
@@ -1398,8 +1404,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			// When the user picked a project in the modal, surface its title
 			// and resources to the daemon so the agent has the same context
 			// it would for an issue-bound task: the prompt template can name
-			// the project, and `multica repo checkout` sees the project's
-			// github_repo resources instead of the workspace fallback.
+			// the project, and `multica repo checkout` sees the project's Git
+			// repo resources instead of the workspace fallback.
 			var projectRepos []RepoData
 			if qc.ProjectID != "" {
 				projectUUID, err := util.ParseUUID(qc.ProjectID)
@@ -1425,7 +1431,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 								ResourceRef:  ref,
 								Label:        label,
 							})
-							if row.ResourceType == "github_repo" {
+							if isProjectGitRepoResource(row.ResourceType) {
 								var payload struct {
 									URL string `json:"url"`
 								}
@@ -1442,6 +1448,31 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			if len(projectRepos) > 0 {
 				resp.Repos = projectRepos
 			} else if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(qc.WorkspaceID)); err == nil && ws.Repos != nil {
+				var repos []RepoData
+				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
+					resp.Repos = repos
+				}
+			}
+		}
+
+		var ip service.IssuePlanContext
+		if json.Unmarshal(task.Context, &ip) == nil && ip.Type == service.IssuePlanContextType {
+			hasIssuePlan = true
+			resp.IssuePlanPrompt = ip.Prompt
+			resp.IssuePlanID = ip.PlanID
+			resp.WorkspaceID = ip.WorkspaceID
+
+			if ip.ProjectID != "" {
+				projectUUID, err := util.ParseUUID(ip.ProjectID)
+				if err == nil {
+					resp.ProjectID = ip.ProjectID
+					if proj, err := h.Queries.GetProject(r.Context(), projectUUID); err == nil {
+						resp.ProjectTitle = proj.Title
+					}
+				}
+			}
+			resp.AvailableAgents = h.availablePlanAgents(r.Context(), parseUUID(ip.WorkspaceID), ip.RequesterID)
+			if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(ip.WorkspaceID)); err == nil && ws.Repos != nil {
 				var repos []RepoData
 				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
 					resp.Repos = repos
@@ -1469,6 +1500,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			"has_chat", task.ChatSessionID.Valid,
 			"has_autopilot_run", task.AutopilotRunID.Valid,
 			"has_quick_create", hasQuickCreate,
+			"has_issue_plan", hasIssuePlan,
 		)
 		if _, cerr := h.TaskService.CancelTask(r.Context(), task.ID); cerr != nil {
 			slog.Error("task claim: cancel after workspace check failed",
@@ -1503,6 +1535,41 @@ func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) availablePlanAgents(ctx context.Context, workspaceID pgtype.UUID, requesterID string) []PlanAgentData {
+	agents, err := h.Queries.ListAgents(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("issue-plan claim: failed to list agents", "workspace_id", uuidToString(workspaceID), "error", err)
+		return nil
+	}
+	skillRows, err := h.Queries.ListAgentSkillsByWorkspace(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("issue-plan claim: failed to list agent skills", "workspace_id", uuidToString(workspaceID), "error", err)
+	}
+	skillsByAgent := map[string][]string{}
+	for _, row := range skillRows {
+		agentID := uuidToString(row.AgentID)
+		skillsByAgent[agentID] = append(skillsByAgent[agentID], row.Name)
+	}
+	out := make([]PlanAgentData, 0, len(agents))
+	for _, a := range agents {
+		if a.ArchivedAt.Valid {
+			continue
+		}
+		if !h.canAccessPrivateAgent(ctx, a, "member", requesterID, uuidToString(workspaceID)) {
+			continue
+		}
+		agentID := uuidToString(a.ID)
+		out = append(out, PlanAgentData{
+			ID:           agentID,
+			Name:         a.Name,
+			Description:  a.Description,
+			Instructions: a.Instructions,
+			Skills:       skillsByAgent[agentID],
+		})
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -1564,10 +1631,13 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL     string `json:"pr_url"`
-	Output    string `json:"output"`
-	SessionID string `json:"session_id"` // Claude session ID for future resumption
-	WorkDir   string `json:"work_dir"`   // working directory used during execution
+	PRURL           string `json:"pr_url"`
+	Output          string `json:"output"`
+	BranchName      string `json:"branch_name"`
+	BranchCommitSHA string `json:"branch_commit_sha"`
+	BranchPushedAt  string `json:"branch_pushed_at"`
+	SessionID       string `json:"session_id"` // Claude session ID for future resumption
+	WorkDir         string `json:"work_dir"`   // working directory used during execution
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {

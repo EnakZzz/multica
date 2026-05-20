@@ -1,0 +1,1 @@
+-- Intentionally left empty: backfilled node agent bindings preserve user-authored pipeline assignments.

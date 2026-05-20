@@ -720,6 +720,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"device_name":       d.cfg.DeviceName,
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,
+		"capabilities":      []string{"issue_plan"},
 		"timezone":          detectLocalTimezone(),
 		"runtimes":          runtimes,
 	}
@@ -2081,7 +2082,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		if err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.SessionID, result.WorkDir); err != nil {
+		if err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.BranchCommitSHA, result.BranchPushedAt, result.SessionID, result.WorkDir); err != nil {
 			taskLog.Error("complete task failed, falling back to fail", "error", err)
 			if failErr := d.client.FailTask(ctx, taskID, fmt.Sprintf("complete task failed: %s", err.Error()), result.SessionID, result.WorkDir, "agent_error"); failErr != nil {
 				taskLog.Error("fail task fallback also failed", "error", failErr)
@@ -2101,6 +2102,59 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			taskLog.Error("report failed task failed", "error", err)
 		}
 	}
+}
+
+type repoPublishMetadata struct {
+	BranchName string `json:"branch_name"`
+	CommitSHA  string `json:"commit_sha"`
+	PushedAt   string `json:"pushed_at"`
+	TaskID     string `json:"task_id,omitempty"`
+}
+
+func taskResultWithPublishMetadata(result TaskResult, meta *repoPublishMetadata) TaskResult {
+	if meta == nil {
+		return result
+	}
+	if result.BranchName == "" {
+		result.BranchName = meta.BranchName
+	}
+	result.BranchCommitSHA = meta.CommitSHA
+	result.BranchPushedAt = meta.PushedAt
+	return result
+}
+
+func readRepoPublishMetadata(workDir, taskID string, taskLog *slog.Logger) *repoPublishMetadata {
+	if workDir == "" {
+		return nil
+	}
+	candidates := []string{filepath.Join(workDir, ".multica", "repo-output.json")}
+	if entries, err := os.ReadDir(workDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				candidates = append(candidates, filepath.Join(workDir, entry.Name(), ".multica", "repo-output.json"))
+			}
+		}
+	}
+	var fallback *repoPublishMetadata
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var meta repoPublishMetadata
+		if err := json.Unmarshal(data, &meta); err != nil {
+			taskLog.Warn("repo publish metadata: invalid json", "path", path, "error", err)
+			continue
+		}
+		if strings.TrimSpace(meta.BranchName) == "" {
+			continue
+		}
+		if taskID != "" && meta.TaskID == taskID {
+			return &meta
+		}
+		fallback = &meta
+	}
+	return fallback
 }
 
 // gcMetaForTask classifies a finished task and produces a GCMeta of the right
@@ -2184,6 +2238,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// via `multica repo checkout <url>`.
 	taskCtx := execenv.TaskContextForEnv{
 		IssueID:                          task.IssueID,
+		IssueIdentifier:                  task.IssueIdentifier,
 		TriggerCommentID:                 task.TriggerCommentID,
 		AgentID:                          agentID,
 		AgentName:                        agentName,
@@ -2276,14 +2331,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// per-agent. When one daemon hosts multiple agents, slots index shared
 	// daemon-level resources such as GPUs.
 	agentEnv := map[string]string{
-		"MULTICA_TOKEN":        d.client.Token(),
-		"MULTICA_SERVER_URL":   d.cfg.ServerBaseURL,
-		"MULTICA_DAEMON_PORT":  fmt.Sprintf("%d", d.cfg.HealthPort),
-		"MULTICA_WORKSPACE_ID": task.WorkspaceID,
-		"MULTICA_AGENT_NAME":   agentName,
-		"MULTICA_AGENT_ID":     task.AgentID,
-		"MULTICA_TASK_ID":      task.ID,
-		"MULTICA_TASK_SLOT":    strconv.Itoa(slot),
+		"MULTICA_TOKEN":            d.client.Token(),
+		"MULTICA_SERVER_URL":       d.cfg.ServerBaseURL,
+		"MULTICA_DAEMON_PORT":      fmt.Sprintf("%d", d.cfg.HealthPort),
+		"MULTICA_WORKSPACE_ID":     task.WorkspaceID,
+		"MULTICA_AGENT_NAME":       agentName,
+		"MULTICA_AGENT_ID":         task.AgentID,
+		"MULTICA_PROJECT_ID":       task.ProjectID,
+		"MULTICA_ISSUE_IDENTIFIER": task.IssueIdentifier,
+		"MULTICA_TASK_ID":          task.ID,
+		"MULTICA_TASK_SLOT":        strconv.Itoa(slot),
 	}
 	if task.AutopilotRunID != "" {
 		agentEnv["MULTICA_AUTOPILOT_RUN_ID"] = task.AutopilotRunID
@@ -2517,6 +2574,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			CacheWriteTokens: u.CacheWriteTokens,
 		})
 	}
+	publishMeta := readRepoPublishMetadata(env.WorkDir, task.ID, taskLog)
 
 	switch result.Status {
 	case "completed":
@@ -2526,14 +2584,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			// calls (e.g. posting comments via CLI, pushing code). Treat as
 			// a normal completion so the task is not incorrectly marked as
 			// blocked.
-			return TaskResult{
+			return taskResultWithPublishMetadata(TaskResult{
 				Status:    "completed",
 				Comment:   "",
 				SessionID: result.SessionID,
 				WorkDir:   env.WorkDir,
 				EnvRoot:   env.RootDir,
 				Usage:     usageEntries,
-			}, nil
+			}, publishMeta), nil
 		}
 		// Detect "poisoned" terminal output: the agent didn't reach a real
 		// conclusion but emitted a known fallback marker (iteration limit,
@@ -2556,14 +2614,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				FailureReason: reason,
 			}, nil
 		}
-		return TaskResult{
+		return taskResultWithPublishMetadata(TaskResult{
 			Status:    "completed",
 			Comment:   result.Output,
 			SessionID: result.SessionID,
 			WorkDir:   env.WorkDir,
 			EnvRoot:   env.RootDir,
 			Usage:     usageEntries,
-		}, nil
+		}, publishMeta), nil
 	case "timeout":
 		// Surface session_id/work_dir so the chat resume pointer is kept
 		// in sync even when the agent times out after building a session.

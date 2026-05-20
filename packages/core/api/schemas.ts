@@ -6,8 +6,15 @@ import type {
   Attachment,
   CreateAgentFromTemplateResponse,
   GroupedIssuesResponse,
+  IssueDependenciesResponse,
   ListIssuesResponse,
+  ListPipelinesResponse,
   ListWebhookDeliveriesResponse,
+  ListPlansResponse,
+  Pipeline,
+  PipelineImportValidationResponse,
+  PipelineRun,
+  Plan,
   TimelineEntry,
   User,
   WebhookDelivery,
@@ -183,6 +190,212 @@ export const GroupedIssuesResponseSchema = z.object({
 
 export const EMPTY_GROUPED_ISSUES_RESPONSE: GroupedIssuesResponse = {
   groups: [],
+};
+
+const IssueDependencySummarySchema = z.object({
+  id: z.string(),
+  type: z.string().default("blocked_by"),
+  issue_id: z.string(),
+  identifier: z.string(),
+  title: z.string(),
+  status: z.string(),
+  assignee_type: z.string().nullable().default(null),
+  assignee_id: z.string().nullable().default(null),
+  dependency_type: z.string().default("blocked_by"),
+}).loose();
+
+export const IssueDependenciesResponseSchema = z.object({
+  blocked_by: z.array(IssueDependencySummarySchema).default([]),
+  blocks: z.array(IssueDependencySummarySchema).default([]),
+}).loose();
+
+export const EMPTY_ISSUE_DEPENDENCIES_RESPONSE: IssueDependenciesResponse = {
+  blocked_by: [],
+  blocks: [],
+};
+
+const PlanItemSchema = z.object({
+  id: z.string(),
+  plan_id: z.string(),
+  position: z.number(),
+  title: z.string(),
+  description: z.string().default(""),
+  recommended_agent_id: z.string().nullable().default(null),
+  match_score: z.number().default(0),
+  match_reason: z.string().default(""),
+  missing_capability: z.string().default(""),
+  depends_on_positions: z.array(z.number()).default([]),
+  selected: z.boolean().default(true),
+  generated_issue_id: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const PlanSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  title: z.string(),
+  prompt: z.string(),
+  status: z.string(),
+  planner_agent_id: z.string(),
+  task_id: z.string().default(""),
+  project_id: z.string().nullable().default(null),
+  parent_title: z.string().default(""),
+  parent_description: z.string().default(""),
+  parent_issue_id: z.string().nullable().default(null),
+  error: z.string().nullable().default(null),
+  created_by: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+  items: z.array(PlanItemSchema).default([]),
+}).loose();
+
+export const EMPTY_PLAN: Plan = {
+  id: "",
+  workspace_id: "",
+  title: "",
+  prompt: "",
+  status: "failed",
+  planner_agent_id: "",
+  task_id: "",
+  project_id: null,
+  parent_title: "",
+  parent_description: "",
+  parent_issue_id: null,
+  error: null,
+  created_by: "",
+  created_at: "",
+  updated_at: "",
+  items: [],
+};
+
+export const ListPlansResponseSchema = z.object({
+  plans: z.array(PlanSchema).default([]),
+}).loose();
+
+export const EMPTY_LIST_PLANS_RESPONSE: ListPlansResponse = {
+  plans: [],
+};
+
+const PipelineNodeTypeSchema = z.preprocess(
+  (value) => (value === "manual" || value === "check" || value === "issue" ? value : "issue"),
+  z.enum(["issue", "manual", "check"]),
+);
+
+const PipelineNodeSchema = z.object({
+  id: z.string(),
+  pipeline_id: z.string(),
+  key: z.string(),
+  type: PipelineNodeTypeSchema,
+  title: z.string(),
+  description: z.string().default(""),
+  agent_id: z.string().nullable().default(null),
+  repo: z.string().nullable().default(null),
+  repos: z.array(z.string()).default([]),
+  depends_on_node_keys: z.array(z.string()).default([]),
+  position: z.number().default(0),
+  position_x: z.number().default(0),
+  position_y: z.number().default(0),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const PipelineSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  name: z.string(),
+  description: z.string().default(""),
+  created_by: z.string().default(""),
+  archived_at: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+  nodes: z.array(PipelineNodeSchema).default([]),
+}).loose();
+
+export const EMPTY_PIPELINE: Pipeline = {
+  id: "",
+  workspace_id: "",
+  name: "",
+  description: "",
+  created_by: "",
+  archived_at: null,
+  created_at: "",
+  updated_at: "",
+  nodes: [],
+};
+
+export const ListPipelinesResponseSchema = z.object({
+  pipelines: z.array(PipelineSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_PIPELINES_RESPONSE: ListPipelinesResponse = {
+  pipelines: [],
+  total: 0,
+};
+
+const PipelineRunNodeSchema = z.object({
+  id: z.string(),
+  pipeline_run_id: z.string(),
+  pipeline_node_id: z.string().nullable().default(null),
+  node_key: z.string(),
+  issue_id: z.string(),
+  created_at: z.string().default(""),
+}).loose();
+
+export const PipelineRunSchema = z.object({
+  id: z.string(),
+  pipeline_id: z.string(),
+  workspace_id: z.string(),
+  project_id: z.string().nullable().default(null),
+  parent_issue_id: z.string(),
+  status: z.string(),
+  created_by: z.string().default(""),
+  created_at: z.string().default(""),
+  nodes: z.array(PipelineRunNodeSchema).default([]),
+}).loose();
+
+export const EMPTY_PIPELINE_RUN: PipelineRun = {
+  id: "",
+  pipeline_id: "",
+  workspace_id: "",
+  project_id: null,
+  parent_issue_id: "",
+  status: "failed",
+  created_by: "",
+  created_at: "",
+  nodes: [],
+};
+
+const ImportPipelineNodeSchema = z.object({
+  key: z.string().default(""),
+  type: PipelineNodeTypeSchema.optional(),
+  title: z.string().default(""),
+  description: z.string().default(""),
+  agent_id: z.string().nullable().default(null),
+  repo: z.string().nullable().default(null),
+  repos: z.array(z.string()).default([]),
+  depends_on_node_keys: z.array(z.string()).default([]),
+  position_x: z.number().default(0),
+  position_y: z.number().default(0),
+}).loose();
+
+const PipelineImportPreviewSchema = z.object({
+  name: z.string().default(""),
+  description: z.string().default(""),
+  nodes: z.array(ImportPipelineNodeSchema).default([]),
+}).loose();
+
+export const PipelineImportValidationResponseSchema = z.object({
+  valid: z.boolean().default(false),
+  errors: z.array(z.string()).default([]),
+  pipeline: PipelineImportPreviewSchema.nullable().default(null),
+}).loose();
+
+export const EMPTY_PIPELINE_IMPORT_VALIDATION_RESPONSE: PipelineImportValidationResponse = {
+  valid: false,
+  errors: [],
+  pipeline: null,
 };
 
 const SubscriberSchema = z.object({

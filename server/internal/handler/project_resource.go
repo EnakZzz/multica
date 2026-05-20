@@ -63,29 +63,29 @@ func validateAndNormalizeResourceRef(resourceType string, ref json.RawMessage) (
 		return nil, errors.New("resource_ref is required")
 	}
 	switch resourceType {
-	case "github_repo":
-		return validateGithubRepoRef(ref)
+	case "git_repo", "github_repo":
+		return validateGitRepoRef(resourceType, ref)
 	default:
 		return nil, fmt.Errorf("unknown resource_type %q", resourceType)
 	}
 }
 
-type githubRepoRef struct {
-	URL                string `json:"url"`
-	DefaultBranchHint  string `json:"default_branch_hint,omitempty"`
+type gitRepoRef struct {
+	URL               string `json:"url"`
+	DefaultBranchHint string `json:"default_branch_hint,omitempty"`
 }
 
-func validateGithubRepoRef(ref json.RawMessage) (json.RawMessage, error) {
-	var payload githubRepoRef
+func validateGitRepoRef(resourceType string, ref json.RawMessage) (json.RawMessage, error) {
+	var payload gitRepoRef
 	if err := json.Unmarshal(ref, &payload); err != nil {
-		return nil, fmt.Errorf("invalid github_repo payload: %w", err)
+		return nil, fmt.Errorf("invalid %s payload: %w", resourceType, err)
 	}
 	payload.URL = strings.TrimSpace(payload.URL)
 	if payload.URL == "" {
-		return nil, errors.New("github_repo: url is required")
+		return nil, fmt.Errorf("%s: url is required", resourceType)
 	}
 	if !isValidGitRepoURL(payload.URL) {
-		return nil, errors.New("github_repo: url must be a valid http(s) or ssh git URL")
+		return nil, fmt.Errorf("%s: url must be a valid http(s), ssh, or scp-style Git URL", resourceType)
 	}
 	payload.DefaultBranchHint = strings.TrimSpace(payload.DefaultBranchHint)
 	out, err := json.Marshal(payload)
@@ -95,9 +95,9 @@ func validateGithubRepoRef(ref json.RawMessage) (json.RawMessage, error) {
 	return out, nil
 }
 
-// isValidGitRepoURL accepts the three forms a user can paste from GitHub's
-// "Code" menu: https://, ssh:// (with explicit scheme), and the scp-like
-// shorthand `git@host:owner/repo.git`. The check is intentionally lax — we are
+// isValidGitRepoURL accepts common Git clone URL forms: https://, ssh://
+// (with explicit scheme), and the scp-like shorthand
+// `git@host:owner/repo.git`. The check is intentionally lax — we are
 // guarding against pasted garbage like "not-a-url", not enforcing a strict
 // grammar — because the actual fetch happens client-side via `git clone` and
 // the user gets a clearer error from git than from us.
@@ -136,6 +136,10 @@ func isValidGitRepoURL(s string) bool {
 		return false
 	}
 	return true
+}
+
+func isProjectGitRepoResource(resourceType string) bool {
+	return resourceType == "git_repo" || resourceType == "github_repo"
 }
 
 // loadProjectForResource resolves the project, enforces workspace ownership,

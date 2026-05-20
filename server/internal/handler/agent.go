@@ -28,24 +28,24 @@ import (
 const maxAgentDescriptionLength = 255
 
 type AgentResponse struct {
-	ID                 string              `json:"id"`
-	WorkspaceID        string              `json:"workspace_id"`
-	RuntimeID          string              `json:"runtime_id"`
-	Name               string              `json:"name"`
-	Description        string              `json:"description"`
-	Instructions       string              `json:"instructions"`
-	AvatarURL          *string             `json:"avatar_url"`
-	RuntimeMode        string              `json:"runtime_mode"`
-	RuntimeConfig      any                 `json:"runtime_config"`
-	CustomEnv          map[string]string   `json:"custom_env"`
-	CustomArgs         []string            `json:"custom_args"`
-	McpConfig          json.RawMessage     `json:"mcp_config"`
-	CustomEnvRedacted  bool                `json:"custom_env_redacted"`
-	McpConfigRedacted  bool                `json:"mcp_config_redacted"`
-	Visibility         string              `json:"visibility"`
-	Status             string              `json:"status"`
-	MaxConcurrentTasks int32               `json:"max_concurrent_tasks"`
-	Model              string              `json:"model"`
+	ID                 string            `json:"id"`
+	WorkspaceID        string            `json:"workspace_id"`
+	RuntimeID          string            `json:"runtime_id"`
+	Name               string            `json:"name"`
+	Description        string            `json:"description"`
+	Instructions       string            `json:"instructions"`
+	AvatarURL          *string           `json:"avatar_url"`
+	RuntimeMode        string            `json:"runtime_mode"`
+	RuntimeConfig      any               `json:"runtime_config"`
+	CustomEnv          map[string]string `json:"custom_env"`
+	CustomArgs         []string          `json:"custom_args"`
+	McpConfig          json.RawMessage   `json:"mcp_config"`
+	CustomEnvRedacted  bool              `json:"custom_env_redacted"`
+	McpConfigRedacted  bool              `json:"mcp_config_redacted"`
+	Visibility         string            `json:"visibility"`
+	Status             string            `json:"status"`
+	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
+	Model              string            `json:"model"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
 	// for this agent (empty = use runtime default). The picker is per-runtime
 	// per-model; the API never normalizes across providers. See MUL-2339.
@@ -130,7 +130,7 @@ type RepoData struct {
 // working directory so skills/agents can discover project-scoped context.
 //
 // resource_ref is type-specific JSON; the daemon doesn't interpret it beyond
-// well-known fields like url for github_repo. New types can be added without
+// well-known fields like url for Git repo resources. New types can be added without
 // changing this struct.
 type ProjectResourceData struct {
 	ID           string          `json:"id"`
@@ -144,6 +144,7 @@ type AgentTaskResponse struct {
 	AgentID                 string                `json:"agent_id"`
 	RuntimeID               string                `json:"runtime_id"`
 	IssueID                 string                `json:"issue_id"`
+	IssueIdentifier         string                `json:"issue_identifier,omitempty"`
 	WorkspaceID             string                `json:"workspace_id"`
 	Status                  string                `json:"status"`
 	Priority                int32                 `json:"priority"`
@@ -186,9 +187,20 @@ type AgentTaskResponse struct {
 	// empty otherwise. The daemon emits both into the brief under
 	// `## Requesting User`; the heading is skipped entirely when description
 	// is empty.
-	RequestingUserName               string `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
-	Kind                             string `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+	RequestingUserName               string          `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string          `json:"requesting_user_profile_description,omitempty"`
+	IssuePlanPrompt                  string          `json:"issue_plan_prompt,omitempty"` // user's natural-language input for plan tasks
+	IssuePlanID                      string          `json:"issue_plan_id,omitempty"`     // plan row receiving structured output
+	AvailableAgents                  []PlanAgentData `json:"available_agents,omitempty"`  // assignable agents planner may recommend
+	Kind                             string          `json:"kind"`                        // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+}
+
+type PlanAgentData struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Instructions string   `json:"instructions,omitempty"`
+	Skills       []string `json:"skills,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in
@@ -263,7 +275,8 @@ func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
 // to choose how to render a task row. Computed from the existing FK shape so
 // no extra DB lookup is needed: chat / autopilot / comment-on-issue (any
 // triggered task with both an issue_id and trigger_comment_id) / quick_create
-// (no linked source — the agent is creating the issue itself) / direct
+// (no linked source — the agent is creating the issue itself) / issue_plan
+// (no linked source — the agent is producing a saved plan) / direct
 // (assignee-driven task on an existing issue).
 func computeTaskKind(t db.AgentTaskQueue) string {
 	if uuidToString(t.ChatSessionID) != "" {
@@ -273,6 +286,10 @@ func computeTaskKind(t db.AgentTaskQueue) string {
 		return "autopilot"
 	}
 	if uuidToString(t.IssueID) == "" {
+		var payload map[string]any
+		if t.Context != nil && json.Unmarshal(t.Context, &payload) == nil && payload["type"] == service.IssuePlanContextType {
+			return "issue_plan"
+		}
 		return "quick_create"
 	}
 	if uuidToString(t.TriggerCommentID) != "" {

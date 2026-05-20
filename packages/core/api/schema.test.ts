@@ -100,6 +100,68 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("listPlans", () => {
+    it("falls back to an empty plan list when the response is malformed", async () => {
+      stubFetchJson({ plans: "not-an-array" });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPlans();
+      expect(res).toEqual({ plans: [] });
+    });
+  });
+
+  describe("listPipelines", () => {
+    it("uses schema defaults for optional pipeline fields", async () => {
+      stubFetchJson({
+        pipelines: [
+          {
+            id: "pipe-1",
+            workspace_id: "ws-1",
+            name: "Production",
+          },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPipelines();
+      expect(res.total).toBe(0);
+      expect(res.pipelines[0]).toMatchObject({
+        id: "pipe-1",
+        description: "",
+        nodes: [],
+      });
+    });
+
+    it("falls back to an empty pipeline list when the response is malformed", async () => {
+      stubFetchJson({ pipelines: "not-an-array", total: 1 });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPipelines();
+      expect(res).toEqual({ pipelines: [], total: 0 });
+    });
+  });
+
+  describe("validatePipelineYamlImport", () => {
+    it("uses schema defaults for missing import validation fields", async () => {
+      stubFetchJson({ valid: true });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.validatePipelineYamlImport({ content: "name: Test" });
+      expect(res).toEqual({
+        valid: true,
+        errors: [],
+        pipeline: null,
+      });
+    });
+
+    it("falls back when import validation response is malformed", async () => {
+      stubFetchJson({ valid: "yes", errors: [] });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.validatePipelineYamlImport({ content: "name: Test" });
+      expect(res).toEqual({
+        valid: false,
+        errors: [],
+        pipeline: null,
+      });
+    });
+  });
+
   describe("listComments", () => {
     it("returns [] when the response is not an array", async () => {
       stubFetchJson({ wrong: "shape" });
@@ -288,6 +350,15 @@ describe("ApiClient schema fallback", () => {
       expect(resp.agent.id).toBe("agent-1");
       expect(resp.imported_skill_ids).toEqual([]);
       expect(resp.reused_skill_ids).toEqual([]);
+    });
+  });
+
+  describe("listIssueDependencies", () => {
+    it("falls back to empty dependency lists when the response is malformed", async () => {
+      stubFetchJson({ blocked_by: "not-an-array", blocks: [] });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listIssueDependencies("issue-1");
+      expect(res).toEqual({ blocked_by: [], blocks: [] });
     });
   });
 });

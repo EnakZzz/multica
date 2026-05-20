@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-stop
+.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-update selfhost-stop docker-deploy docker-update docker-status docker-logs docker-stop
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -27,6 +27,8 @@ export
 MULTICA_ARGS ?= $(ARGS)
 
 COMPOSE := docker compose
+SELFHOST_COMPOSE := $(COMPOSE) -f docker-compose.selfhost.yml
+SELFHOST_BUILD_COMPOSE := $(SELFHOST_COMPOSE) -f docker-compose.selfhost.build.yml
 
 define REQUIRE_ENV
 	@if [ ! -f "$(ENV_FILE)" ]; then \
@@ -65,7 +67,7 @@ selfhost: ## Create .env if needed, then pull and start the official self-hosted
 		echo "==> Generated random JWT_SECRET"; \
 	fi
 	@echo "==> Pulling official Multica images..."
-	@if ! docker compose -f docker-compose.selfhost.yml pull; then \
+	@if ! $(SELFHOST_COMPOSE) pull; then \
 		echo ""; \
 		echo "Official images for tag '$${MULTICA_IMAGE_TAG:-latest}' are not published yet."; \
 		echo "If this is before the first GHCR release, build from the current checkout:"; \
@@ -73,7 +75,7 @@ selfhost: ## Create .env if needed, then pull and start the official self-hosted
 		exit 1; \
 	fi
 	@echo "==> Starting Multica via Docker Compose..."
-	docker compose -f docker-compose.selfhost.yml up -d
+	$(SELFHOST_COMPOSE) up -d
 	@echo "==> Waiting for backend to be ready..."
 	@for i in $$(seq 1 30); do \
 		if curl -sf http://localhost:$${PORT:-8080}/health > /dev/null 2>&1; then \
@@ -115,7 +117,7 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 		echo "==> Generated random JWT_SECRET"; \
 	fi
 	@echo "==> Building Multica from the current checkout..."
-	docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build
+	$(SELFHOST_BUILD_COMPOSE) up -d --build
 	@echo "==> Waiting for backend to be ready..."
 	@for i in $$(seq 1 30); do \
 		if curl -sf http://localhost:$${PORT:-8080}/health > /dev/null 2>&1; then \
@@ -144,9 +146,23 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 		echo "  docker compose -f docker-compose.selfhost.yml logs"; \
 	fi
 
+selfhost-update: selfhost-build ## Rebuild backend/web images from this checkout and restart Docker services
+
+docker-deploy: selfhost-build ## Deploy this checkout into Docker images; source edits need docker-update to take effect
+
+docker-update: selfhost-update ## Rebuild and restart Docker services after source changes
+
+docker-status: ## Show the self-hosted Docker Compose service status
+	$(SELFHOST_COMPOSE) ps
+
+docker-logs: ## Follow self-hosted Docker Compose logs
+	$(SELFHOST_COMPOSE) logs -f --tail=200
+
+docker-stop: selfhost-stop ## Stop the self-hosted Docker Compose stack
+
 selfhost-stop: ## Stop the self-hosted Docker Compose stack
 	@echo "==> Stopping Multica services..."
-	docker compose -f docker-compose.selfhost.yml down
+	$(SELFHOST_COMPOSE) down
 	@echo "✓ All services stopped."
 
 # ---------- One-click commands ----------

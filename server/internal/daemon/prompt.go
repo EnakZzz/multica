@@ -27,12 +27,75 @@ func BuildPrompt(task Task, provider string) string {
 	if task.QuickCreatePrompt != "" {
 		return buildQuickCreatePrompt(task)
 	}
+	if task.IssuePlanPrompt != "" {
+		return buildIssuePlanPrompt(task)
+	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
+	b.WriteString("For code changes, use `multica repo checkout <url>` and publish only the generated `agent/*` branch with `multica repo publish`. Never push directly to main or master. Your final issue comment must include `Branch: agent/...` and `Status: ready for review` after publish succeeds.\n")
 	return b.String()
+}
+
+func buildIssuePlanPrompt(task Task) string {
+	var b strings.Builder
+	b.WriteString("You are running as an issue-planning assistant for a Multica workspace.\n\n")
+	b.WriteString("A user wants a large goal broken into actionable issues. Do not create issues, do not call `multica issue create`, and do not modify workspace data. Your only job is to return one JSON object.\n\n")
+	fmt.Fprintf(&b, "Plan ID: %s\n\n", task.IssuePlanID)
+	fmt.Fprintf(&b, "User goal:\n> %s\n\n", task.IssuePlanPrompt)
+	if task.ProjectTitle != "" {
+		fmt.Fprintf(&b, "Project: %s (%s)\n\n", task.ProjectTitle, task.ProjectID)
+	}
+	b.WriteString("Available agents you may recommend:\n")
+	if len(task.AvailableAgents) == 0 {
+		b.WriteString("- none\n")
+	} else {
+		for _, a := range task.AvailableAgents {
+			fmt.Fprintf(&b, "- id=%s name=%q description=%q", a.ID, a.Name, a.Description)
+			if len(a.Skills) > 0 {
+				fmt.Fprintf(&b, " skills=%q", strings.Join(a.Skills, ", "))
+			}
+			if strings.TrimSpace(a.Instructions) != "" {
+				fmt.Fprintf(&b, " instructions=%q", trimForPrompt(a.Instructions, 500))
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\nOutput JSON schema:\n")
+	b.WriteString(`{
+  "title": "Short plan title",
+  "parent_issue": { "title": "Parent issue title", "description": "Parent issue description" },
+  "items": [
+    {
+      "title": "Child issue title",
+      "description": "Child issue description with enough context for the assigned agent",
+      "recommended_agent_id": "agent uuid or empty string",
+      "match_score": 0,
+      "match_reason": "Why this agent matches, or why no agent matches",
+      "missing_capability": "Capability gap when match_score < 60 or no agent fits",
+      "depends_on_positions": [1, 2],
+      "selected": true
+    }
+  ]
+}`)
+	b.WriteString("\n\nRules:\n")
+	b.WriteString("- Return JSON only. No markdown fences, prose, comments, or trailing text.\n")
+	b.WriteString("- Split into 2-8 child issues unless the goal is clearly smaller.\n")
+	b.WriteString("- Use only agent IDs from Available agents. If no agent fits, set recommended_agent_id to empty string and match_score below 60.\n")
+	b.WriteString("- A score of 90-100 means the agent's description/skills strongly match; 60-89 means acceptable; below 60 means缺乏合适智能体.\n")
+	b.WriteString("- Use depends_on_positions for execution order. Values are 1-based item positions that must finish before this item starts. Only reference earlier items; use [] when there is no prerequisite. Example: integration testing should usually depend on implementation and QA setup items.\n")
+	b.WriteString("- Never invent agents or capabilities. Put missing role/tooling in missing_capability.\n")
+	return b.String()
+}
+
+func trimForPrompt(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // buildQuickCreatePrompt constructs a prompt for quick-create tasks. The

@@ -1,0 +1,57 @@
+version: 1
+name: Multica fork workflow
+multica:
+  source:
+    repo: multica
+    branch: main
+    path: .multica
+resources:
+  repos:
+    multica:
+      url: https://github.com/EnakZzz/multica.git
+      default_branch_hint: main
+    upstream:
+      url: https://github.com/multica-ai/multica.git
+      default_branch_hint: main
+roles:
+  - key: developer
+    name: Developer
+    description: Implements feature work, resolves merge conflicts, and runs focused verification.
+  - key: reviewer
+    name: Reviewer
+    description: Reviews branches before merge or deployment.
+  - key: deployer
+    name: Deployer
+    description: Runs the self-host Docker update after reviewed changes land on main.
+  - key: upstream_analyst
+    name: Upstream analyst
+    description: Tracks upstream multica-ai/multica changes and prepares prioritized merge reports.
+pipelines:
+  - path: pipelines/daily-feature-development.yaml
+    role_bindings:
+      prepare-branch: developer
+      implement-feature: developer
+      run-tests: developer
+      agent-review: reviewer
+      merge-main: developer
+      deploy-update: deployer
+  - path: pipelines/upstream-sync-watch.yaml
+    role_bindings:
+      fetch-upstream: upstream_analyst
+      prioritize-commits: upstream_analyst
+      merge-selected-upstream: developer
+      review-upstream-merge: reviewer
+      deploy-upstream-update: deployer
+automations:
+  - name: Upstream sync watch
+    pipeline: Upstream sync watch
+    assignee_role: upstream_analyst
+    status: paused
+    cron: "0 9 * * 1"
+    timezone: Asia/Shanghai
+    description: Weekly upstream watch for this fork.
+    prompt: >
+      Inspect upstream/main from https://github.com/multica-ai/multica and use
+      the Upstream sync watch pipeline to generate executable issues for the
+      report, owner selection point, review, and deployment path. Keep this
+      automation paused until the upstream_analyst role is bound to an agent.

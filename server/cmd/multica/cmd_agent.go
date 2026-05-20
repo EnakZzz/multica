@@ -97,6 +97,13 @@ var agentSkillsSetCmd = &cobra.Command{
 	RunE:  runAgentSkillsSet,
 }
 
+var agentSkillsExportCmd = &cobra.Command{
+	Use:   "export <agent-id>",
+	Short: "Export an agent's assigned skills to local files",
+	Args:  exactArgs(1),
+	RunE:  runAgentSkillsExport,
+}
+
 func init() {
 	agentCmd.AddCommand(agentListCmd)
 	agentCmd.AddCommand(agentGetCmd)
@@ -110,6 +117,7 @@ func init() {
 
 	agentSkillsCmd.AddCommand(agentSkillsListCmd)
 	agentSkillsCmd.AddCommand(agentSkillsSetCmd)
+	agentSkillsCmd.AddCommand(agentSkillsExportCmd)
 
 	// agent list
 	agentListCmd.Flags().String("output", "table", "Output format: table or json")
@@ -174,6 +182,10 @@ func init() {
 	// agent skills set
 	agentSkillsSetCmd.Flags().StringSlice("skill-ids", nil, "Skill IDs to assign (comma-separated)")
 	agentSkillsSetCmd.Flags().String("output", "json", "Output format: table or json")
+
+	// agent skills export
+	agentSkillsExportCmd.Flags().String("dir", ".multica/skills", "Directory to write exported skill folders")
+	agentSkillsExportCmd.Flags().String("output", "table", "Output format: table or json")
 }
 
 // resolveProfile returns the --profile flag value (empty string means default profile).
@@ -806,9 +818,149 @@ func runAgentSkillsSet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runAgentSkillsExport(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	targetDir, _ := cmd.Flags().GetString("dir")
+	targetDir = strings.TrimSpace(targetDir)
+	if targetDir == "" {
+		return fmt.Errorf("--dir is required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var assigned []map[string]any
+	if err := client.GetJSON(ctx, "/api/agents/"+args[0]+"/skills", &assigned); err != nil {
+		return fmt.Errorf("list agent skills: %w", err)
+	}
+
+	type exportedSkill struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Path  string `json:"path"`
+		Files int    `json:"files"`
+	}
+	exported := make([]exportedSkill, 0, len(assigned))
+	for _, summary := range assigned {
+		skillID := strVal(summary, "id")
+		if skillID == "" {
+			continue
+		}
+		var skill map[string]any
+		if err := client.GetJSON(ctx, "/api/skills/"+skillID, &skill); err != nil {
+			return fmt.Errorf("get skill %s: %w", skillID, err)
+		}
+		name := strVal(skill, "name")
+		skillDir := filepath.Join(targetDir, localSkillFolderName(name, skillID))
+		if err := writeSkillBundle(skillDir, skill); err != nil {
+			return fmt.Errorf("write skill %s: %w", skillID, err)
+		}
+		fileCount := 1
+		if files, ok := skill["files"].([]any); ok {
+			fileCount += len(files)
+		}
+		exported = append(exported, exportedSkill{
+			ID:    skillID,
+			Name:  name,
+			Path:  filepath.ToSlash(skillDir),
+			Files: fileCount,
+		})
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, map[string]any{
+			"dir":    filepath.ToSlash(targetDir),
+			"skills": exported,
+		})
+	}
+
+	headers := []string{"ID", "NAME", "PATH", "FILES"}
+	rows := make([][]string, 0, len(exported))
+	for _, item := range exported {
+		rows = append(rows, []string{item.ID, item.Name, item.Path, fmt.Sprintf("%d", item.Files)})
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+	fmt.Fprintf(os.Stderr, "Exported %d skill(s) to %s.\n", len(exported), targetDir)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+func localSkillFolderName(name, id string) string {
+	base := strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		slug = "skill"
+	}
+	shortID := id
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	return slug + "-" + shortID
+}
+
+func writeSkillBundle(skillDir string, skill map[string]any) error {
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return err
+	}
+	content := strVal(skill, "content")
+	if content == "" {
+		content = "# " + strVal(skill, "name") + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		return err
+	}
+	files, _ := skill["files"].([]any)
+	for _, raw := range files {
+		file, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		rel, err := cleanSkillExportPath(strVal(file, "path"))
+		if err != nil {
+			return err
+		}
+		if strings.EqualFold(rel, "SKILL.md") {
+			continue
+		}
+		path := filepath.Join(skillDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(strVal(file, "content")), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanSkillExportPath(raw string) (string, error) {
+	cleaned := filepath.Clean(filepath.FromSlash(strings.TrimSpace(raw)))
+	if cleaned == "." || filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid skill file path %q", raw)
+	}
+	return filepath.ToSlash(cleaned), nil
+}
 
 // parseCustomEnv parses the --custom-env flag value (a JSON object literal)
 // into a string map suitable for the request body. The clear-all signal is

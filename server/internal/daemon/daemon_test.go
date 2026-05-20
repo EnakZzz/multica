@@ -1638,11 +1638,13 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 
 	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
 	d.reportTaskResult(context.Background(), "task-1", TaskResult{
-		Status:     "completed",
-		Comment:    "all good",
-		BranchName: "agent/foo",
-		SessionID:  "ses-1",
-		WorkDir:    "/tmp/foo",
+		Status:          "completed",
+		Comment:         "all good",
+		BranchName:      "agent/foo",
+		BranchCommitSHA: "abc123456789",
+		BranchPushedAt:  "2026-05-14T01:00:00Z",
+		SessionID:       "ses-1",
+		WorkDir:         "/tmp/foo",
 	}, slog.Default())
 
 	rec.mu.Lock()
@@ -1655,6 +1657,12 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 	}
 	if rec.payload["branch_name"] != "agent/foo" {
 		t.Errorf("branch_name: got %v", rec.payload["branch_name"])
+	}
+	if rec.payload["branch_commit_sha"] != "abc123456789" {
+		t.Errorf("branch_commit_sha: got %v", rec.payload["branch_commit_sha"])
+	}
+	if rec.payload["branch_pushed_at"] != "2026-05-14T01:00:00Z" {
+		t.Errorf("branch_pushed_at: got %v", rec.payload["branch_pushed_at"])
 	}
 	if rec.payload["session_id"] != "ses-1" {
 		t.Errorf("session_id: got %v", rec.payload["session_id"])

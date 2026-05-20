@@ -1,0 +1,93 @@
+version: 1
+name: Daily feature development
+description: >
+  For normal Multica feature work. Create an isolated feature branch, implement
+  and test the change there, request agent review, merge back to main only after
+  review passes, then run the self-host deployment update command.
+nodes:
+  - key: prepare-branch
+    type: issue
+    repo: multica
+    title: Create feature branch and scope the change
+    description: >
+      Confirm the target feature scope and base branch, create a dedicated
+      feature branch from main, and record the branch name. Keep unrelated
+      dirty work out of the branch.
+    position:
+      x: 120
+      y: 120
+
+  - key: implement-feature
+    type: issue
+    repo: multica
+    title: Implement the feature on the branch
+    description: >
+      Implement the requested feature on the dedicated branch. Follow the
+      repository rules in AGENTS.md and CLAUDE.md, preserve unrelated user
+      changes, and update focused tests with the implementation.
+    depends_on:
+      - prepare-branch
+    position:
+      x: 460
+      y: 120
+
+  - key: run-tests
+    type: issue
+    repo: multica
+    title: Run targeted verification on the branch
+    description: >
+      Run the relevant Go, TypeScript, build, or UI verification for the changed
+      surface. Capture failing commands and fix root causes before moving on.
+      Use make check only when the branch is ready for broader validation.
+    depends_on:
+      - implement-feature
+    position:
+      x: 800
+      y: 120
+
+  - key: agent-review
+    type: issue
+    repo: multica
+    title: Agent review before merge
+    description: >
+      Review the branch from a code-review stance. Prioritize correctness,
+      regressions, missing tests, security or data-loss risks, and deployment
+      risk. The branch may only proceed when review findings are fixed or
+      explicitly accepted.
+    depends_on:
+      - run-tests
+    position:
+      x: 1140
+      y: 120
+
+  - key: merge-main
+    type: issue
+    repo: multica
+    title: Merge reviewed branch back to main
+    description: >
+      Merge the reviewed branch back to main after tests and review pass.
+      Preserve a clean history suitable for the project, and verify main points
+      at the expected merge commit.
+    depends_on:
+      - agent-review
+    position:
+      x: 1480
+      y: 120
+
+  - key: deploy-update
+    type: issue
+    repo: multica
+    title: Deploy self-host update
+    description: >
+      After the merge to main is complete, run the deployment update from the
+      repository root:
+
+      .\scripts\docker-selfhost.ps1 update
+
+      Report the command result, affected image/container state, and any
+      follow-up action needed.
+    depends_on:
+      - merge-main
+    position:
+      x: 1820
+      y: 120

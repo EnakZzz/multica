@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getApi } from "../api";
+import { ApiError } from "../api/client";
 import { useAuthStore } from "../auth";
 import {
   captureSignupSource,
@@ -20,6 +21,10 @@ import type { StorageAdapter } from "../types/storage";
 import type { User } from "../types";
 
 const logger = createLogger("auth");
+
+export function isInvalidCookieSessionError(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 401 || err.status === 404);
+}
 
 export function AuthInitializer({
   children,
@@ -87,13 +92,22 @@ export function AuthInitializer({
       // resolve the slug without a second fetch. The active workspace itself
       // is derived from the URL by [workspaceSlug]/layout.tsx — no imperative
       // selection here.
-      Promise.all([api.getMe(), api.listWorkspaces()])
-        .then(([user, wsList]) => {
+      api
+        .getMe()
+        .then(async (user) => {
+          const wsList = await api.listWorkspaces();
           onAuthSuccess(user);
           qc.setQueryData(workspaceKeys.list(), wsList);
         })
         .catch((err) => {
-          logger.error("cookie auth init failed", err);
+          if (isInvalidCookieSessionError(err)) {
+            logger.warn("cookie auth init skipped: no valid session");
+            void api.logout().catch(() => {
+              /* Best effort: clears stale HttpOnly cookies when the server is reachable. */
+            });
+          } else {
+            logger.error("cookie auth init failed", err);
+          }
           onAuthFailure();
         });
       return;

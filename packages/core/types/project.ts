@@ -48,23 +48,25 @@ export interface ListProjectsResponse {
 }
 
 // ProjectResource is a typed pointer from a project to an external resource.
-// The resource_ref shape depends on resource_type (e.g. github_repo carries
+// The resource_ref shape depends on resource_type (e.g. git_repo carries
 // { url, default_branch_hint? }). New types add a case in
 // validateAndNormalizeResourceRef on the server and a renderer in the UI;
 // no schema or type changes required.
-export type ProjectResourceType = "github_repo";
+export type ProjectResourceType = "git_repo" | "github_repo";
 
-export interface GithubRepoResourceRef {
+export interface GitRepoResourceRef {
   url: string;
   default_branch_hint?: string;
 }
+
+export type GithubRepoResourceRef = GitRepoResourceRef;
 
 export interface ProjectResource {
   id: string;
   project_id: string;
   workspace_id: string;
   resource_type: ProjectResourceType;
-  resource_ref: GithubRepoResourceRef | Record<string, unknown>;
+  resource_ref: GitRepoResourceRef | Record<string, unknown>;
   label: string | null;
   position: number;
   created_at: string;
@@ -73,7 +75,7 @@ export interface ProjectResource {
 
 export interface CreateProjectResourceRequest {
   resource_type: ProjectResourceType;
-  resource_ref: GithubRepoResourceRef | Record<string, unknown>;
+  resource_ref: GitRepoResourceRef | Record<string, unknown>;
   label?: string;
   position?: number;
 }

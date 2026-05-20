@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 // gitEnv returns an environment for git subprocesses that contact remotes.
@@ -51,7 +50,8 @@ func gitEnv() []string {
 	)
 }
 
-var agentGitExcludePatterns = []string{".agent_context", "CLAUDE.md", "AGENTS.md", ".claude", ".opencode"}
+var agentGitExcludePatterns = []string{".agent_context", "CLAUDE.md", "AGENTS.md", ".claude", ".opencode", ".multica/repo-output.json", ".multica/project"}
+var legacyAgentGitExcludePatterns = []string{".multica"}
 
 // RepoInfo describes a repository to cache.
 type RepoInfo struct {
@@ -368,6 +368,7 @@ type WorktreeParams struct {
 	WorkDir             string // parent directory for the worktree (e.g. task workdir)
 	Ref                 string // optional branch, tag, or commit to base the worktree on
 	AgentName           string // for branch naming
+	IssueIdentifier     string // human-readable issue key for branch naming (e.g. LOC-18)
 	TaskID              string // for branch naming uniqueness
 	CoAuthoredByEnabled bool   // install prepare-commit-msg hook for Co-authored-by trailer
 }
@@ -431,8 +432,10 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		return nil, fmt.Errorf("cannot resolve default branch for %s: bare cache at %s has no usable refs (origin/* is empty or ambiguous and bare HEAD has no match). The cache may be corrupted; delete it and retry", params.RepoURL, barePath)
 	}
 
-	// Build branch name: agent/{sanitized-name}/{short-task-id}
-	branchName := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), shortID(params.TaskID))
+	// Build branch name: agent/{agent-slug}/{issue-identifier}-{short-task-id}.
+	// params.Ref is only the base ref; agent work must always happen on a
+	// dedicated agent/* branch.
+	branchName := fmt.Sprintf("agent/%s/%s-%s", sanitizeName(params.AgentName), sanitizeBranchSegment(params.IssueIdentifier), shortID(params.TaskID))
 
 	// Derive directory name from repo URL.
 	dirName := repoNameFromURL(params.RepoURL)
@@ -446,9 +449,7 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 			return nil, fmt.Errorf("update existing worktree: %w", err)
 		}
 
-		for _, pattern := range agentGitExcludePatterns {
-			_ = excludeFromGit(worktreePath, pattern)
-		}
+		refreshAgentGitExcludes(worktreePath)
 
 		// Install or remove the Co-authored-by hook based on the workspace
 		// setting. The hook lives in the bare repo's shared hooks dir, so we
@@ -485,10 +486,8 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		return nil, fmt.Errorf("create worktree: %w", err)
 	}
 
-	// Exclude agent context files from git tracking.
-	for _, pattern := range agentGitExcludePatterns {
-		_ = excludeFromGit(worktreePath, pattern)
-	}
+	// Exclude transient agent context files from git tracking.
+	refreshAgentGitExcludes(worktreePath)
 
 	// Install or remove the Co-authored-by hook based on the workspace
 	// setting. See the existing-worktree branch above for why removal is
@@ -683,7 +682,7 @@ func getRemoteDefaultBranch(barePath string) string {
 	// 2) Common default branch names under the origin namespace.
 	for _, candidate := range []string{"refs/remotes/origin/main", "refs/remotes/origin/master"} {
 		cmd := exec.Command("git", "-C", barePath, "rev-parse", "--verify", candidate)
-	
+
 		if err := cmd.Run(); err == nil {
 			return candidate
 		}
@@ -698,7 +697,7 @@ func getRemoteDefaultBranch(barePath string) string {
 	if bareRef != "" {
 		originRef := "refs/remotes/origin/" + strings.TrimPrefix(bareRef, "refs/heads/")
 		cmd := exec.Command("git", "-C", barePath, "rev-parse", "--verify", originRef)
-	
+
 		if err := cmd.Run(); err == nil {
 			return originRef
 		}
@@ -925,6 +924,51 @@ func excludeFromGit(worktreePath, pattern string) error {
 	return nil
 }
 
+func refreshAgentGitExcludes(worktreePath string) {
+	for _, pattern := range legacyAgentGitExcludePatterns {
+		_ = removeFromGitExclude(worktreePath, pattern)
+	}
+	for _, pattern := range agentGitExcludePatterns {
+		_ = excludeFromGit(worktreePath, pattern)
+	}
+}
+
+func removeFromGitExclude(worktreePath, pattern string) error {
+	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--git-dir")
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("resolve git dir: %w", err)
+	}
+
+	gitDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(worktreePath, gitDir)
+	}
+
+	excludePath := filepath.Join(gitDir, "info", "exclude")
+	existing, err := os.ReadFile(excludePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read exclude file: %w", err)
+	}
+	lines := strings.Split(string(existing), "\n")
+	changed := false
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) == pattern {
+			changed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !changed {
+		return nil
+	}
+	return os.WriteFile(excludePath, []byte(strings.Join(kept, "\n")), 0o644)
+}
+
 // repoNameFromURL extracts a short directory name from a git remote URL.
 // e.g. "https://github.com/org/my-repo.git" → "my-repo"
 func repoNameFromURL(url string) string {
@@ -948,7 +992,7 @@ func repoNameFromURL(url string) string {
 	return name
 }
 
-var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
+var nonAlphanumeric = regexp.MustCompile(`[^A-Za-z0-9]+`)
 
 // sanitizeName produces a git-branch-safe name from a human-readable string.
 func sanitizeName(name string) string {
@@ -965,11 +1009,28 @@ func sanitizeName(name string) string {
 	return s
 }
 
+func sanitizeBranchSegment(name string) string {
+	s := strings.TrimSpace(name)
+	if s == "" {
+		return "task"
+	}
+	s = strings.ToUpper(s)
+	s = nonAlphanumeric.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return "task"
+	}
+	return s
+}
+
 // shortID returns the first 8 characters of a UUID string (dashes stripped).
 func shortID(uuid string) string {
 	s := strings.ReplaceAll(uuid, "-", "")
 	if len(s) > 8 {
 		return s[:8]
+	}
+	if s == "" {
+		return strconv.FormatInt(time.Now().Unix(), 10)
 	}
 	return s
 }

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Loader2, RotateCcw, Square } from "lucide-react";
+import { ChevronRight, GitBranch, Loader2, RotateCcw, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { issueKeys } from "@multica/core/issues/queries";
@@ -344,6 +344,7 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
     task.status === "failed" && task.failure_reason
       ? failureReasonLabel[task.failure_reason as TaskFailureReason]
       : null;
+  const codeOutput = getCodeOutput(task);
 
   // Retry only makes sense for terminal-but-not-success rows. Passing
   // task.id targets this specific row's agent — without it, the rerun
@@ -368,38 +369,79 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
   };
 
   return (
-    <RowShell task={task}>
-      <TriggerText text={trigger} />
-      <span className="shrink-0 whitespace-nowrap text-xs">
-        <span className={tone}>{failureLabel ?? label}</span>
-        <span className="text-muted-foreground"> · {time}</span>
-      </span>
-      <RowActions>
-        <TranscriptButton task={task} agentName="" title={t(($) => $.execution_log.transcript_tooltip)} />
-        {canRetry && (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  onClick={handleRetry}
-                  disabled={retrying}
-                  aria-label={t(($) => $.execution_log.retry_task_aria)}
-                />
-              }
-              className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {retrying ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RotateCcw className="h-3.5 w-3.5" />
-              )}
-            </TooltipTrigger>
-            <TooltipContent>{t(($) => $.execution_log.retry_task_tooltip)}</TooltipContent>
-          </Tooltip>
-        )}
-      </RowActions>
-    </RowShell>
+    <div>
+      <RowShell task={task}>
+        <TriggerText text={trigger} />
+        <span className="shrink-0 whitespace-nowrap text-xs">
+          <span className={tone}>{failureLabel ?? label}</span>
+          <span className="text-muted-foreground"> · {time}</span>
+        </span>
+        <RowActions>
+          <TranscriptButton task={task} agentName="" title={t(($) => $.execution_log.transcript_tooltip)} />
+          {canRetry && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={handleRetry}
+                    disabled={retrying}
+                    aria-label={t(($) => $.execution_log.retry_task_aria)}
+                  />
+                }
+                className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {retrying ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                )}
+              </TooltipTrigger>
+              <TooltipContent>{t(($) => $.execution_log.retry_task_tooltip)}</TooltipContent>
+            </Tooltip>
+          )}
+        </RowActions>
+      </RowShell>
+      {codeOutput && <CodeOutput output={codeOutput} />}
+    </div>
+  );
+}
+
+function getCodeOutput(task: AgentTask) {
+  const result = task.result;
+  if (!result || typeof result !== "object" || !("branch_name" in result)) {
+    return null;
+  }
+  const branch = typeof result.branch_name === "string" ? result.branch_name : "";
+  if (!branch) return null;
+  return {
+    branch,
+    commit:
+      typeof result.branch_commit_sha === "string" ? result.branch_commit_sha : "",
+    pushedAt:
+      typeof result.branch_pushed_at === "string" ? result.branch_pushed_at : "",
+  };
+}
+
+function CodeOutput({
+  output,
+}: {
+  output: { branch: string; commit: string; pushedAt: string };
+}) {
+  const pushedAt = output.pushedAt ? timeAgo(output.pushedAt) : "";
+  const commit = output.commit ? output.commit.slice(0, 8) : "";
+  return (
+    <div className="ml-8 mb-1 rounded border border-border/60 bg-muted/25 px-2 py-1.5 text-xs">
+      <div className="flex items-center gap-1.5 font-medium text-foreground">
+        <GitBranch className="h-3.5 w-3.5 text-success" />
+        <span>Code Output</span>
+      </div>
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+        <span className="min-w-0 truncate font-mono text-foreground">{output.branch}</span>
+        {commit && <span className="font-mono">{commit}</span>}
+        {pushedAt && <span>pushed {pushedAt}</span>}
+      </div>
+    </div>
   );
 }
 

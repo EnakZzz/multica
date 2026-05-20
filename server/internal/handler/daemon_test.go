@@ -1386,11 +1386,11 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 	}
 }
 
-// ClaimTaskByRuntime must surface the issue's project github_repo resources
+// ClaimTaskByRuntime must surface the issue's project Git repo resources
 // as resp.Repos and hide the workspace-bound repos. Without this the agent
 // would see two repo lists in the meta-skill and have no signal about which
 // belongs to the current issue.
-func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
+func TestClaimTask_ProjectGitReposOverrideWorkspaceRepos(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -1403,7 +1403,7 @@ func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 		{"url": "https://github.com/example/workspace-repo-b", "description": "ws b"},
 	})
 
-	// Project + project_resource(github_repo) with a URL that is NOT in the
+	// Project + project_resource Git repos with URLs that are NOT in the
 	// workspace's repos list.
 	var projectID string
 	if err := testPool.QueryRow(ctx, `
@@ -1413,13 +1413,21 @@ func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
 
-	const projectRepoURL = "https://github.com/example/project-only-repo"
+	const projectRepoURL = "git@gitlab.internal.example.com:platform/project-only-repo.git"
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO project_resource (
 			project_id, workspace_id, resource_type, resource_ref, position
-		) VALUES ($1, $2, 'github_repo', $3::jsonb, 0)
+		) VALUES ($1, $2, 'git_repo', $3::jsonb, 0)
 	`, projectID, testWorkspaceID, `{"url":"`+projectRepoURL+`"}`); err != nil {
 		t.Fatalf("create project_resource: %v", err)
+	}
+	const legacyProjectRepoURL = "https://github.com/example/legacy-project-repo"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO project_resource (
+			project_id, workspace_id, resource_type, resource_ref, position
+		) VALUES ($1, $2, 'github_repo', $3::jsonb, 1)
+	`, projectID, testWorkspaceID, `{"url":"`+legacyProjectRepoURL+`"}`); err != nil {
+		t.Fatalf("create legacy project_resource: %v", err)
 	}
 
 	// Agent + runtime + queued task in this project.
@@ -1477,20 +1485,31 @@ func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 	if resp.Task.ProjectID != projectID {
 		t.Errorf("project_id = %q, want %q", resp.Task.ProjectID, projectID)
 	}
-	if len(resp.Task.Repos) != 1 || resp.Task.Repos[0].URL != projectRepoURL {
-		t.Fatalf("expected resp.Repos to contain only the project repo URL, got %+v", resp.Task.Repos)
+	if len(resp.Task.Repos) != 2 {
+		t.Fatalf("expected resp.Repos to contain only the project repo URLs, got %+v", resp.Task.Repos)
 	}
+	seenProjectRepo := false
+	seenLegacyRepo := false
 	for _, r := range resp.Task.Repos {
+		if r.URL == projectRepoURL {
+			seenProjectRepo = true
+		}
+		if r.URL == legacyProjectRepoURL {
+			seenLegacyRepo = true
+		}
 		if strings.HasSuffix(r.URL, "workspace-repo-a") || strings.HasSuffix(r.URL, "workspace-repo-b") {
 			t.Errorf("workspace repo %q leaked into resp.Repos despite project override", r.URL)
 		}
 	}
-	if len(resp.Task.ProjectResources) != 1 {
-		t.Errorf("expected 1 project_resources entry, got %d", len(resp.Task.ProjectResources))
+	if !seenProjectRepo || !seenLegacyRepo {
+		t.Fatalf("expected git_repo and legacy github_repo URLs, got %+v", resp.Task.Repos)
+	}
+	if len(resp.Task.ProjectResources) != 2 {
+		t.Errorf("expected 2 project_resources entries, got %d", len(resp.Task.ProjectResources))
 	}
 }
 
-// When the issue's project has no github_repo resources, the claim handler
+// When the issue's project has no Git repo resources, the claim handler
 // must fall back to workspace repos (the pre-override behavior).
 func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 	if testHandler == nil {

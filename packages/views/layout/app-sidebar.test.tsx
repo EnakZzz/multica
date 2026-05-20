@@ -87,6 +87,8 @@ vi.mock("@multica/core/paths", () => ({
     inbox: () => "/acme/inbox",
     myIssues: () => "/acme/my-issues",
     issues: () => "/acme/issues",
+    plans: () => "/acme/plans",
+    pipelines: () => "/acme/pipelines",
     projects: () => "/acme/projects",
     autopilots: () => "/acme/autopilots",
     agents: () => "/acme/agents",
@@ -149,5 +151,15 @@ describe("PinRow", () => {
     detail.current = { isPending: false, isError: false, data: { identifier: "MUL-123", title: "Keep this pin", status: "todo" }, error: null };
     render(<AppSidebar />);
     expect(await screen.findByText("MUL-123 Keep this pin")).toBeInTheDocument();
+  });
+
+  it("renders the Plans navigation item", () => {
+    const { container } = render(<AppSidebar />);
+    expect(container.querySelector(".lucide-clipboard-list")).toBeInTheDocument();
+  });
+
+  it("renders the Pipelines navigation item", () => {
+    const { container } = render(<AppSidebar />);
+    expect(container.querySelector(".lucide-git-branch")).toBeInTheDocument();
   });
 });

@@ -2128,6 +2128,59 @@ func TestSendCodeRateLimit(t *testing.T) {
 	}
 }
 
+func TestSendCodeInvalidatesPreviousUnusedCodes(t *testing.T) {
+	const email = "sendcode-invalidate-test@multica.ai"
+	ctx := context.Background()
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
+	})
+
+	_, err := testPool.Exec(ctx, `
+		INSERT INTO verification_code (email, code, expires_at, created_at)
+		VALUES ($1, '111111', now() + interval '10 minutes', now() - interval '2 minutes')
+	`, email)
+	if err != nil {
+		t.Fatalf("insert old verification code: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
+	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.SendCode(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("SendCode: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var oldUsed bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT used
+		FROM verification_code
+		WHERE email = $1 AND code = '111111'
+	`, email).Scan(&oldUsed); err != nil {
+		t.Fatalf("read old verification code: %v", err)
+	}
+	if !oldUsed {
+		t.Fatal("expected previous unused verification code to be marked used")
+	}
+
+	var activeCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM verification_code
+		WHERE email = $1
+		  AND used = FALSE
+		  AND expires_at > now()
+	`, email).Scan(&activeCount); err != nil {
+		t.Fatalf("count active verification codes: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("expected exactly one active verification code, got %d", activeCount)
+	}
+}
+
 func TestVerifyCode(t *testing.T) {
 	const email = "verify-test@multica.ai"
 	ctx := context.Background()

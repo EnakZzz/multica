@@ -44,6 +44,7 @@ type PrepareParams struct {
 // TaskContextForEnv is the subset of task context used for writing context files.
 type TaskContextForEnv struct {
 	IssueID                 string
+	IssueIdentifier         string
 	TriggerCommentID        string // comment that triggered this task (empty for on_assign)
 	AgentID                 string // unique ID of the dispatched agent
 	AgentName               string

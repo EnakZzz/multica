@@ -124,6 +124,53 @@ make db-down          # Stop shared PostgreSQL
 make db-reset         # Drop + recreate current env's DB, then re-run migrations (local only; stop backend first)
 ```
 
+### Common Multica CLI
+
+The `multica` CLI lives under `server/cmd/multica/`. Use `make cli ARGS="..."` from the repo root, or run `go run ./cmd/multica ...` from `server/` when iterating on CLI code.
+
+```bash
+# Config and current context
+make cli ARGS="config"                                      # Show CLI configuration
+make cli ARGS="config set server_url http://localhost:8080" # Point CLI at a local server
+make cli ARGS="config set workspace_id <workspace-id>"      # Set default workspace
+
+# Agents
+make cli ARGS="agent list --output json"
+make cli ARGS="agent get <agent-id> --output json"
+make cli ARGS="agent create --name '<name>' --runtime-id <runtime-id> --description '<text>' --instructions '<text>' --visibility private --output json"
+make cli ARGS="agent update <agent-id> --description '<text>' --instructions '<text>' --runtime-id <runtime-id> --output json"
+make cli ARGS="agent archive <agent-id> --output json"
+make cli ARGS="agent restore <agent-id> --output json"
+
+# Agent skill assignments
+make cli ARGS="agent skills list <agent-id> --output json"
+make cli ARGS="agent skills set <agent-id> --skill-ids <skill-id-1>,<skill-id-2> --output json" # Replaces all assigned skills
+
+# Skills
+make cli ARGS="skill list --output json"
+make cli ARGS="skill get <skill-id-or-name> --output json"
+make cli ARGS="skill create --name '<name>' --description '<text>' --content '<SKILL.md body>' --output json"
+make cli ARGS="skill update <skill-id-or-name> --description '<text>' --content '<SKILL.md body>' --output json"
+make cli ARGS="skill delete <skill-id-or-name> --yes"
+make cli ARGS="skill import --url https://github.com/<owner>/<repo>/tree/<ref>/<skill-dir> --output json"
+
+# Skill files
+make cli ARGS="skill files list <skill-id-or-name> --output json"
+make cli ARGS="skill files upsert <skill-id-or-name> --path docs/example.md --content '<file content>' --output json"
+make cli ARGS="skill files delete <skill-id-or-name> <file-id>"
+
+# Agent repo workflow
+make cli ARGS="repo checkout <url> --ref <base-branch-or-sha>" # Creates a dedicated agent/* branch from the base ref
+make cli ARGS="repo publish"                                  # Pushes the current agent/* branch and records task output
+```
+
+Notes:
+
+- `agent skills set` is replace-all semantics. Read current assignments first if you need to preserve existing skills.
+- GitHub skill import expects a directory containing `SKILL.md`. Multi-skill repositories must be imported one skill directory at a time, for example `https://github.com/addyosmani/agent-skills/tree/main/skills/api-and-interface-design`.
+- Agent execution code must publish via `multica repo publish` from a generated `agent/*` branch. Direct pushes to `main` / `master` are protected and rejected.
+- Most CLI commands require `server_url` and `workspace_id` to be configured, or passed via flags/env (`MULTICA_SERVER_URL`, `MULTICA_WORKSPACE_ID`).
+
 ### CI Requirements
 
 CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL service. See `.github/workflows/ci.yml`.

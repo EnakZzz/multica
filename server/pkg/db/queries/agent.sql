@@ -103,6 +103,14 @@ INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, 
 VALUES ($1, $2, NULL, 'queued', $3, $4)
 RETURNING *;
 
+-- name: CreateContextTask :one
+-- Generic no-issue task whose behavior is selected by context.type. Used for
+-- workspace planning tasks that produce structured output instead of directly
+-- editing an issue.
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context, force_fresh_session)
+VALUES ($1, $2, NULL, 'queued', $3, $4, COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE))
+RETURNING *;
+
 -- name: LinkTaskToIssue :exec
 -- Attaches the issue a quick-create task produced back to the task row, once
 -- the agent has finished and the issue exists. Guarded by `issue_id IS NULL`

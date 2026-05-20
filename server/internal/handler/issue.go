@@ -57,6 +57,18 @@ type IssueResponse struct {
 	Labels *[]LabelResponse `json:"labels,omitempty"`
 }
 
+type IssueDependencySummary struct {
+	ID             string  `json:"id"`
+	Type           string  `json:"type"`
+	IssueID        string  `json:"issue_id"`
+	Identifier     string  `json:"identifier"`
+	Title          string  `json:"title"`
+	Status         string  `json:"status"`
+	AssigneeType   *string `json:"assignee_type"`
+	AssigneeID     *string `json:"assignee_id"`
+	DependencyType string  `json:"dependency_type"`
+}
+
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
 	return IssueResponse{
@@ -1287,6 +1299,71 @@ func (h *Handler) ListChildIssues(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) ListIssueDependencies(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+	blockedByRows, err := h.Queries.ListIssueBlockedByDependencies(r.Context(), db.ListIssueBlockedByDependenciesParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list issue dependencies")
+		return
+	}
+	blocksRows, err := h.Queries.ListIssueBlocksDependencies(r.Context(), db.ListIssueBlocksDependenciesParams{
+		DependsOnIssueID: issue.ID,
+		WorkspaceID:      issue.WorkspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list issue dependencies")
+		return
+	}
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	blockedBy := make([]IssueDependencySummary, len(blockedByRows))
+	for i, row := range blockedByRows {
+		blockedBy[i] = issueBlockedByDependencyToResponse(row, prefix)
+	}
+	blocks := make([]IssueDependencySummary, len(blocksRows))
+	for i, row := range blocksRows {
+		blocks[i] = issueBlocksDependencyToResponse(row, prefix)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"blocked_by": blockedBy,
+		"blocks":     blocks,
+	})
+}
+
+func issueBlockedByDependencyToResponse(row db.ListIssueBlockedByDependenciesRow, prefix string) IssueDependencySummary {
+	return IssueDependencySummary{
+		ID:             uuidToString(row.DependencyID),
+		Type:           row.DependencyType,
+		IssueID:        uuidToString(row.ID),
+		Identifier:     prefix + "-" + strconv.Itoa(int(row.Number)),
+		Title:          row.Title,
+		Status:         row.Status,
+		AssigneeType:   textToPtr(row.AssigneeType),
+		AssigneeID:     uuidToPtr(row.AssigneeID),
+		DependencyType: row.DependencyType,
+	}
+}
+
+func issueBlocksDependencyToResponse(row db.ListIssueBlocksDependenciesRow, prefix string) IssueDependencySummary {
+	return IssueDependencySummary{
+		ID:             uuidToString(row.DependencyID),
+		Type:           row.DependencyType,
+		IssueID:        uuidToString(row.ID),
+		Identifier:     prefix + "-" + strconv.Itoa(int(row.Number)),
+		Title:          row.Title,
+		Status:         row.Status,
+		AssigneeType:   textToPtr(row.AssigneeType),
+		AssigneeID:     uuidToPtr(row.AssigneeID),
+		DependencyType: row.DependencyType,
+	}
+}
+
 func (h *Handler) ChildIssueProgress(w http.ResponseWriter, r *http.Request) {
 	wsID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, wsID, "workspace_id")
@@ -2115,6 +2192,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if statusChanged && issue.Status == "cancelled" {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 	}
+	if statusChanged && issue.Status == "done" {
+		h.enqueueUnblockedIssueTasks(r.Context(), issue.ID)
+	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -2181,7 +2261,38 @@ func (h *Handler) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue) bo
 	if issue.Status == "backlog" {
 		return false
 	}
+	if h.hasOpenIssueDependencies(ctx, issue.ID) {
+		return false
+	}
 	return h.isAgentAssigneeReady(ctx, issue)
+}
+
+func (h *Handler) hasOpenIssueDependencies(ctx context.Context, issueID pgtype.UUID) bool {
+	count, err := h.Queries.CountOpenDependenciesForIssue(ctx, issueID)
+	if err != nil {
+		return true
+	}
+	return count > 0
+}
+
+func (h *Handler) enqueueUnblockedIssueTasks(ctx context.Context, completedIssueID pgtype.UUID) {
+	issues, err := h.Queries.ListIssuesUnblockedByIssue(ctx, completedIssueID)
+	if err != nil {
+		return
+	}
+	for _, issue := range issues {
+		if !h.shouldEnqueueAgentTask(ctx, issue) {
+			continue
+		}
+		hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
+			IssueID: issue.ID,
+			AgentID: issue.AssigneeID,
+		})
+		if err != nil || hasPending {
+			continue
+		}
+		h.TaskService.EnqueueTaskForIssue(ctx, issue)
+	}
 }
 
 // shouldEnqueueOnComment returns true if a member comment on this issue should
@@ -2190,6 +2301,9 @@ func (h *Handler) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue) bo
 // (e.g. follow-up questions on a done issue).
 func (h *Handler) shouldEnqueueOnComment(ctx context.Context, issue db.Issue) bool {
 	if !h.isAgentAssigneeReady(ctx, issue) {
+		return false
+	}
+	if h.hasOpenIssueDependencies(ctx, issue.ID) {
 		return false
 	}
 	// Coalescing queue: allow enqueue when a task is running (so the agent

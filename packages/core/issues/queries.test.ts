@@ -39,7 +39,6 @@ function makeIssue(idx: number): Issue {
   };
 }
 
-// Type-only shim — only the methods the queries.ts code path under test calls.
 function installFakeApi(listIssues: (params?: ListIssuesParams) => Promise<ListIssuesResponse>) {
   setApiInstance({ listIssues } as unknown as ApiClient);
 }
@@ -108,8 +107,6 @@ describe("projectGanttIssuesOptions", () => {
   });
 
   it("stops looping when the server reports a smaller-than-limit page (safety net for total drift)", async () => {
-    // Server says `total` is huge but only ever returns short pages — the
-    // loop must terminate on the first short page to avoid an infinite fetch.
     const listIssues = vi
       .fn<(params?: ListIssuesParams) => Promise<ListIssuesResponse>>()
       .mockResolvedValue({
@@ -127,5 +124,22 @@ describe("projectGanttIssuesOptions", () => {
   it("uses the project-scoped Gantt cache key", () => {
     const options = projectGanttIssuesOptions(WS_ID, PROJECT_ID);
     expect(options.queryKey).toEqual(issueKeys.projectGantt(WS_ID, PROJECT_ID));
+  });
+});
+
+describe("issue query keys", () => {
+  it("keeps dependencies independent from detail and children queries", () => {
+    expect(issueKeys.dependencies("ws-1", "issue-1")).toEqual([
+      "issues",
+      "ws-1",
+      "dependencies",
+      "issue-1",
+    ]);
+    expect(issueKeys.dependencies("ws-1", "issue-1")).not.toEqual(
+      issueKeys.detail("ws-1", "issue-1"),
+    );
+    expect(issueKeys.dependencies("ws-1", "issue-1")).not.toEqual(
+      issueKeys.children("ws-1", "issue-1"),
+    );
   });
 });

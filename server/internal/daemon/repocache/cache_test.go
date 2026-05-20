@@ -471,11 +471,12 @@ func TestCreateWorktree(t *testing.T) {
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
-		WorkspaceID: "ws-1",
-		RepoURL:     sourceRepo,
-		WorkDir:     workDir,
-		AgentName:   "Code Reviewer",
-		TaskID:      "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		WorkspaceID:     "ws-1",
+		RepoURL:         sourceRepo,
+		WorkDir:         workDir,
+		AgentName:       "Code Reviewer",
+		IssueIdentifier: "LOC-18",
+		TaskID:          "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree failed: %v", err)
@@ -487,8 +488,8 @@ func TestCreateWorktree(t *testing.T) {
 	}
 
 	// Verify branch name format.
-	if !strings.HasPrefix(result.BranchName, "agent/code-reviewer/") {
-		t.Errorf("expected branch to start with 'agent/code-reviewer/', got %q", result.BranchName)
+	if !strings.HasPrefix(result.BranchName, "agent/code-reviewer/LOC-18-a1b2c3d4") {
+		t.Errorf("expected branch to start with 'agent/code-reviewer/LOC-18-a1b2c3d4', got %q", result.BranchName)
 	}
 
 	// Verify the worktree is on the correct branch.
@@ -530,6 +531,48 @@ func TestCreateWorktreeExcludesOpenCodeSkills(t *testing.T) {
 	}
 	if strings.Contains(exclude, ".config/opencode") {
 		t.Fatalf("expected .git/info/exclude to not contain stale .config/opencode, got:\n%s", exclude)
+	}
+}
+
+func TestCreateWorktreeKeepsMulticaContextTrackable(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cacheRoot := t.TempDir()
+
+	cache := New(cacheRoot, testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	workDir := t.TempDir()
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     workDir,
+		AgentName:   "Context Writer",
+		TaskID:      "multica-context-trackable-test",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree failed: %v", err)
+	}
+
+	exclude := gitInfoExclude(t, result.Path)
+	if strings.Contains(exclude, "\n.multica\n") {
+		t.Fatalf("expected .multica to be trackable for repo-synced skills/pipelines, got:\n%s", exclude)
+	}
+	for _, want := range []string{".multica/repo-output.json", ".multica/project"} {
+		if !strings.Contains(exclude, want) {
+			t.Fatalf("expected transient Multica path %q to stay excluded, got:\n%s", want, exclude)
+		}
+	}
+
+	if err := excludeFromGit(result.Path, ".multica"); err != nil {
+		t.Fatalf("seed legacy .multica exclude: %v", err)
+	}
+	refreshAgentGitExcludes(result.Path)
+	exclude = gitInfoExclude(t, result.Path)
+	if strings.Contains(exclude, "\n.multica\n") {
+		t.Fatalf("expected legacy .multica exclude to be removed on refresh, got:\n%s", exclude)
 	}
 }
 

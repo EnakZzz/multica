@@ -49,6 +49,9 @@ catalog:
   # Virtualized timeline (issue detail comments)
   react-virtuoso: "^4.14.0"
 
+  # Node graph editor (pipeline editor)
+  "@xyflow/react": "^12.10.2"
+
   # Product analytics
   posthog-js: "^1.176.1"
 

@@ -3,6 +3,8 @@
     "inbox": "Inbox",
     "my_issues": "My Issues",
     "issues": "Issues",
+    "plans": "Plans",
+    "pipelines": "Pipelines",
     "projects": "Projects",
     "autopilots": "Autopilot",
     "agents": "Agents",

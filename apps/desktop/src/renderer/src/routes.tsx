@@ -16,6 +16,8 @@ import { RuntimeDetailPage } from "./pages/runtime-detail-page";
 import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
+import { PlansPage, PlanDetailPage } from "@multica/views/plans";
+import { PipelinesPage, PipelineDetailPage } from "@multica/views/pipelines";
 import { DashboardPage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
@@ -105,6 +107,26 @@ export const appRoutes: RouteObject[] = [
             path: "projects",
             element: <ProjectsPage />,
             handle: { title: "Projects" },
+          },
+          {
+            path: "plans",
+            element: <PlansPage />,
+            handle: { title: "Plans" },
+          },
+          {
+            path: "plans/:id",
+            element: <PlanDetailPage />,
+            handle: { title: "Plan" },
+          },
+          {
+            path: "pipelines",
+            element: <PipelinesPage />,
+            handle: { title: "Pipelines" },
+          },
+          {
+            path: "pipelines/:id",
+            element: <PipelineDetailPage />,
+            handle: { title: "Pipeline" },
           },
           {
             path: "projects/:id",

@@ -2,14 +2,24 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.yaml.in/yaml/v2"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 var repoCmd = &cobra.Command{
@@ -25,11 +35,50 @@ var repoCheckoutCmd = &cobra.Command{
 	RunE:  runRepoCheckout,
 }
 
+var repoPublishCmd = &cobra.Command{
+	Use:   "publish",
+	Short: "Push the current agent branch",
+	Long:  "Pushes the current agent/* branch to origin and records branch metadata for the daemon task result.",
+	Args:  exactArgs(0),
+	RunE:  runRepoPublish,
+}
+
+var repoSyncContextCmd = &cobra.Command{
+	Use:   "sync-context",
+	Short: "Write Multica skills and pipelines into the current git checkout",
+	Long:  "Writes selected Multica skills and pipeline YAML files under .multica/ so local agents and human testers use the same definitions as Multica.",
+	Args:  exactArgs(0),
+	RunE:  runRepoSyncContext,
+}
+
+var repoImportContextCmd = &cobra.Command{
+	Use:   "import-context",
+	Short: "Import Multica pipeline YAML files from the current git checkout",
+	Long:  "Scans .multica/pipelines/*.yaml in the current git checkout and imports them into Multica, updating an existing pipeline with the same name when present.",
+	Args:  exactArgs(0),
+	RunE:  runRepoImportContext,
+}
+
 var repoCheckoutRef string
 
 func init() {
 	repoCheckoutCmd.Flags().StringVar(&repoCheckoutRef, "ref", "", "branch, tag, or commit to check out instead of the remote default branch")
+	repoSyncContextCmd.Flags().String("agent-id", "", "Agent ID whose project-context assigned skills should be written (defaults to MULTICA_AGENT_ID in agent tasks)")
+	repoSyncContextCmd.Flags().StringSlice("skill-id", nil, "Project-specific skill ID to write (repeatable or comma-separated)")
+	repoSyncContextCmd.Flags().String("project-id", "", "Project ID whose project resources should be written (defaults to MULTICA_PROJECT_ID in agent tasks)")
+	repoSyncContextCmd.Flags().Bool("all-skills", false, "Write every workspace skill, including generic agent skills")
+	repoSyncContextCmd.Flags().StringSlice("pipeline-id", nil, "Pipeline ID to write as YAML (repeatable or comma-separated)")
+	repoSyncContextCmd.Flags().Bool("all-pipelines", false, "Write every workspace pipeline as YAML")
+	repoSyncContextCmd.Flags().String("dir", ".multica", "Directory within the git root for synced context files")
+	repoSyncContextCmd.Flags().String("output", "table", "Output format: table or json")
+	repoImportContextCmd.Flags().String("project-id", "", "Project ID whose project resources should be imported (defaults to MULTICA_PROJECT_ID in agent tasks)")
+	repoImportContextCmd.Flags().StringSlice("role", nil, "Manifest role binding as role_key=agent_id; omit a role to leave its pipeline nodes unassigned")
+	repoImportContextCmd.Flags().String("dir", ".multica", "Directory within the git root containing context files")
+	repoImportContextCmd.Flags().String("output", "table", "Output format: table or json")
 	repoCmd.AddCommand(repoCheckoutCmd)
+	repoCmd.AddCommand(repoPublishCmd)
+	repoCmd.AddCommand(repoSyncContextCmd)
+	repoCmd.AddCommand(repoImportContextCmd)
 }
 
 func runRepoCheckout(cmd *cobra.Command, args []string) error {
@@ -41,7 +90,9 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	}
 
 	workspaceID := os.Getenv("MULTICA_WORKSPACE_ID")
+	projectID := os.Getenv("MULTICA_PROJECT_ID")
 	agentName := os.Getenv("MULTICA_AGENT_NAME")
+	issueIdentifier := os.Getenv("MULTICA_ISSUE_IDENTIFIER")
 	taskID := os.Getenv("MULTICA_TASK_ID")
 
 	// Use current working directory as the checkout target.
@@ -51,12 +102,13 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	}
 
 	reqBody := map[string]string{
-		"url":          repoURL,
-		"workspace_id": workspaceID,
-		"workdir":      workDir,
-		"ref":          repoCheckoutRef,
-		"agent_name":   agentName,
-		"task_id":      taskID,
+		"url":              repoURL,
+		"workspace_id":     workspaceID,
+		"workdir":          workDir,
+		"ref":              repoCheckoutRef,
+		"agent_name":       agentName,
+		"issue_identifier": issueIdentifier,
+		"task_id":          taskID,
 	}
 
 	data, err := json.Marshal(reqBody)
@@ -91,6 +143,1489 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stdout, "%s\n", result.Path)
 	fmt.Fprintf(os.Stderr, "Checked out %s → %s (branch: %s)\n", repoURL, result.Path, result.BranchName)
+	if err := autoImportRepoContext(cmd, result.Path, projectID); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to import Multica repo context: %v\n", err)
+	}
 
 	return nil
+}
+
+const agentBranchPrefix = "agent/"
+
+func runRepoPublish(cmd *cobra.Command, args []string) error {
+	root, err := gitOutput("", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("not inside a git worktree; run `multica repo checkout <url>` first")
+	}
+	root = strings.TrimSpace(root)
+
+	branch, err := gitOutput(root, "branch", "--show-current")
+	if err != nil {
+		return fmt.Errorf("detect current branch: %w", err)
+	}
+	branch = strings.TrimSpace(branch)
+	if err := validateAgentPublishBranch(branch); err != nil {
+		return err
+	}
+
+	commit, err := gitOutput(root, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("detect commit: %w", err)
+	}
+	commit = strings.TrimSpace(commit)
+
+	remote, _ := gitOutput(root, "remote", "get-url", "origin")
+	remote = strings.TrimSpace(remote)
+
+	push := exec.Command("git", "-C", root, "push", "-u", "origin", branch)
+	push.Stdout = os.Stdout
+	push.Stderr = os.Stderr
+	if err := push.Run(); err != nil {
+		return fmt.Errorf("git push origin %s: %w", branch, err)
+	}
+
+	meta := repoPublishMetadata{
+		BranchName: branch,
+		CommitSHA:  commit,
+		PushedAt:   time.Now().UTC().Format(time.RFC3339),
+		Remote:     remote,
+		TaskID:     os.Getenv("MULTICA_TASK_ID"),
+	}
+	if err := writeRepoPublishMetadata(root, meta); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "Pushed branch %s (%s)\n", branch, shortCommit(commit))
+	return nil
+}
+
+type repoPublishMetadata struct {
+	BranchName string `json:"branch_name"`
+	CommitSHA  string `json:"commit_sha"`
+	PushedAt   string `json:"pushed_at"`
+	Remote     string `json:"remote,omitempty"`
+	TaskID     string `json:"task_id,omitempty"`
+}
+
+func validateAgentPublishBranch(branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return fmt.Errorf("cannot publish detached HEAD; run `multica repo checkout <url>` first")
+	}
+	if branch == "main" || branch == "master" {
+		return fmt.Errorf("Agents must push to agent/* branches. Current branch %s is protected.", branch)
+	}
+	if !strings.HasPrefix(branch, agentBranchPrefix) {
+		return fmt.Errorf("Agents must push to agent/* branches. Current branch %s is not allowed.", branch)
+	}
+	return nil
+}
+
+func writeRepoPublishMetadata(root string, meta repoPublishMetadata) error {
+	dir := filepath.Join(root, ".multica")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create publish metadata dir: %w", err)
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode publish metadata: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repo-output.json"), append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write publish metadata: %w", err)
+	}
+	return nil
+}
+
+type repoContextSyncOptions struct {
+	BaseDir      string
+	AgentID      string
+	SkillIDs     []string
+	ProjectID    string
+	AllSkills    bool
+	PipelineIDs  []string
+	AllPipelines bool
+}
+
+type repoContextSyncItem struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+type repoContextSyncResult struct {
+	Root  string                `json:"root"`
+	Dir   string                `json:"dir"`
+	Items []repoContextSyncItem `json:"items"`
+}
+
+type repoContextImportOptions struct {
+	BaseDir      string
+	ProjectID    string
+	RoleBindings map[string]string
+	SourcePolicy repoContextSourcePolicy
+	ExpectedRef  string
+}
+
+type repoContextImportResult struct {
+	Root  string                `json:"root"`
+	Dir   string                `json:"dir"`
+	Items []repoContextSyncItem `json:"items"`
+}
+
+type repoContextSourcePolicy string
+
+const (
+	repoContextSourcePolicyManual    repoContextSourcePolicy = "manual"
+	repoContextSourcePolicyCanonical repoContextSourcePolicy = "canonical"
+)
+
+type repoContextSourceSkip struct {
+	Reason string
+}
+
+func (e repoContextSourceSkip) Error() string {
+	return e.Reason
+}
+
+func runRepoSyncContext(cmd *cobra.Command, _ []string) error {
+	root, err := gitOutput("", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("not inside a git worktree; run this from the project checkout that should receive Multica context files")
+	}
+	root = strings.TrimSpace(root)
+
+	agentID, _ := cmd.Flags().GetString("agent-id")
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		agentID = strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+	}
+	pipelineIDs, _ := cmd.Flags().GetStringSlice("pipeline-id")
+	skillIDs, _ := cmd.Flags().GetStringSlice("skill-id")
+	projectID, _ := cmd.Flags().GetString("project-id")
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = strings.TrimSpace(os.Getenv("MULTICA_PROJECT_ID"))
+	}
+	baseDir, _ := cmd.Flags().GetString("dir")
+	allSkills, _ := cmd.Flags().GetBool("all-skills")
+	allPipelines, _ := cmd.Flags().GetBool("all-pipelines")
+	if !allSkills && agentID == "" && len(skillIDs) == 0 && !allPipelines && len(pipelineIDs) == 0 && projectID == "" {
+		return fmt.Errorf("nothing to sync; pass --agent-id, --skill-id, --project-id, --all-skills, --pipeline-id, or --all-pipelines")
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	result, err := syncRepoContext(ctx, client, root, repoContextSyncOptions{
+		BaseDir:      baseDir,
+		AgentID:      agentID,
+		SkillIDs:     skillIDs,
+		ProjectID:    projectID,
+		AllSkills:    allSkills,
+		PipelineIDs:  pipelineIDs,
+		AllPipelines: allPipelines,
+	})
+	if err != nil {
+		return err
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+	headers := []string{"TYPE", "ID", "NAME", "PATH"}
+	rows := make([][]string, 0, len(result.Items))
+	for _, item := range result.Items {
+		rows = append(rows, []string{item.Type, item.ID, item.Name, item.Path})
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+	fmt.Fprintf(os.Stderr, "Synced %d Multica context file set(s) into %s.\n", len(result.Items), filepath.Join(root, result.Dir))
+	return nil
+}
+
+func runRepoImportContext(cmd *cobra.Command, _ []string) error {
+	root, err := gitOutput("", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("not inside a git worktree; run this from the project checkout that contains Multica context files")
+	}
+	root = strings.TrimSpace(root)
+
+	projectID, _ := cmd.Flags().GetString("project-id")
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = strings.TrimSpace(os.Getenv("MULTICA_PROJECT_ID"))
+	}
+	baseDir, _ := cmd.Flags().GetString("dir")
+	roleBindingFlags, _ := cmd.Flags().GetStringSlice("role")
+	roleBindings, err := parseRepoContextRoleBindings(roleBindingFlags)
+	if err != nil {
+		return err
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	result, err := importRepoContext(ctx, client, root, repoContextImportOptions{
+		BaseDir:      baseDir,
+		ProjectID:    projectID,
+		RoleBindings: roleBindings,
+		SourcePolicy: repoContextSourcePolicyManual,
+	})
+	if err != nil {
+		return err
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+	headers := []string{"TYPE", "ID", "NAME", "PATH"}
+	rows := make([][]string, 0, len(result.Items))
+	for _, item := range result.Items {
+		rows = append(rows, []string{item.Type, item.ID, item.Name, item.Path})
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+	fmt.Fprintf(os.Stderr, "Imported %d Multica context file(s) from %s.\n", len(result.Items), filepath.Join(root, result.Dir))
+	return nil
+}
+
+func autoImportRepoContext(cmd *cobra.Command, root, projectID string) error {
+	files, err := pipelineYAMLFiles(filepath.Join(root, ".multica", "pipelines"))
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		if _, err := os.Stat(filepath.Join(root, ".multica", "project.yaml")); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("stat project manifest: %w", err)
+		}
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	result, err := importRepoContext(ctx, client, root, repoContextImportOptions{
+		BaseDir:      ".multica",
+		ProjectID:    strings.TrimSpace(projectID),
+		RoleBindings: repoContextRoleBindingsFromEnv(),
+		SourcePolicy: repoContextSourcePolicyCanonical,
+		ExpectedRef:  repoCheckoutRef,
+	})
+	if err != nil {
+		var skip repoContextSourceSkip
+		if errors.As(err, &skip) {
+			fmt.Fprintf(os.Stderr, "Skipping Multica repo context import: %s\n", skip.Reason)
+			return nil
+		}
+		return err
+	}
+	if len(result.Items) > 0 {
+		fmt.Fprintf(os.Stderr, "Imported %d Multica pipeline(s) from %s.\n", len(result.Items), filepath.Join(root, result.Dir, "pipelines"))
+	}
+	return nil
+}
+
+func syncRepoContext(ctx context.Context, client *cli.APIClient, root string, opts repoContextSyncOptions) (repoContextSyncResult, error) {
+	baseDir := strings.TrimSpace(opts.BaseDir)
+	if baseDir == "" {
+		baseDir = ".multica"
+	}
+	cleanBaseDir, err := cleanRepoContextPath(baseDir)
+	if err != nil {
+		return repoContextSyncResult{}, fmt.Errorf("invalid --dir: %w", err)
+	}
+	targetDir := filepath.Join(root, filepath.FromSlash(cleanBaseDir))
+	result := repoContextSyncResult{
+		Root: filepath.ToSlash(root),
+		Dir:  cleanBaseDir,
+	}
+
+	skills, err := repoContextSkills(ctx, client, opts)
+	if err != nil {
+		return result, err
+	}
+	for _, skill := range skills {
+		id := strVal(skill, "id")
+		name := strVal(skill, "name")
+		skillDir := filepath.Join(targetDir, "skills", localSkillFolderName(name, id))
+		if err := writeSkillBundle(skillDir, skill); err != nil {
+			return result, fmt.Errorf("write skill %s: %w", id, err)
+		}
+		result.Items = append(result.Items, repoContextSyncItem{
+			Type: "skill",
+			ID:   id,
+			Name: name,
+			Path: filepath.ToSlash(skillDir),
+		})
+	}
+
+	pipelines, err := repoContextPipelines(ctx, client, opts)
+	if err != nil {
+		return result, err
+	}
+	pipelineDir := filepath.Join(targetDir, "pipelines")
+	syncedPipelinePaths := make([]string, 0, len(pipelines))
+	for _, pipeline := range pipelines {
+		id := strVal(pipeline, "id")
+		name := strVal(pipeline, "name")
+		data, err := pipelineYAMLContent(pipeline)
+		if err != nil {
+			return result, fmt.Errorf("render pipeline %s: %w", id, err)
+		}
+		if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+			return result, fmt.Errorf("create pipeline dir: %w", err)
+		}
+		path := filepath.Join(pipelineDir, localPipelineFileName(name, id))
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			return result, fmt.Errorf("write pipeline %s: %w", id, err)
+		}
+		result.Items = append(result.Items, repoContextSyncItem{
+			Type: "pipeline",
+			ID:   id,
+			Name: name,
+			Path: filepath.ToSlash(path),
+		})
+		syncedPipelinePaths = append(syncedPipelinePaths, filepath.ToSlash(filepath.Join("pipelines", filepath.Base(path))))
+	}
+	if len(syncedPipelinePaths) > 0 || strings.TrimSpace(opts.ProjectID) != "" {
+		resources, err := repoContextProjectResources(ctx, client, opts.ProjectID)
+		if err != nil {
+			return result, err
+		}
+		manifest, err := loadRepoProjectManifest(root, cleanBaseDir)
+		if err != nil {
+			return result, err
+		}
+		if err := validateRepoContextSource(root, cleanBaseDir, manifest, repoContextSourcePolicyManual, ""); err != nil {
+			return result, err
+		}
+		source := repoContextCanonicalSource(root, cleanBaseDir, resources)
+		manifestPath, err := writeRepoProjectManifest(targetDir, syncedPipelinePaths, resources, source)
+		if err != nil {
+			return result, err
+		}
+		result.Items = append(result.Items, repoContextSyncItem{
+			Type: "project_manifest",
+			Name: "project.yaml",
+			Path: filepath.ToSlash(manifestPath),
+		})
+	}
+
+	return result, nil
+}
+
+func repoContextSkills(ctx context.Context, client *cli.APIClient, opts repoContextSyncOptions) ([]map[string]any, error) {
+	if opts.AllSkills {
+		var summaries []map[string]any
+		if err := client.GetJSON(ctx, "/api/skills", &summaries); err != nil {
+			return nil, fmt.Errorf("list skills: %w", err)
+		}
+		return fetchSkillDetails(ctx, client, summaries)
+	}
+
+	skills := []map[string]any{}
+	seen := map[string]bool{}
+	explicit, err := fetchSkillDetailsByIDs(ctx, client, opts.SkillIDs)
+	if err != nil {
+		return nil, err
+	}
+	skills = appendUniqueSkills(skills, seen, explicit)
+
+	agentID := strings.TrimSpace(opts.AgentID)
+	if agentID == "" {
+		return skills, nil
+	}
+	var assigned []map[string]any
+	if err := client.GetJSON(ctx, "/api/agents/"+agentID+"/skills", &assigned); err != nil {
+		return nil, fmt.Errorf("list agent skills: %w", err)
+	}
+	details, err := fetchSkillDetails(ctx, client, assigned)
+	if err != nil {
+		return nil, err
+	}
+	for _, skill := range details {
+		if skillIsRepoContext(skill) {
+			skills = appendUniqueSkills(skills, seen, []map[string]any{skill})
+		}
+	}
+	return skills, nil
+}
+
+func repoContextProjectResources(ctx context.Context, client *cli.APIClient, projectID string) (repoProjectResources, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return repoProjectResources{}, nil
+	}
+	resources, err := listProjectResourceMaps(ctx, client, projectID)
+	if err != nil {
+		return repoProjectResources{}, err
+	}
+	repos := map[string]repoProjectRepoResource{}
+	for _, resource := range resources {
+		resourceType := strVal(resource, "resource_type")
+		if resourceType != "git_repo" && resourceType != "github_repo" {
+			continue
+		}
+		key := strings.TrimSpace(strVal(resource, "label"))
+		url := repoResourceURL(resource)
+		if key == "" || url == "" {
+			continue
+		}
+		ref, _ := resource["resource_ref"].(map[string]any)
+		repos[key] = repoProjectRepoResource{
+			URL:               url,
+			DefaultBranchHint: strings.TrimSpace(strVal(ref, "default_branch_hint")),
+		}
+	}
+	return repoProjectResources{Repos: repos}, nil
+}
+
+func writeRepoProjectManifest(targetDir string, syncedPipelinePaths []string, resources repoProjectResources, source repoProjectSource) (string, error) {
+	path := filepath.Join(targetDir, "project.yaml")
+	var manifest repoProjectManifest
+	data, err := os.ReadFile(path)
+	if err == nil && len(bytes.TrimSpace(data)) > 0 {
+		if err := yaml.Unmarshal(data, &manifest); err != nil {
+			return "", fmt.Errorf("parse existing project manifest: %w", err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("read project manifest: %w", err)
+	}
+	if manifest.Version == 0 {
+		manifest.Version = 1
+	}
+	if manifest.Multica.Source.empty() && !source.empty() {
+		manifest.Multica.Source = source
+	}
+
+	byPath := map[string]repoProjectPipeline{}
+	order := make([]string, 0, len(manifest.Pipelines)+len(syncedPipelinePaths))
+	for _, pipeline := range manifest.Pipelines {
+		clean := strings.TrimSpace(filepath.ToSlash(pipeline.Path))
+		if clean == "" {
+			continue
+		}
+		if _, ok := byPath[clean]; !ok {
+			order = append(order, clean)
+		}
+		pipeline.Path = clean
+		byPath[clean] = pipeline
+	}
+	for _, rawPath := range syncedPipelinePaths {
+		clean := strings.TrimSpace(filepath.ToSlash(rawPath))
+		if clean == "" {
+			continue
+		}
+		if _, ok := byPath[clean]; !ok {
+			order = append(order, clean)
+		}
+		entry := byPath[clean]
+		entry.Path = clean
+		byPath[clean] = entry
+	}
+	manifest.Pipelines = make([]repoProjectPipeline, 0, len(order))
+	for _, clean := range order {
+		manifest.Pipelines = append(manifest.Pipelines, byPath[clean])
+	}
+	if len(resources.Repos) > 0 {
+		if manifest.Resources.Repos == nil {
+			manifest.Resources.Repos = map[string]repoProjectRepoResource{}
+		}
+		for key, repo := range resources.Repos {
+			if strings.TrimSpace(key) == "" || strings.TrimSpace(repo.URL) == "" {
+				continue
+			}
+			manifest.Resources.Repos[key] = repo
+		}
+	}
+
+	out, err := yaml.Marshal(manifest)
+	if err != nil {
+		return "", fmt.Errorf("render project manifest: %w", err)
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return "", fmt.Errorf("create project manifest dir: %w", err)
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+		return "", fmt.Errorf("write project manifest: %w", err)
+	}
+	return path, nil
+}
+
+func fetchSkillDetails(ctx context.Context, client *cli.APIClient, summaries []map[string]any) ([]map[string]any, error) {
+	skills := make([]map[string]any, 0, len(summaries))
+	seen := map[string]bool{}
+	for _, summary := range summaries {
+		id := strVal(summary, "id")
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		var skill map[string]any
+		if err := client.GetJSON(ctx, "/api/skills/"+id, &skill); err != nil {
+			return nil, fmt.Errorf("get skill %s: %w", id, err)
+		}
+		skills = append(skills, skill)
+	}
+	return skills, nil
+}
+
+func fetchSkillDetailsByIDs(ctx context.Context, client *cli.APIClient, ids []string) ([]map[string]any, error) {
+	summaries := make([]map[string]any, 0, len(ids))
+	for _, rawID := range ids {
+		id := strings.TrimSpace(rawID)
+		if id == "" {
+			continue
+		}
+		summaries = append(summaries, map[string]any{"id": id})
+	}
+	return fetchSkillDetails(ctx, client, summaries)
+}
+
+func appendUniqueSkills(dst []map[string]any, seen map[string]bool, items []map[string]any) []map[string]any {
+	for _, item := range items {
+		id := strVal(item, "id")
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		dst = append(dst, item)
+	}
+	return dst
+}
+
+func skillIsRepoContext(skill map[string]any) bool {
+	config := skillConfigMap(skill)
+	if boolConfig(config, "repo_context") || boolConfig(config, "project_context") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", config["scope"]))) {
+	case "project", "repo", "repository":
+		return true
+	default:
+		return false
+	}
+}
+
+func skillConfigMap(skill map[string]any) map[string]any {
+	raw := skill["config"]
+	switch v := raw.(type) {
+	case map[string]any:
+		return v
+	case map[string]string:
+		out := make(map[string]any, len(v))
+		for key, value := range v {
+			out[key] = value
+		}
+		return out
+	case string:
+		var out map[string]any
+		if err := json.Unmarshal([]byte(v), &out); err == nil {
+			return out
+		}
+	case []byte:
+		var out map[string]any
+		if err := json.Unmarshal(v, &out); err == nil {
+			return out
+		}
+	case json.RawMessage:
+		var out map[string]any
+		if err := json.Unmarshal(v, &out); err == nil {
+			return out
+		}
+	}
+	return map[string]any{}
+}
+
+func boolConfig(config map[string]any, key string) bool {
+	switch v := config[key].(type) {
+	case bool:
+		return v
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+		return err == nil && parsed
+	default:
+		return false
+	}
+}
+
+func repoContextPipelines(ctx context.Context, client *cli.APIClient, opts repoContextSyncOptions) ([]map[string]any, error) {
+	if opts.AllPipelines {
+		return listPipelineMaps(ctx, client)
+	}
+	pipelines := make([]map[string]any, 0, len(opts.PipelineIDs))
+	seen := map[string]bool{}
+	for _, rawID := range opts.PipelineIDs {
+		id := strings.TrimSpace(rawID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		var pipeline map[string]any
+		if err := client.GetJSON(ctx, "/api/pipelines/"+id, &pipeline); err != nil {
+			return nil, fmt.Errorf("get pipeline %s: %w", id, err)
+		}
+		pipelines = append(pipelines, pipeline)
+	}
+	return pipelines, nil
+}
+
+func listPipelineMaps(ctx context.Context, client *cli.APIClient) ([]map[string]any, error) {
+	var resp map[string]any
+	if err := client.GetJSON(ctx, "/api/pipelines", &resp); err != nil {
+		return nil, fmt.Errorf("list pipelines: %w", err)
+	}
+	rawPipelines, _ := resp["pipelines"].([]any)
+	pipelines := make([]map[string]any, 0, len(rawPipelines))
+	for _, raw := range rawPipelines {
+		pipeline, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		pipelines = append(pipelines, pipeline)
+	}
+	return pipelines, nil
+}
+
+func listAutopilotMaps(ctx context.Context, client *cli.APIClient) ([]map[string]any, error) {
+	var resp map[string]any
+	if err := client.GetJSON(ctx, "/api/autopilots", &resp); err != nil {
+		return nil, fmt.Errorf("list automations: %w", err)
+	}
+	rawAutopilots, _ := resp["autopilots"].([]any)
+	autopilots := make([]map[string]any, 0, len(rawAutopilots))
+	for _, raw := range rawAutopilots {
+		autopilot, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		autopilots = append(autopilots, autopilot)
+	}
+	return autopilots, nil
+}
+
+func importRepoContext(ctx context.Context, client *cli.APIClient, root string, opts repoContextImportOptions) (repoContextImportResult, error) {
+	baseDir := strings.TrimSpace(opts.BaseDir)
+	if baseDir == "" {
+		baseDir = ".multica"
+	}
+	cleanBaseDir, err := cleanRepoContextPath(baseDir)
+	if err != nil {
+		return repoContextImportResult{}, fmt.Errorf("invalid --dir: %w", err)
+	}
+	result := repoContextImportResult{
+		Root: filepath.ToSlash(root),
+		Dir:  cleanBaseDir,
+	}
+
+	manifest, err := loadRepoProjectManifest(root, cleanBaseDir)
+	if err != nil {
+		return result, err
+	}
+	if err := validateRepoContextSource(root, cleanBaseDir, manifest, opts.SourcePolicy, opts.ExpectedRef); err != nil {
+		return result, err
+	}
+	pipelineImports, err := repoContextPipelineImports(root, cleanBaseDir, manifest)
+	if err != nil {
+		return result, err
+	}
+	if len(pipelineImports) == 0 && (manifest == nil || len(manifest.Automations) == 0) {
+		return result, nil
+	}
+
+	existingPipelines, err := listPipelineMaps(ctx, client)
+	if err != nil {
+		return result, err
+	}
+	existingByName := map[string]string{}
+	for _, pipeline := range existingPipelines {
+		name := strings.ToLower(strings.TrimSpace(strVal(pipeline, "name")))
+		id := strVal(pipeline, "id")
+		if name != "" && id != "" {
+			existingByName[name] = id
+		}
+	}
+	if manifest != nil && len(manifest.Resources.Repos) > 0 {
+		items, err := importRepoProjectResources(ctx, client, strings.TrimSpace(opts.ProjectID), manifest)
+		if err != nil {
+			return result, err
+		}
+		result.Items = append(result.Items, items...)
+	}
+
+	importedByName := map[string]string{}
+	for _, spec := range pipelineImports {
+		data, err := os.ReadFile(spec.Path)
+		if err != nil {
+			return result, fmt.Errorf("read pipeline yaml %s: %w", spec.Path, err)
+		}
+		content, name, err := pipelineYAMLWithRoles(
+			data,
+			spec.RoleBindings,
+			opts.RoleBindings,
+		)
+		if err != nil {
+			return result, fmt.Errorf("parse pipeline yaml %s: %w", spec.Path, err)
+		}
+		payload := map[string]any{"content": content}
+		if existingID := existingByName[strings.ToLower(name)]; existingID != "" {
+			payload["pipeline_id"] = existingID
+		}
+		var pipeline map[string]any
+		if err := client.PostJSON(ctx, "/api/pipelines/import", payload, &pipeline); err != nil {
+			return result, fmt.Errorf("import pipeline yaml %s: %w", spec.Path, err)
+		}
+		id := strVal(pipeline, "id")
+		importedName := strVal(pipeline, "name")
+		if importedName == "" {
+			importedName = name
+		}
+		if id != "" && importedName != "" {
+			existingByName[strings.ToLower(importedName)] = id
+			importedByName[strings.ToLower(importedName)] = id
+		}
+		result.Items = append(result.Items, repoContextSyncItem{
+			Type: "pipeline",
+			ID:   id,
+			Name: importedName,
+			Path: filepath.ToSlash(spec.Path),
+		})
+	}
+	if manifest != nil && len(manifest.Automations) > 0 {
+		items, err := importRepoProjectAutomations(ctx, client, manifest, importedByName, opts.RoleBindings)
+		if err != nil {
+			return result, err
+		}
+		result.Items = append(result.Items, items...)
+	}
+	return result, nil
+}
+
+type repoProjectManifest struct {
+	Version     int                     `yaml:"version"`
+	Name        string                  `yaml:"name,omitempty"`
+	Multica     repoProjectMultica      `yaml:"multica,omitempty"`
+	Resources   repoProjectResources    `yaml:"resources,omitempty"`
+	Roles       []repoProjectRole       `yaml:"roles,omitempty"`
+	Pipelines   []repoProjectPipeline   `yaml:"pipelines,omitempty"`
+	Automations []repoProjectAutomation `yaml:"automations,omitempty"`
+}
+
+type repoProjectMultica struct {
+	Source repoProjectSource `yaml:"source,omitempty"`
+}
+
+func (m repoProjectMultica) IsZero() bool {
+	return m.Source.empty()
+}
+
+type repoProjectSource struct {
+	Repo   string `yaml:"repo,omitempty"`
+	Branch string `yaml:"branch,omitempty"`
+	Path   string `yaml:"path,omitempty"`
+}
+
+func (s repoProjectSource) IsZero() bool {
+	return s.empty()
+}
+
+func (s repoProjectSource) empty() bool {
+	return strings.TrimSpace(s.Repo) == "" && strings.TrimSpace(s.Branch) == "" && strings.TrimSpace(s.Path) == ""
+}
+
+type repoProjectResources struct {
+	Repos map[string]repoProjectRepoResource `yaml:"repos,omitempty"`
+}
+
+type repoProjectRepoResource struct {
+	URL               string `yaml:"url"`
+	DefaultBranchHint string `yaml:"default_branch_hint,omitempty"`
+}
+
+type repoProjectRole struct {
+	Key         string `yaml:"key"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description,omitempty"`
+}
+
+type repoProjectPipeline struct {
+	Path         string            `yaml:"path"`
+	RoleBindings map[string]string `yaml:"role_bindings,omitempty"`
+}
+
+type repoProjectAutomation struct {
+	Name         string `yaml:"name"`
+	Description  string `yaml:"description,omitempty"`
+	Pipeline     string `yaml:"pipeline"`
+	Cron         string `yaml:"cron,omitempty"`
+	Timezone     string `yaml:"timezone,omitempty"`
+	AssigneeRole string `yaml:"assignee_role,omitempty"`
+	Status       string `yaml:"status,omitempty"`
+	Prompt       string `yaml:"prompt,omitempty"`
+}
+
+type repoPipelineImportSpec struct {
+	Path         string
+	RoleBindings map[string]string
+}
+
+func loadRepoProjectManifest(root, cleanBaseDir string) (*repoProjectManifest, error) {
+	path := filepath.Join(root, filepath.FromSlash(cleanBaseDir), "project.yaml")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read project manifest %s: %w", path, err)
+	}
+	var manifest repoProjectManifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("parse project manifest %s: %w", path, err)
+	}
+	if manifest.Version == 0 {
+		manifest.Version = 1
+	}
+	if manifest.Version != 1 {
+		return nil, fmt.Errorf("unsupported project manifest version %d", manifest.Version)
+	}
+	return &manifest, nil
+}
+
+func validateRepoContextSource(root, cleanBaseDir string, manifest *repoProjectManifest, policy repoContextSourcePolicy, expectedRef string) error {
+	if manifest == nil || manifest.Multica.Source.empty() {
+		return nil
+	}
+	source := manifest.Multica.Source
+	sourceRepo := strings.TrimSpace(source.Repo)
+	sourcePath := strings.TrimSpace(filepath.ToSlash(source.Path))
+	sourceBranch := strings.TrimSpace(source.Branch)
+	if sourcePath != "" && strings.Trim(sourcePath, "/") != strings.Trim(cleanBaseDir, "/") {
+		return fmt.Errorf("project manifest source path %q does not match import dir %q", sourcePath, cleanBaseDir)
+	}
+	if sourceRepo == "" {
+		return fmt.Errorf("project manifest multica.source.repo is required when a source is declared")
+	}
+	repo, ok := manifest.Resources.Repos[sourceRepo]
+	if !ok || strings.TrimSpace(repo.URL) == "" {
+		return fmt.Errorf("project manifest multica.source.repo %q is not defined under resources.repos", sourceRepo)
+	}
+	origin, err := gitOutput(root, "remote", "get-url", "origin")
+	if err != nil {
+		return fmt.Errorf("detect current repo origin for Multica context source: %w", err)
+	}
+	origin = strings.TrimSpace(origin)
+	if !sameGitRemoteURL(origin, repo.URL) {
+		return fmt.Errorf("current checkout origin %q is not the canonical Multica context source %q (%s)", origin, sourceRepo, strings.TrimSpace(repo.URL))
+	}
+	if policy != repoContextSourcePolicyCanonical || sourceBranch == "" {
+		return nil
+	}
+	if refMatchesBranch(expectedRef, sourceBranch) {
+		return nil
+	}
+	if strings.TrimSpace(expectedRef) == "" {
+		return nil
+	}
+	return repoContextSourceSkip{Reason: fmt.Sprintf("checkout ref %q is not canonical source branch %q", expectedRef, sourceBranch)}
+}
+
+func repoContextCanonicalSource(root, cleanBaseDir string, resources repoProjectResources) repoProjectSource {
+	origin, err := gitOutput(root, "remote", "get-url", "origin")
+	if err != nil {
+		return repoProjectSource{}
+	}
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return repoProjectSource{}
+	}
+	keys := make([]string, 0, len(resources.Repos))
+	for key := range resources.Repos {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		repo := resources.Repos[key]
+		if !sameGitRemoteURL(origin, repo.URL) {
+			continue
+		}
+		branch := strings.TrimSpace(repo.DefaultBranchHint)
+		if branch == "" {
+			branch = gitDefaultBranch(root)
+		}
+		return repoProjectSource{
+			Repo:   strings.TrimSpace(key),
+			Branch: branch,
+			Path:   cleanBaseDir,
+		}
+	}
+	return repoProjectSource{}
+}
+
+func sameGitRemoteURL(a, b string) bool {
+	return normalizeGitRemoteURL(a) == normalizeGitRemoteURL(b)
+}
+
+func normalizeGitRemoteURL(raw string) string {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	value = strings.TrimPrefix(value, "git+")
+	value = strings.TrimSuffix(value, "/")
+	value = strings.TrimSuffix(value, ".git")
+	if strings.HasPrefix(value, "git@") {
+		value = strings.TrimPrefix(value, "git@")
+		value = strings.Replace(value, ":", "/", 1)
+		value = "https://" + value
+	}
+	if strings.HasPrefix(value, "ssh://git@") {
+		value = strings.TrimPrefix(value, "ssh://git@")
+		value = strings.Replace(value, ":", "/", 1)
+		value = "https://" + value
+	}
+	return value
+}
+
+func refMatchesBranch(ref, branch string) bool {
+	ref = strings.TrimSpace(ref)
+	branch = strings.TrimSpace(branch)
+	if ref == "" || branch == "" {
+		return true
+	}
+	ref = strings.TrimPrefix(ref, "refs/heads/")
+	ref = strings.TrimPrefix(ref, "origin/")
+	branch = strings.TrimPrefix(branch, "refs/heads/")
+	branch = strings.TrimPrefix(branch, "origin/")
+	return ref == branch
+}
+
+func gitDefaultBranch(root string) string {
+	ref, err := gitOutput(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	if err == nil {
+		ref = strings.TrimSpace(ref)
+		ref = strings.TrimPrefix(ref, "origin/")
+		if ref != "" {
+			return ref
+		}
+	}
+	branch, err := gitOutput(root, "branch", "--show-current")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(branch)
+}
+
+func repoContextPipelineImports(root, cleanBaseDir string, manifest *repoProjectManifest) ([]repoPipelineImportSpec, error) {
+	if manifest == nil || len(manifest.Pipelines) == 0 {
+		files, err := pipelineYAMLFiles(filepath.Join(root, filepath.FromSlash(cleanBaseDir), "pipelines"))
+		if err != nil {
+			return nil, err
+		}
+		imports := make([]repoPipelineImportSpec, 0, len(files))
+		for _, path := range files {
+			imports = append(imports, repoPipelineImportSpec{Path: path})
+		}
+		return imports, nil
+	}
+
+	imports := make([]repoPipelineImportSpec, 0, len(manifest.Pipelines))
+	for _, pipeline := range manifest.Pipelines {
+		path, err := repoManifestFilePath(root, cleanBaseDir, pipeline.Path)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline %q: %w", pipeline.Path, err)
+		}
+		imports = append(imports, repoPipelineImportSpec{
+			Path:         path,
+			RoleBindings: normalizedStringMap(pipeline.RoleBindings),
+		})
+	}
+	return imports, nil
+}
+
+func repoManifestFilePath(root, cleanBaseDir, raw string) (string, error) {
+	raw = strings.TrimSpace(filepath.ToSlash(raw))
+	if raw == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	basePrefix := strings.TrimSuffix(cleanBaseDir, "/") + "/"
+	if strings.HasPrefix(raw, basePrefix) {
+		raw = strings.TrimPrefix(raw, basePrefix)
+	}
+	clean, err := cleanRepoContextPath(raw)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, filepath.FromSlash(cleanBaseDir), filepath.FromSlash(clean)), nil
+}
+
+func importRepoProjectResources(ctx context.Context, client *cli.APIClient, projectID string, manifest *repoProjectManifest) ([]repoContextSyncItem, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return nil, fmt.Errorf("project manifest resources require --project-id or MULTICA_PROJECT_ID")
+	}
+	existingResources, err := listProjectResourceMaps(ctx, client, projectID)
+	if err != nil {
+		return nil, err
+	}
+	existing := map[string]bool{}
+	for _, resource := range existingResources {
+		label := strings.TrimSpace(strVal(resource, "label"))
+		url := repoResourceURL(resource)
+		if label != "" {
+			existing["label:"+label] = true
+		}
+		if url != "" {
+			existing["url:"+url] = true
+		}
+	}
+
+	keys := make([]string, 0, len(manifest.Resources.Repos))
+	for key := range manifest.Resources.Repos {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	items := make([]repoContextSyncItem, 0, len(keys))
+	for _, key := range keys {
+		alias := strings.TrimSpace(key)
+		repo := manifest.Resources.Repos[key]
+		url := strings.TrimSpace(repo.URL)
+		if alias == "" || url == "" {
+			return nil, fmt.Errorf("project manifest repo %q requires url", key)
+		}
+		if existing["label:"+alias] || existing["url:"+url] {
+			items = append(items, repoContextSyncItem{
+				Type: "project_resource",
+				Name: alias,
+				Path: url,
+			})
+			continue
+		}
+		ref := map[string]any{"url": url}
+		if branch := strings.TrimSpace(repo.DefaultBranchHint); branch != "" {
+			ref["default_branch_hint"] = branch
+		}
+		payload := map[string]any{
+			"resource_type": "git_repo",
+			"resource_ref":  ref,
+			"label":         alias,
+		}
+		var created map[string]any
+		if err := client.PostJSON(ctx, "/api/projects/"+projectID+"/resources", payload, &created); err != nil {
+			return nil, fmt.Errorf("create project repo resource %q: %w", alias, err)
+		}
+		items = append(items, repoContextSyncItem{
+			Type: "project_resource",
+			ID:   strVal(created, "id"),
+			Name: alias,
+			Path: url,
+		})
+		existing["label:"+alias] = true
+		existing["url:"+url] = true
+	}
+	return items, nil
+}
+
+func listProjectResourceMaps(ctx context.Context, client *cli.APIClient, projectID string) ([]map[string]any, error) {
+	var resp map[string]any
+	if err := client.GetJSON(ctx, "/api/projects/"+projectID+"/resources", &resp); err != nil {
+		return nil, fmt.Errorf("list project resources: %w", err)
+	}
+	rawResources, _ := resp["resources"].([]any)
+	resources := make([]map[string]any, 0, len(rawResources))
+	for _, raw := range rawResources {
+		resource, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		resources = append(resources, resource)
+	}
+	return resources, nil
+}
+
+func repoResourceURL(resource map[string]any) string {
+	ref, _ := resource["resource_ref"].(map[string]any)
+	return strings.TrimSpace(strVal(ref, "url"))
+}
+
+func importRepoProjectAutomations(ctx context.Context, client *cli.APIClient, manifest *repoProjectManifest, importedPipelineIDs map[string]string, roleAgentIDs map[string]string) ([]repoContextSyncItem, error) {
+	items := make([]repoContextSyncItem, 0, len(manifest.Automations))
+	var existingByName map[string]string
+	loadExisting := func() error {
+		if existingByName != nil {
+			return nil
+		}
+		autopilots, err := listAutopilotMaps(ctx, client)
+		if err != nil {
+			return err
+		}
+		existingByName = map[string]string{}
+		for _, autopilot := range autopilots {
+			name := strings.ToLower(strings.TrimSpace(strVal(autopilot, "title")))
+			id := strVal(autopilot, "id")
+			if name != "" && id != "" {
+				existingByName[name] = id
+			}
+		}
+		return nil
+	}
+	for _, automation := range manifest.Automations {
+		name := strings.TrimSpace(automation.Name)
+		if name == "" {
+			return nil, fmt.Errorf("automation name is required")
+		}
+		roleKey := strings.TrimSpace(automation.AssigneeRole)
+		assigneeID := ""
+		if roleKey != "" {
+			assigneeID = strings.TrimSpace(roleAgentIDs[roleKey])
+		}
+		if assigneeID == "" {
+			items = append(items, repoContextSyncItem{
+				Type: "automation_pending",
+				Name: name,
+				Path: "unbound role: " + roleKey,
+			})
+			continue
+		}
+
+		description := repoAutomationDescription(automation, importedPipelineIDs)
+		status := strings.ToLower(strings.TrimSpace(automation.Status))
+		if status == "" {
+			status = "active"
+		}
+		if err := loadExisting(); err != nil {
+			return nil, err
+		}
+		if existingID := existingByName[strings.ToLower(name)]; existingID != "" {
+			var updated map[string]any
+			if err := client.PatchJSON(ctx, "/api/autopilots/"+existingID, map[string]any{
+				"title":          name,
+				"description":    nullableString(description),
+				"assignee_id":    assigneeID,
+				"status":         status,
+				"execution_mode": "run_only",
+			}, &updated); err != nil {
+				return nil, fmt.Errorf("update automation %q: %w", name, err)
+			}
+			items = append(items, repoContextSyncItem{
+				Type: "automation",
+				ID:   existingID,
+				Name: name,
+				Path: strings.TrimSpace(automation.Cron),
+			})
+			continue
+		}
+		body := map[string]any{
+			"title":          name,
+			"description":    nullableString(description),
+			"assignee_id":    assigneeID,
+			"execution_mode": "run_only",
+		}
+		var autopilot map[string]any
+		if err := client.PostJSON(ctx, "/api/autopilots", body, &autopilot); err != nil {
+			return nil, fmt.Errorf("create automation %q: %w", name, err)
+		}
+		autopilotID := strVal(autopilot, "id")
+		if status != "" && status != "active" && autopilotID != "" {
+			var updated map[string]any
+			if err := client.PatchJSON(ctx, "/api/autopilots/"+autopilotID, map[string]any{"status": status}, &updated); err != nil {
+				return nil, fmt.Errorf("pause automation %q: %w", name, err)
+			}
+		}
+		if autopilotID != "" {
+			existingByName[strings.ToLower(name)] = autopilotID
+		}
+		if cron := strings.TrimSpace(automation.Cron); cron != "" && autopilotID != "" {
+			trigger := map[string]any{
+				"kind":            "schedule",
+				"cron_expression": cron,
+				"timezone":        strings.TrimSpace(automation.Timezone),
+				"label":           name,
+			}
+			var triggerResp map[string]any
+			if err := client.PostJSON(ctx, "/api/autopilots/"+autopilotID+"/triggers", trigger, &triggerResp); err != nil {
+				return nil, fmt.Errorf("create automation schedule %q: %w", name, err)
+			}
+		}
+		items = append(items, repoContextSyncItem{
+			Type: "automation",
+			ID:   autopilotID,
+			Name: name,
+			Path: strings.TrimSpace(automation.Cron),
+		})
+	}
+	return items, nil
+}
+
+func repoAutomationDescription(automation repoProjectAutomation, importedPipelineIDs map[string]string) string {
+	prompt := strings.TrimSpace(automation.Prompt)
+	pipelineName := strings.TrimSpace(automation.Pipeline)
+	pipelineID := importedPipelineIDs[strings.ToLower(pipelineName)]
+	var b strings.Builder
+	if prompt != "" {
+		b.WriteString(prompt)
+		b.WriteString("\n\n")
+	}
+	if pipelineName != "" {
+		fmt.Fprintf(&b, "This automation is attached to Multica pipeline %q.", pipelineName)
+		if pipelineID != "" {
+			fmt.Fprintf(&b, " Pipeline ID: %s.", pipelineID)
+		}
+		b.WriteString("\n")
+	}
+	if pipelineID != "" {
+		fmt.Fprintf(&b, "When the schedule fires and the task should generate executable pipeline issues, trigger `POST /api/pipelines/%s/run` through the Multica API.\n", pipelineID)
+	}
+	if text := strings.TrimSpace(automation.Description); text != "" {
+		b.WriteString("\n")
+		b.WriteString(text)
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func nullableString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func normalizedStringMap(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = strings.TrimSpace(value)
+	}
+	return out
+}
+
+func parseRepoContextRoleBindings(values []string) (map[string]string, error) {
+	bindings := map[string]string{}
+	for _, raw := range values {
+		for _, item := range strings.Split(raw, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			key, value, ok := strings.Cut(item, "=")
+			if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+				return nil, fmt.Errorf("invalid --role %q; expected role_key=agent_id", item)
+			}
+			bindings[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	return bindings, nil
+}
+
+func repoContextRoleBindingsFromEnv() map[string]string {
+	raw := strings.TrimSpace(os.Getenv("MULTICA_PROJECT_ROLE_BINDINGS"))
+	if raw == "" {
+		return map[string]string{}
+	}
+	var values map[string]string
+	if err := json.Unmarshal([]byte(raw), &values); err == nil {
+		return normalizedStringMap(values)
+	}
+	bindings, err := parseRepoContextRoleBindings([]string{raw})
+	if err != nil {
+		return map[string]string{}
+	}
+	return bindings
+}
+
+func pipelineYAMLFiles(dir string) ([]string, error) {
+	matches := []string{}
+	for _, pattern := range []string{"*.yaml", "*.yml"} {
+		found, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return nil, fmt.Errorf("scan pipeline yaml: %w", err)
+		}
+		matches = append(matches, found...)
+	}
+	sort.Strings(matches)
+	return matches, nil
+}
+
+func pipelineYAMLWithProjectDefault(data []byte, _ string) (content string, name string, err error) {
+	return pipelineYAMLWithRoles(data, nil, nil)
+}
+
+func pipelineYAMLWithRoles(data []byte, nodeRoleBindings, roleAgentIDs map[string]string) (content string, name string, err error) {
+	var doc repoImportPipelineYAMLDefinition
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return "", "", err
+	}
+	name = strings.TrimSpace(doc.Name)
+	mutated := false
+	if len(nodeRoleBindings) > 0 {
+		normalizedRoleAgents := normalizedStringMap(roleAgentIDs)
+		for index, node := range doc.Nodes {
+			key := strings.TrimSpace(fmt.Sprintf("%v", node["key"]))
+			if key == "" {
+				continue
+			}
+			roleKey := strings.TrimSpace(nodeRoleBindings[key])
+			if roleKey == "" {
+				continue
+			}
+			agentID := strings.TrimSpace(normalizedRoleAgents[roleKey])
+			if agentID == "" {
+				delete(node, "agent_id")
+				delete(node, "agent")
+			} else {
+				node["agent_id"] = agentID
+			}
+			doc.Nodes[index] = node
+			mutated = true
+		}
+	}
+	if !mutated {
+		return string(data), name, nil
+	}
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", "", err
+	}
+	return string(out), name, nil
+}
+
+type repoImportPipelineYAMLDefinition struct {
+	Version     int              `yaml:"version"`
+	Name        string           `yaml:"name"`
+	Description string           `yaml:"description,omitempty"`
+	Nodes       []map[string]any `yaml:"nodes"`
+}
+
+type repoPipelineYAML struct {
+	Version     int                    `yaml:"version"`
+	Name        string                 `yaml:"name"`
+	Description string                 `yaml:"description,omitempty"`
+	Nodes       []repoPipelineYAMLNode `yaml:"nodes"`
+}
+
+type repoPipelineYAMLNode struct {
+	Key         string                   `yaml:"key"`
+	Type        string                   `yaml:"type,omitempty"`
+	Title       string                   `yaml:"title"`
+	Description string                   `yaml:"description,omitempty"`
+	AgentID     string                   `yaml:"agent_id,omitempty"`
+	Repo        string                   `yaml:"repo,omitempty"`
+	Repos       []string                 `yaml:"repos,omitempty"`
+	DependsOn   []string                 `yaml:"depends_on,omitempty"`
+	Position    repoPipelineYAMLPosition `yaml:"position"`
+}
+
+type repoPipelineYAMLPosition struct {
+	X int32 `yaml:"x"`
+	Y int32 `yaml:"y"`
+}
+
+func pipelineYAMLContent(pipeline map[string]any) ([]byte, error) {
+	doc := repoPipelineYAML{
+		Version:     1,
+		Name:        strVal(pipeline, "name"),
+		Description: strVal(pipeline, "description"),
+	}
+	rawNodes, _ := pipeline["nodes"].([]any)
+	doc.Nodes = make([]repoPipelineYAMLNode, 0, len(rawNodes))
+	for _, raw := range rawNodes {
+		node, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		doc.Nodes = append(doc.Nodes, repoPipelineYAMLNode{
+			Key:         strVal(node, "key"),
+			Type:        strVal(node, "type"),
+			Title:       strVal(node, "title"),
+			Description: strVal(node, "description"),
+			AgentID:     strVal(node, "agent_id"),
+			Repo:        strVal(node, "repo"),
+			Repos:       stringSliceVal(node["repos"]),
+			DependsOn:   stringSliceVal(node["depends_on_node_keys"]),
+			Position: repoPipelineYAMLPosition{
+				X: int32Val(node["position_x"]),
+				Y: int32Val(node["position_y"]),
+			},
+		})
+	}
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func localPipelineFileName(name, id string) string {
+	return localSkillFolderName(name, id) + ".yaml"
+}
+
+func cleanRepoContextPath(raw string) (string, error) {
+	cleaned := filepath.Clean(filepath.FromSlash(strings.TrimSpace(raw)))
+	if cleaned == "." || filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid repo context path %q", raw)
+	}
+	return filepath.ToSlash(cleaned), nil
+}
+
+func stringSliceVal(raw any) []string {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if v := strings.TrimSpace(fmt.Sprintf("%v", item)); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func int32Val(raw any) int32 {
+	switch v := raw.(type) {
+	case int:
+		return int32(v)
+	case int32:
+		return v
+	case int64:
+		return int32(v)
+	case float64:
+		return int32(v)
+	case json.Number:
+		i, _ := v.Int64()
+		return int32(i)
+	default:
+		return 0
+	}
+}
+
+func gitOutput(workDir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
+func shortCommit(commit string) string {
+	if len(commit) > 8 {
+		return commit[:8]
+	}
+	return commit
 }

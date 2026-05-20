@@ -106,6 +106,18 @@ func (q *Queries) IncrementVerificationCodeAttempts(ctx context.Context, id pgty
 	return err
 }
 
+const markUnusedVerificationCodesUsedByEmail = `-- name: MarkUnusedVerificationCodesUsedByEmail :exec
+UPDATE verification_code
+SET used = TRUE
+WHERE email = $1
+  AND used = FALSE
+`
+
+func (q *Queries) MarkUnusedVerificationCodesUsedByEmail(ctx context.Context, email string) error {
+	_, err := q.db.Exec(ctx, markUnusedVerificationCodesUsedByEmail, email)
+	return err
+}
+
 const markVerificationCodeUsed = `-- name: MarkVerificationCodeUsed :exec
 UPDATE verification_code
 SET used = TRUE
