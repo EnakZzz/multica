@@ -102,3 +102,12 @@ func TestListIssues_ScheduledFilter(t *testing.T) {
 		t.Fatalf("scheduled total: want 3, got %d", scheduledTotal)
 	}
 }
+
+func containsIssueID(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}

@@ -453,6 +453,50 @@ func workspaceReposResponse(workspaceID string, raw []byte, settingsRaw []byte) 
 	return resp
 }
 
+func (h *Handler) applyProjectContextToTaskResponse(ctx context.Context, resp *AgentTaskResponse, projectID pgtype.UUID) []RepoData {
+	if !projectID.Valid {
+		return nil
+	}
+	resp.ProjectID = uuidToString(projectID)
+	if proj, err := h.Queries.GetProject(ctx, projectID); err == nil {
+		resp.ProjectTitle = proj.Title
+	}
+
+	rows := h.listProjectResourcesForProject(ctx, projectID)
+	if len(rows) == 0 {
+		return nil
+	}
+
+	out := make([]ProjectResourceData, 0, len(rows))
+	projectRepos := make([]RepoData, 0, len(rows))
+	for _, row := range rows {
+		label := ""
+		if row.Label.Valid {
+			label = row.Label.String
+		}
+		ref := json.RawMessage(row.ResourceRef)
+		if len(ref) == 0 {
+			ref = json.RawMessage("{}")
+		}
+		out = append(out, ProjectResourceData{
+			ID:           uuidToString(row.ID),
+			ResourceType: row.ResourceType,
+			ResourceRef:  ref,
+			Label:        label,
+		})
+		if isProjectGitRepoResource(row.ResourceType) {
+			var payload struct {
+				URL string `json:"url"`
+			}
+			if json.Unmarshal(row.ResourceRef, &payload) == nil && payload.URL != "" {
+				projectRepos = append(projectRepos, RepoData{URL: payload.URL})
+			}
+		}
+	}
+	resp.ProjectResources = out
+	return projectRepos
+}
+
 func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	var req DaemonRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1674,7 +1718,10 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				if resp.WorkspaceID == "" {
 					resp.WorkspaceID = uuidToString(ap.WorkspaceID)
 				}
-				if len(resp.Repos) == 0 {
+				projectRepos := h.applyProjectContextToTaskResponse(r.Context(), &resp, ap.ProjectID)
+				if len(projectRepos) > 0 {
+					resp.Repos = projectRepos
+				} else if len(resp.Repos) == 0 {
 					if ws, err := h.Queries.GetWorkspace(r.Context(), ap.WorkspaceID); err == nil && ws.Repos != nil {
 						var repos []RepoData
 						if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {

@@ -326,6 +326,15 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("listIssueDependencies", () => {
+    it("falls back to empty dependency lists when the response is malformed", async () => {
+      stubFetchJson({ blocked_by: "not-an-array", blocks: [] });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listIssueDependencies("issue-1");
+      expect(res).toEqual({ blocked_by: [], blocks: [] });
+    });
+  });
+
   // Agent template catalog is hit by the desktop create-agent picker.
   // Installed desktop builds outlive any given server, so the shape MUST
   // survive future field renames / wrapping without crashing. Each test
@@ -487,15 +496,6 @@ describe("ApiClient schema fallback", () => {
       expect(resp.agent.id).toBe("agent-1");
       expect(resp.imported_skill_ids).toEqual([]);
       expect(resp.reused_skill_ids).toEqual([]);
-    });
-  });
-
-  describe("listIssueDependencies", () => {
-    it("falls back to empty dependency lists when the response is malformed", async () => {
-      stubFetchJson({ blocked_by: "not-an-array", blocks: [] });
-      const client = new ApiClient("https://api.example.test");
-      const res = await client.listIssueDependencies("issue-1");
-      expect(res).toEqual({ blocked_by: [], blocks: [] });
     });
   });
 });

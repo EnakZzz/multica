@@ -502,4 +502,3 @@ func TestIsTextPreviewable(t *testing.T) {
 		})
 	}
 }
-

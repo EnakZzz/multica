@@ -32,24 +32,24 @@ const (
 )
 
 type AgentResponse struct {
-	ID                 string              `json:"id"`
-	WorkspaceID        string              `json:"workspace_id"`
-	RuntimeID          string              `json:"runtime_id"`
-	Name               string              `json:"name"`
-	Description        string              `json:"description"`
-	Instructions       string              `json:"instructions"`
-	AvatarURL          *string             `json:"avatar_url"`
-	RuntimeMode        string              `json:"runtime_mode"`
-	RuntimeConfig      any                 `json:"runtime_config"`
-	CustomEnv          map[string]string   `json:"custom_env"`
-	CustomArgs         []string            `json:"custom_args"`
-	McpConfig          json.RawMessage     `json:"mcp_config"`
-	CustomEnvRedacted  bool                `json:"custom_env_redacted"`
-	McpConfigRedacted  bool                `json:"mcp_config_redacted"`
-	Visibility         string              `json:"visibility"`
-	Status             string              `json:"status"`
-	MaxConcurrentTasks int32               `json:"max_concurrent_tasks"`
-	Model              string              `json:"model"`
+	ID                 string            `json:"id"`
+	WorkspaceID        string            `json:"workspace_id"`
+	RuntimeID          string            `json:"runtime_id"`
+	Name               string            `json:"name"`
+	Description        string            `json:"description"`
+	Instructions       string            `json:"instructions"`
+	AvatarURL          *string           `json:"avatar_url"`
+	RuntimeMode        string            `json:"runtime_mode"`
+	RuntimeConfig      any               `json:"runtime_config"`
+	CustomEnv          map[string]string `json:"custom_env"`
+	CustomArgs         []string          `json:"custom_args"`
+	McpConfig          json.RawMessage   `json:"mcp_config"`
+	CustomEnvRedacted  bool              `json:"custom_env_redacted"`
+	McpConfigRedacted  bool              `json:"mcp_config_redacted"`
+	Visibility         string            `json:"visibility"`
+	Status             string            `json:"status"`
+	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
+	Model              string            `json:"model"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
 	// for this agent (empty = use runtime default). The picker is per-runtime
 	// per-model; the API never normalizes across providers. See MUL-2339.

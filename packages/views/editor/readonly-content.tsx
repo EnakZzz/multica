@@ -28,7 +28,6 @@ import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { createLowlight, common } from "lowlight";
-import { toHtml } from "hast-util-to-html";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspacePaths, useWorkspaceSlug } from "@multica/core/paths";
 import type { Attachment } from "@multica/core/types";
@@ -42,6 +41,7 @@ import { MermaidDiagram } from "./mermaid-diagram";
 import { HtmlBlockPreview } from "./html-block-preview";
 import { AttachmentDownloadProvider } from "./attachment-download-context";
 import { Attachment as AttachmentRenderer } from "./attachment";
+import { toHtml } from "./to-html";
 import "katex/dist/katex.min.css";
 import "./content-editor.css";
 

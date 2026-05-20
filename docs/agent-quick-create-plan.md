@@ -247,12 +247,12 @@ skill 引用为什么用 URL 而不是内联 SKILL.md 内容:
   - 喂给 agent 的 prompt 大致:
     ```
     用户需求:{user_prompt}
-    
+
     你的任务:从以下 curated skill 清单里选 3-5 个最相关的推荐给用户。
-    
+
     可选 skill 清单(JSON):
     {curated_skill_index}
-    
+
     输出:调用 `multica skill find --output-results '<JSON>'` 命令,
     JSON 形态为 [{name, description, source_url, reason}, ...]
     ```

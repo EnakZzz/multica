@@ -158,7 +158,11 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	d.logger.Info("auto-update: newer release available, upgrading",
 		"current", d.cfg.CLIVersion, "target", release.TagName)
 
-	output, err := d.runUpdateFn(release.TagName)
+	runUpdateFn := d.runUpdateFn
+	if runUpdateFn == nil {
+		runUpdateFn = d.runUpdate
+	}
+	output, err := runUpdateFn(release.TagName)
 	if err != nil {
 		d.logger.Warn("auto-update: upgrade failed — will retry", "error", err, "output", output)
 		return

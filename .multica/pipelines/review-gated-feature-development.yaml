@@ -47,12 +47,17 @@ nodes:
 
       For upstream commit merge work, cherry-pick the extracted upstream SHA or
       apply an equivalent minimal merge onto the prepared branch. If conflicts
-      occur, resolve them in favor of preserving this fork's local
-      customizations unless the upstream commit is explicitly intended to
-      replace that behavior. Document every conflict, chosen resolution, and
-      affected file. Run focused tests for the changed surface and keep the
-      branch limited to the approved upstream commit plus required conflict
-      fixes.
+      occur, resolve them with an upstream-first policy: treat the official
+      upstream code as the new base, then re-apply only the parts of this fork's
+      local customizations that are still required after reviewing the upstream
+      implementation. If upstream already solves the problem that a local fork
+      change addressed, drop the local change instead of preserving it. Do not
+      blindly choose either side; compare the behavior, issue context, and
+      tests before deciding. Document every conflict, whether the upstream side
+      was accepted, which local changes were re-applied or removed, why that
+      was safe, and every affected file. Run focused tests for the changed
+      surface and keep the branch limited to the approved upstream commit plus
+      required conflict fixes.
     depends_on:
       - prepare-branch
     position:
@@ -96,8 +101,9 @@ nodes:
       create a GitHub pull request against the fork's main branch. Use gh pr
       create when available. The PR title should match the pipeline run title
       or summarize the upstream commit being merged. The PR body must include
-      the upstream SHA, source URL, conflict resolutions, tests run, review gate
-      results, and residual risks.
+      the upstream SHA, source URL, conflict resolutions, local fork changes
+      retained or dropped because upstream superseded them, tests run, review
+      gate results, and residual risks.
 
       If gh is missing, not authenticated, lacks permission, or the push fails,
       do not mark this issue done. Report the exact command, stderr, current

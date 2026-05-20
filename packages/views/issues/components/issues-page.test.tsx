@@ -510,7 +510,6 @@ describe("IssuesPage (shared)", () => {
 
     await screen.findByText("Test User");
     expect(screen.getByText("Agent One")).toBeInTheDocument();
-    expect(screen.getByText("Squad One")).toBeInTheDocument();
     expect(screen.getByText("No assignee")).toBeInTheDocument();
   });
 

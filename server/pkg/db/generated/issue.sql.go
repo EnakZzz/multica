@@ -351,18 +351,18 @@ LIMIT 1
 `
 
 type FindActiveDuplicateIssueParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Column2     pgtype.UUID `json:"column_2"`
-	Column3     pgtype.UUID `json:"column_3"`
-	Title       string      `json:"title"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	ProjectID       pgtype.UUID `json:"project_id"`
+	ParentIssueID   pgtype.UUID `json:"parent_issue_id"`
+	NormalizedTitle string      `json:"normalized_title"`
 }
 
 func (q *Queries) FindActiveDuplicateIssue(ctx context.Context, arg FindActiveDuplicateIssueParams) (Issue, error) {
 	row := q.db.QueryRow(ctx, findActiveDuplicateIssue,
 		arg.WorkspaceID,
-		arg.Column2,
-		arg.Column3,
-		arg.Title,
+		arg.ProjectID,
+		arg.ParentIssueID,
+		arg.NormalizedTitle,
 	)
 	var i Issue
 	err := row.Scan(

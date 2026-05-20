@@ -133,8 +133,7 @@ function buildGroups(
   const order: Record<string, number> = {
     member: 0,
     agent: 1,
-    squad: 2,
-    none: 3,
+    none: 2,
   };
 
   return [...groups.values()].sort((a, b) => {
@@ -258,8 +257,7 @@ export function BoardView({
     const order: Record<string, number> = {
       member: 0,
       agent: 1,
-      squad: 2,
-      none: 3,
+      none: 2,
     };
     return assigneeGroups
       .map((group) => ({

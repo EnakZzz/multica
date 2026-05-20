@@ -54,7 +54,7 @@ export function IssuesPage() {
       label_ids: labelFilters,
     };
     if (scope === "members") filter.assignee_types = ["member"];
-    if (scope === "agents") filter.assignee_types = ["agent", "squad"];
+    if (scope === "agents") filter.assignee_types = ["agent"];
     return filter;
   }, [assigneeFilters, creatorFilters, includeNoAssignee, includeNoProject, labelFilters, priorityFilters, projectFilters, scope, statusFilters]);
 

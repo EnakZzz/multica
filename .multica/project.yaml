@@ -41,23 +41,31 @@ pipelines:
       implement-feature: developer
       spec-compliance-review: reviewer
       code-quality-review: reviewer
+      create-pr: developer
   - path: pipelines/upstream-sync-watch.yaml
     role_bindings:
-      fetch-upstream: upstream_analyst
-      prioritize-commits: upstream_analyst
-      merge-selected-upstream: developer
-      review-upstream-merge: reviewer
-      deploy-upstream-update: deployer
+      discover-upstream-commits: upstream_analyst
+      create-commit-review-issues: upstream_analyst
 automations:
   - name: Upstream sync watch
     pipeline: Upstream sync watch
+    project_id: 67d74204-9294-4a5b-b1e6-92a9582168c9
     assignee_role: upstream_analyst
     status: paused
     cron: "0 9 * * 1"
     timezone: Asia/Shanghai
     description: Weekly upstream watch for this fork.
     prompt: >
-      Inspect upstream/main from https://github.com/multica-ai/multica and use
-      the Upstream sync watch pipeline to generate executable issues for the
-      report, owner selection point, review, and deployment path. Keep this
-      automation paused until the upstream_analyst role is bound to an agent.
+      Inspect upstream/main from https://github.com/multica-ai/multica using
+      the Upstream sync watch pipeline for project multica进化
+      (project_id: 67d74204-9294-4a5b-b1e6-92a9582168c9). When triggering the
+      attached pipeline, call POST /api/pipelines/{id}/run with JSON body
+      {"title":"Upstream sync watch","project_id":"67d74204-9294-4a5b-b1e6-92a9582168c9"}.
+      Create at most 10 new unassigned owner-review issues per run, scanning
+      missing upstream commits oldest first and skipping commits that already
+      have an upstream-sha:<full-sha> issue marker. Each new issue must include
+      risk analysis, recommended action, and bootstrap instructions for the
+      developer agent. Do not assign those commit review issues, do not create
+      merge branches, and do not start Review gated feature development; the
+      owner starts merge work later by assigning a specific commit review issue
+      to the developer agent.

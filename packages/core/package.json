@@ -53,6 +53,8 @@
     "./agents": "./agents/index.ts",
     "./agents/queries": "./agents/queries.ts",
     "./agents/derive-presence": "./agents/derive-presence.ts",
+    "./agents/stores": "./agents/stores/index.ts",
+    "./agents/stores/*": "./agents/stores/*.ts",
     "./agents/use-agent-presence": "./agents/use-agent-presence.ts",
     "./agents/visibility-label": "./agents/visibility-label.ts",
     "./permissions": "./permissions/index.ts",

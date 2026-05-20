@@ -53,7 +53,7 @@ export function IssueActionsContextMenu({
         </ContextMenuContent>
       </ContextMenu>
       {/* Mount the picker only once the user actually opens it. Otherwise
-          every row in a list/board would subscribe to members/agents/squads
+          every row in a list/board would subscribe to members/agents
           /frequency queries on mount, multiplying memory + render cost. */}
       {assigneeOpen && (
         <AssigneePicker

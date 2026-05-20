@@ -1,12 +1,13 @@
 version: 1
 name: Upstream sync watch
 description: >
-  Periodic workflow for a fork of multica-ai/multica. Inspect upstream changes,
-  summarize new commits by importance and merge value, let the owner choose what
-  to bring over, then review and deploy after selected changes are merged. The
-  schedule should be handled by Multica automation.
+  Periodic workflow for a fork of multica-ai/multica. Inspect upstream/main,
+  create up to 10 unassigned owner-review issues per run for new upstream
+  commits, and stop before any merge work. Approved commits are started later
+  by assigning their review issue to a developer agent, which bootstraps the
+  Review gated feature development pipeline.
 nodes:
-  - key: fetch-upstream
+  - key: discover-upstream-commits
     type: issue
     repos:
       - multica
@@ -14,85 +15,119 @@ nodes:
     title: Fetch upstream multica-ai/multica changes
     description: >
       Ensure the upstream remote points to https://github.com/multica-ai/multica
-      and fetch it. Compare the local main branch with upstream/main without
-      merging anything yet.
+      and fetch both origin/main and upstream/main. Compare origin/main with
+      upstream/main only; do not merge, cherry-pick, rebase, or create a branch.
+
+      Required commands:
+
+      git remote get-url upstream
+      git remote set-url upstream https://github.com/multica-ai/multica.git
+      git fetch origin main
+      git fetch upstream main
+      git log --reverse --format="%H%x09%s" origin/main..upstream/main
+
+      Count the total missing upstream commits and record the oldest-first full
+      SHA list, short subjects, total missing count, and whether there are no
+      new commits. The next node must scan this oldest-first list and create at
+      most 10 new review issues in this run, skipping commits that already have
+      an upstream-sha issue marker. This workflow is read-only except for the
+      review issues created by the next node.
     position:
       x: 120
       y: 120
 
-  - key: prioritize-commits
+  - key: create-commit-review-issues
     type: issue
     repos:
       - multica
       - upstream
-    title: Generate prioritized upstream change report
+    title: Create unassigned upstream commit review issues
     description: >
-      Analyze commits present in upstream/main but missing from this fork.
-      Produce a concise priority table covering user impact, bug/security risk,
-      migration or schema impact, conflict risk, affected areas, and a recommended
-      action: merge now, inspect manually, defer, or ignore.
+      Scan the upstream commits reported by discover-upstream-commits in
+      oldest-first order and create exactly one unassigned owner-review issue
+      for each missing commit that does not already have a review issue, up to a
+      maximum of 10 new commit review issues per pipeline run. Stop creating
+      issues as soon as 10 new issues have been created. These issues are for
+      human approval only; do not assign an agent, do not start Review gated
+      feature development, and do not create merge branches.
+
+      Before creating an issue for a commit, search existing open and closed
+      issues for the marker upstream-sha:<full-sha>. If an issue already has
+      that marker, skip the commit and mention the existing issue in the final
+      report. Skipped duplicate commits do not count against the 10 new issue
+      limit; continue scanning later upstream commits until 10 new issues have
+      been created or the missing upstream commit list is exhausted.
+
+      Each new issue title must be:
+
+      Review upstream <shortsha>: <commit subject>
+
+      Each issue description must include this template, filled in with facts
+      from git show / git diff analysis:
+
+      Upstream commit review
+
+      upstream-source: multica-ai/multica
+      upstream-branch: main
+      upstream-sha:<full-sha>
+      upstream-url: https://github.com/multica-ai/multica/commit/<full-sha>
+      project-id: 67d74204-9294-4a5b-b1e6-92a9582168c9
+      recommended-action: merge-now | inspect-manually | defer | ignore
+
+      Summary:
+      - What changed in this commit.
+
+      Impact:
+      - User-facing impact, backend/frontend/package areas, migrations, API
+        contracts, runtime behavior, Docker/self-hosting impact, and tests.
+
+      Risk:
+      - Conflict risk against this fork, customization-loss risk, migration or
+        data-loss risk, and security risk.
+
+      Merge plan if approved:
+      - Human approval action: assign this issue to the developer agent.
+      - Assigned developer agent bootstrap: do not cherry-pick directly in this
+        issue. First call GET /api/pipelines, find the pipeline whose name is
+        "Review gated feature development", then call POST /api/pipelines/{id}/run
+        with JSON body {"title":"Merge upstream <shortsha>: <commit subject>","project_id":"67d74204-9294-4a5b-b1e6-92a9582168c9"}.
+      - Conflict policy inside Review gated feature development: use upstream
+        official code as the new base, then re-apply only local fork changes
+        that are still required. If upstream already solves the reason for a
+        local fork change, drop the local change and document why.
+      - After the pipeline run is created, read the response parent_issue_id and
+        nodes, comment on this issue with the pipeline parent issue / child
+        issue links, and mark this review issue done.
+      - All branch creation, cherry-pick or equivalent merge, conflict
+        resolution, tests, review gates, and PR creation must happen inside the
+        generated Review gated feature development pipeline issues.
+
+      Acceptance checklist for the bootstrap agent:
+      - Pipeline run was created from "Review gated feature development".
+      - This issue contains a comment linking the pipeline parent issue.
+      - This issue was marked done only after the pipeline run was created.
+
+      Use multica issue create without --assignee or --assignee-id. If the CLI
+      cannot create an issue, report the exact command and error; do not fall
+      back to assigning a developer or starting merge work.
     depends_on:
-      - fetch-upstream
+      - discover-upstream-commits
     position:
       x: 480
       y: 120
 
-  - key: select-changes
+  - key: ready-for-owner-review
     type: manual
-    title: Choose upstream commits to merge
+    title: Owner review of upstream commit issues
     description: >
-      Owner decision point. Review the prioritized report and choose which
-      upstream commits or range should be merged into the fork.
+      Owner decision point. Review the unassigned upstream commit issues. To
+      approve a commit for merge, assign that specific issue to the developer
+      agent. Scheduling or moving the issue between statuses does not start the
+      merge workflow; only assigning it to the developer agent does. This run
+      intentionally creates at most 10 new upstream commit review issues; run
+      the automation again to continue draining a large upstream backlog.
     depends_on:
-      - prioritize-commits
+      - create-commit-review-issues
     position:
       x: 840
-      y: 120
-
-  - key: merge-selected-upstream
-    type: issue
-    repos:
-      - multica
-      - upstream
-    title: Merge selected upstream changes
-    description: >
-      Merge or cherry-pick the selected upstream changes into a dedicated branch.
-      Resolve conflicts in favor of preserving local Multica customizations unless
-      the upstream change is intentionally replacing them. Run focused tests for
-      affected areas.
-    depends_on:
-      - select-changes
-    position:
-      x: 1200
-      y: 120
-
-  - key: review-upstream-merge
-    type: issue
-    repo: multica
-    title: Agent review upstream merge
-    description: >
-      Review the upstream merge branch for regressions, local customization loss,
-      migration risks, Docker/self-hosting impact, and test gaps. Fix or document
-      all review findings before deployment.
-    depends_on:
-      - merge-selected-upstream
-    position:
-      x: 1560
-      y: 120
-
-  - key: deploy-upstream-update
-    type: issue
-    repo: multica
-    title: Deploy after upstream merge
-    description: >
-      After the reviewed upstream merge reaches main, run the deployment update
-      from the repository root:
-
-      .\scripts\docker-selfhost.ps1 update
-
-      Report the update result, image/container state, and any manual follow-up.
-    depends_on:
-      - review-upstream-merge
-    position:
-      x: 1920
       y: 120

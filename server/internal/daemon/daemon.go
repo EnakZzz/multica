@@ -112,6 +112,13 @@ type Daemon struct {
 	updating      atomic.Bool        // prevents concurrent update attempts
 	activeTasks   atomic.Int64       // number of tasks currently in handleTask; exposed via /health
 
+	// claimMu guards pauseClaims and claimsInFlight. It is held only around
+	// local state transitions; ClaimTask itself runs without the lock so one
+	// slow runtime cannot stall other pollers or auto-update checks.
+	claimMu        sync.Mutex
+	pauseClaims    bool
+	claimsInFlight int
+
 	activeEnvRootsMu sync.Mutex
 	activeEnvRoots   map[string]int // env root path -> reference count (handles reuse paths marked twice)
 
@@ -124,6 +131,7 @@ type Daemon struct {
 
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
 	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
+	runUpdateFn        func(targetVersion string) (string, error)
 }
 
 // New creates a new Daemon instance.
@@ -150,6 +158,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		cancelPollInterval:        5 * time.Second,
 	}
 	d.runner = taskRunnerFunc(d.runTask)
+	d.runUpdateFn = d.runUpdate
 	return d
 }
 
@@ -292,7 +301,7 @@ func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time
 	if next, ok := d.reregisterNextAttempt[workspaceID]; ok && now.Before(next) {
 		return false
 	}
-	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && !last.Before(entryAt) {
+	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && last.After(entryAt) {
 		return false
 	}
 	d.reregisterNextAttempt[workspaceID] = now.Add(reregisterCoalesceWindow)
@@ -610,6 +619,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.heartbeatLoop(ctx)
 	go d.gcLoop(ctx)
+	go d.autoUpdateLoop(ctx)
 	go d.serveHealth(ctx, healthLn, time.Now())
 	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, auto-update, health)")
 	err = d.pollLoop(ctx, taskWakeups)
@@ -1571,32 +1581,18 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		"status": "running",
 	})
 
-	// Try Homebrew first, fall back to direct download.
-	var output string
-	if cli.IsBrewInstall() {
-		d.logger.Info("updating CLI via Homebrew...")
-		var err error
-		output, err = cli.UpdateViaBrew()
-		if err != nil {
-			d.logger.Error("CLI update failed", "error", err, "output", output)
-			d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-				"status": "failed",
-				"error":  fmt.Sprintf("brew upgrade failed: %v", err),
-			})
-			return
-		}
-	} else {
-		d.logger.Info("updating CLI via direct download...", "target_version", update.TargetVersion)
-		var err error
-		output, err = cli.UpdateViaDownload(update.TargetVersion)
-		if err != nil {
-			d.logger.Error("CLI update failed", "error", err)
-			d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-				"status": "failed",
-				"error":  fmt.Sprintf("download update failed: %v", err),
-			})
-			return
-		}
+	runUpdateFn := d.runUpdateFn
+	if runUpdateFn == nil {
+		runUpdateFn = d.runUpdate
+	}
+	output, err := runUpdateFn(update.TargetVersion)
+	if err != nil {
+		d.logger.Error("CLI update failed", "error", err, "output", output)
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
 	}
 
 	d.logger.Info("CLI update completed successfully", "output", output)
@@ -1607,6 +1603,25 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 
 	// Trigger daemon restart with the new binary.
 	d.triggerRestart()
+}
+
+// runUpdate executes the brew-or-download upgrade against targetVersion.
+func (d *Daemon) runUpdate(targetVersion string) (string, error) {
+	if cli.IsBrewInstall() {
+		d.logger.Info("updating CLI via Homebrew...")
+		out, err := cli.UpdateViaBrew()
+		if err != nil {
+			return out, fmt.Errorf("brew upgrade failed: %w", err)
+		}
+		return out, nil
+	}
+
+	d.logger.Info("updating CLI via direct download...", "target_version", targetVersion)
+	out, err := cli.UpdateViaDownload(targetVersion)
+	if err != nil {
+		return out, fmt.Errorf("download update failed: %w", err)
+	}
+	return out, nil
 }
 
 // updateReportBackoffs defines the retry schedule for delivering CLI update
@@ -1663,6 +1678,38 @@ func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, upd
 	}
 	d.logger.Error("CLI update report exhausted retries",
 		"runtime_id", runtimeID, "update_id", updateID, "error", lastErr)
+}
+
+func (d *Daemon) tryEnterClaim() bool {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	if d.pauseClaims {
+		return false
+	}
+	d.claimsInFlight++
+	return true
+}
+
+func (d *Daemon) exitClaim() {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	d.claimsInFlight--
+}
+
+func (d *Daemon) trySetClaimBarrier() bool {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	if d.claimsInFlight > 0 || d.activeTasks.Load() > 0 {
+		return false
+	}
+	d.pauseClaims = true
+	return true
+}
+
+func (d *Daemon) releaseClaimBarrier() {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	d.pauseClaims = false
 }
 
 // triggerRestart initiates a graceful daemon restart after a successful CLI update.
@@ -1840,8 +1887,17 @@ func (d *Daemon) runRuntimePoller(
 			continue
 		}
 
+		if !d.tryEnterClaim() {
+			sem <- slot
+			if err := sleepWithContextOrWakeup(pollerCtx, d.cfg.PollInterval, wakeup); err != nil {
+				return
+			}
+			continue
+		}
+
 		task, err := d.client.ClaimTask(pollerCtx, rid)
 		if err != nil {
+			d.exitClaim()
 			sem <- slot
 			if pollerCtx.Err() == nil {
 				if isRuntimeNotFoundError(err) {
@@ -1861,6 +1917,7 @@ func (d *Daemon) runRuntimePoller(
 		}
 
 		if task == nil {
+			d.exitClaim()
 			sem <- slot
 			if err := sleepWithContextOrWakeup(pollerCtx, d.cfg.PollInterval, wakeup); err != nil {
 				return
@@ -1877,6 +1934,7 @@ func (d *Daemon) runRuntimePoller(
 		d.activeTasks.Add(1)
 		go func(t Task, slot int) {
 			defer taskWG.Done()
+			defer d.exitClaim()
 			defer d.activeTasks.Add(-1)
 			defer func() { sem <- slot }()
 			d.handleTask(parentCtx, t, slot)

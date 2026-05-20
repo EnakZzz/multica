@@ -157,9 +157,9 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
 SELECT * FROM issue
 WHERE workspace_id = $1
   AND status NOT IN ('done', 'cancelled')
-  AND project_id IS NOT DISTINCT FROM $2::uuid
-  AND parent_issue_id IS NOT DISTINCT FROM $3::uuid
-  AND lower(btrim(regexp_replace(title, '[[:space:]]+', ' ', 'g'))) = $4
+  AND project_id IS NOT DISTINCT FROM sqlc.arg('project_id')::uuid
+  AND parent_issue_id IS NOT DISTINCT FROM sqlc.arg('parent_issue_id')::uuid
+  AND lower(btrim(regexp_replace(title, '[[:space:]]+', ' ', 'g'))) = sqlc.arg('normalized_title')
 ORDER BY created_at ASC
 LIMIT 1;
 

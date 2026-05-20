@@ -924,7 +924,7 @@ func importRepoContext(ctx context.Context, client *cli.APIClient, root string, 
 		})
 	}
 	if manifest != nil && len(manifest.Automations) > 0 {
-		items, err := importRepoProjectAutomations(ctx, client, manifest, importedByName, opts.RoleBindings)
+		items, err := importRepoProjectAutomations(ctx, client, strings.TrimSpace(opts.ProjectID), manifest, importedByName, opts.RoleBindings)
 		if err != nil {
 			return result, err
 		}
@@ -988,6 +988,7 @@ type repoProjectPipeline struct {
 type repoProjectAutomation struct {
 	Name         string `yaml:"name"`
 	Description  string `yaml:"description,omitempty"`
+	ProjectID    string `yaml:"project_id,omitempty"`
 	Pipeline     string `yaml:"pipeline"`
 	Cron         string `yaml:"cron,omitempty"`
 	Timezone     string `yaml:"timezone,omitempty"`
@@ -1275,7 +1276,7 @@ func repoResourceURL(resource map[string]any) string {
 	return strings.TrimSpace(strVal(ref, "url"))
 }
 
-func importRepoProjectAutomations(ctx context.Context, client *cli.APIClient, manifest *repoProjectManifest, importedPipelineIDs map[string]string, roleAgentIDs map[string]string) ([]repoContextSyncItem, error) {
+func importRepoProjectAutomations(ctx context.Context, client *cli.APIClient, defaultProjectID string, manifest *repoProjectManifest, importedPipelineIDs map[string]string, roleAgentIDs map[string]string) ([]repoContextSyncItem, error) {
 	items := make([]repoContextSyncItem, 0, len(manifest.Automations))
 	var existingByName map[string]string
 	loadExisting := func() error {
@@ -1320,18 +1321,26 @@ func importRepoProjectAutomations(ctx context.Context, client *cli.APIClient, ma
 		if status == "" {
 			status = "active"
 		}
+		projectID := strings.TrimSpace(automation.ProjectID)
+		if projectID == "" {
+			projectID = strings.TrimSpace(defaultProjectID)
+		}
 		if err := loadExisting(); err != nil {
 			return nil, err
 		}
 		if existingID := existingByName[strings.ToLower(name)]; existingID != "" {
-			var updated map[string]any
-			if err := client.PatchJSON(ctx, "/api/autopilots/"+existingID, map[string]any{
+			body := map[string]any{
 				"title":          name,
 				"description":    nullableString(description),
 				"assignee_id":    assigneeID,
 				"status":         status,
 				"execution_mode": "run_only",
-			}, &updated); err != nil {
+			}
+			if projectID != "" {
+				body["project_id"] = projectID
+			}
+			var updated map[string]any
+			if err := client.PatchJSON(ctx, "/api/autopilots/"+existingID, body, &updated); err != nil {
 				return nil, fmt.Errorf("update automation %q: %w", name, err)
 			}
 			items = append(items, repoContextSyncItem{
@@ -1347,6 +1356,9 @@ func importRepoProjectAutomations(ctx context.Context, client *cli.APIClient, ma
 			"description":    nullableString(description),
 			"assignee_id":    assigneeID,
 			"execution_mode": "run_only",
+		}
+		if projectID != "" {
+			body["project_id"] = projectID
 		}
 		var autopilot map[string]any
 		if err := client.PostJSON(ctx, "/api/autopilots", body, &autopilot); err != nil {

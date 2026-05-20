@@ -234,7 +234,7 @@ func openclawActiveConfigPath(bin string, timeout time.Duration) (string, bool, 
 		return "", false, fmt.Errorf("`openclaw config file` returned empty output")
 	}
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		home, herr := os.UserHomeDir()
+		home, herr := openclawHomeDir()
 		if herr != nil {
 			return "", false, fmt.Errorf("expand `~` in openclaw config path: %w", herr)
 		}
@@ -258,6 +258,13 @@ func openclawActiveConfigPath(bin string, timeout time.Duration) (string, bool, 
 		return "", false, fmt.Errorf("openclaw config path %s is a directory, not a file", path)
 	}
 	return path, true, nil
+}
+
+func openclawHomeDir() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home, nil
+	}
+	return os.UserHomeDir()
 }
 
 // openclawResolvedAgentsList fetches the user's resolved agents.list via

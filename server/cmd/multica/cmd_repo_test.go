@@ -580,6 +580,9 @@ automations:
 	if autopilotBody["execution_mode"] != "run_only" {
 		t.Fatalf("execution_mode = %#v, want run_only", autopilotBody["execution_mode"])
 	}
+	if autopilotBody["project_id"] != projectID {
+		t.Fatalf("project_id = %#v, want %s", autopilotBody["project_id"], projectID)
+	}
 	description, _ := autopilotBody["description"].(string)
 	if !strings.Contains(description, pipelineID) || !strings.Contains(description, "Run the scheduled flow.") {
 		t.Fatalf("automation description did not include prompt and pipeline id:\n%s", description)

@@ -650,4 +650,3 @@ func fetchSkillFromURL(client *http.Client, rawURL string) (*importedSkill, erro
 	}
 	return nil, fmt.Errorf("unknown import source for %s", rawURL)
 }
-

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +30,59 @@ type GitHubRelease struct {
 type GitHubReleaseAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+// IsReleaseVersion reports whether v looks like a tagged release version
+// (e.g. "0.1.13", "v0.1.13") rather than a dev build.
+func IsReleaseVersion(v string) bool {
+	_, ok := parseReleaseVersion(v)
+	return ok
+}
+
+// IsNewerVersion reports whether latest is strictly newer than current.
+func IsNewerVersion(latest, current string) bool {
+	l, ok := parseReleaseVersion(latest)
+	if !ok {
+		return false
+	}
+	c, ok := parseReleaseVersion(current)
+	if !ok {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if l[i] != c[i] {
+			return l[i] > c[i]
+		}
+	}
+	return false
+}
+
+func parseReleaseVersion(v string) ([3]int, bool) {
+	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	if s == "" {
+		return [3]int{}, false
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var out [3]int
+	for i, p := range parts {
+		if p == "" {
+			return [3]int{}, false
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return [3]int{}, false
+			}
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return [3]int{}, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 func releaseArchiveExtension(goos string) string {
