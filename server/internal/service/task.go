@@ -441,6 +441,10 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 // Unlike EnqueueTaskForIssue, this takes an explicit agent ID rather than
 // deriving it from the issue assignee.
 func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, false)
+}
+
+func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, forceFreshSession bool) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		slog.Error("mention task enqueue failed: agent not found", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -456,12 +460,13 @@ func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue,
 	}
 
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
-		AgentID:          agentID,
-		RuntimeID:        agent.RuntimeID,
-		IssueID:          issue.ID,
-		Priority:         priorityToInt(issue.Priority),
-		TriggerCommentID: triggerCommentID,
-		TriggerSummary:   s.buildCommentTriggerSummary(ctx, triggerCommentID),
+		AgentID:           agentID,
+		RuntimeID:         agent.RuntimeID,
+		IssueID:           issue.ID,
+		Priority:          priorityToInt(issue.Priority),
+		TriggerCommentID:  triggerCommentID,
+		TriggerSummary:    s.buildCommentTriggerSummary(ctx, triggerCommentID),
+		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -1260,8 +1265,22 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	return &child, nil
 }
 
-// RerunIssue creates a fresh queued task for the agent currently assigned
-// to the issue. Used by the manual rerun endpoint.
+// RerunIssue creates a fresh queued task for an agent on the issue. Used by
+// the manual rerun endpoint.
+//
+// Target agent resolution:
+//   - sourceTaskID Valid: rerun the agent that ran that task. This is what
+//     the execution log retry button uses
+//     so a per-row retry survives a subsequent assignee change and correctly
+//     re-fires the prior assignee or mention agent whose row was clicked. The
+//     source task's trigger_comment_id is also inherited (when the caller
+//     didn't pass one) so a per-row rerun of a comment- or mention-triggered
+//     task stays comment-triggered — the daemon's buildCommentPrompt path
+//     keys on TriggerCommentID, and losing it would degrade the rerun into
+//     a generic issue run that no longer carries the original comment.
+//   - sourceTaskID empty: fall back to the issue's current agent assignee.
+//     This preserves the CLI / API contract for callers
+//     that have an issue ID but no specific task to target.
 //
 // The new task is flagged force_fresh_session=true so the daemon starts a
 // clean agent session instead of resuming the prior (agent_id, issue_id)
@@ -1271,29 +1290,53 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 // MaybeRetryFailedTask → CreateRetryTask) does NOT take this path, so
 // MUL-1128's mid-flight resume contract is preserved.
 //
-// Only tasks belonging to the issue's current assignee are cancelled.
+// Only tasks belonging to the target agent on this issue are cancelled.
 // Tasks owned by other agents on the same issue (e.g. a parallel
 // @-mention agent) are left alone — rerun must not collateral-cancel
 // them.
-func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, triggerCommentID pgtype.UUID) (*db.AgentTaskQueue, error) {
+func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourceTaskID pgtype.UUID, triggerCommentID pgtype.UUID) (*db.AgentTaskQueue, error) {
 	issue, err := s.Queries.GetIssue(ctx, issueID)
 	if err != nil {
 		return nil, fmt.Errorf("load issue: %w", err)
 	}
-	if !issue.AssigneeID.Valid || issue.AssigneeType.String != "agent" {
-		return nil, fmt.Errorf("issue is not assigned to an agent")
+
+	// Determine the target agent for the rerun.
+	var agentID pgtype.UUID
+	if sourceTaskID.Valid {
+		sourceTask, err := s.Queries.GetAgentTask(ctx, sourceTaskID)
+		if err != nil {
+			return nil, fmt.Errorf("load source task: %w", err)
+		}
+		if !sourceTask.IssueID.Valid || util.UUIDToString(sourceTask.IssueID) != util.UUIDToString(issueID) {
+			return nil, fmt.Errorf("source task does not belong to this issue")
+		}
+		agentID = sourceTask.AgentID
+		// Inherit trigger provenance so a per-row rerun of a comment- or
+		// mention-triggered task stays a comment-triggered task. Without
+		// this the daemon's buildCommentPrompt path is skipped (it keys on
+		// TriggerCommentID) and the rerun degrades into a generic issue
+		// run that has lost the original comment context. Only override
+		// when the caller didn't pass one explicitly.
+		if !triggerCommentID.Valid && sourceTask.TriggerCommentID.Valid {
+			triggerCommentID = sourceTask.TriggerCommentID
+		}
+	} else {
+		if !issue.AssigneeID.Valid || issue.AssigneeType.String != "agent" {
+			return nil, fmt.Errorf("issue is not assigned to an agent")
+		}
+		agentID = issue.AssigneeID
 	}
 	// Cancel only the assignee's active/queued tasks on this issue. This
 	// covers both the unique-index conflict (queued/dispatched) and a
 	// stuck running task without touching other agents on the issue.
 	cancelled, err := s.Queries.CancelAgentTasksByIssueAndAgent(ctx, db.CancelAgentTasksByIssueAndAgentParams{
 		IssueID: issueID,
-		AgentID: issue.AssigneeID,
+		AgentID: agentID,
 	})
 	if err != nil {
 		slog.Warn("rerun: cancel prior tasks failed",
 			"issue_id", util.UUIDToString(issueID),
-			"agent_id", util.UUIDToString(issue.AssigneeID),
+			"agent_id", util.UUIDToString(agentID),
 			"error", err,
 		)
 	}
@@ -1303,17 +1346,32 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, trigg
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
 
-	task, err := s.enqueueIssueTask(ctx, issue, triggerCommentID, true)
+	task, err := s.enqueueRerunTask(ctx, issue, agentID, triggerCommentID)
 	if err != nil {
 		return nil, err
 	}
 	slog.Info("issue rerun enqueued",
 		"task_id", util.UUIDToString(task.ID),
 		"issue_id", util.UUIDToString(issueID),
-		"agent_id", util.UUIDToString(issue.AssigneeID),
+		"agent_id", util.UUIDToString(agentID),
+		"source_task_id", util.UUIDToString(sourceTaskID),
 		"cancelled_prior", len(cancelled),
 	)
 	return &task, nil
+}
+
+// enqueueRerunTask enqueues a fresh task for the given agent on the issue.
+// When the target agent is the issue's single-agent assignee we use the
+// assignee-driven path (enqueueIssueTask) so the issue-assignee bookkeeping
+// stays in sync; otherwise (prior assignee that has since been reassigned,
+// mention agent) we use the mention path with the same
+// force_fresh_session=true contract.
+func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
+	if issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid &&
+		util.UUIDToString(issue.AssigneeID) == util.UUIDToString(agentID) {
+		return s.enqueueIssueTask(ctx, issue, triggerCommentID, true)
+	}
+	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, true)
 }
 
 // HandleFailedTasks runs the post-failure side effects for a batch of
