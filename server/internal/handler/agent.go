@@ -27,29 +27,34 @@ import (
 // char_length and the front-end's String.prototype.length-with-counter UX.
 const maxAgentDescriptionLength = 255
 
+const (
+	internalPlannerAgentName = "规划Agent"
+)
+
 type AgentResponse struct {
-	ID                 string            `json:"id"`
-	WorkspaceID        string            `json:"workspace_id"`
-	RuntimeID          string            `json:"runtime_id"`
-	Name               string            `json:"name"`
-	Description        string            `json:"description"`
-	Instructions       string            `json:"instructions"`
-	AvatarURL          *string           `json:"avatar_url"`
-	RuntimeMode        string            `json:"runtime_mode"`
-	RuntimeConfig      any               `json:"runtime_config"`
-	CustomEnv          map[string]string `json:"custom_env"`
-	CustomArgs         []string          `json:"custom_args"`
-	McpConfig          json.RawMessage   `json:"mcp_config"`
-	CustomEnvRedacted  bool              `json:"custom_env_redacted"`
-	McpConfigRedacted  bool              `json:"mcp_config_redacted"`
-	Visibility         string            `json:"visibility"`
-	Status             string            `json:"status"`
-	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
-	Model              string            `json:"model"`
+	ID                 string              `json:"id"`
+	WorkspaceID        string              `json:"workspace_id"`
+	RuntimeID          string              `json:"runtime_id"`
+	Name               string              `json:"name"`
+	Description        string              `json:"description"`
+	Instructions       string              `json:"instructions"`
+	AvatarURL          *string             `json:"avatar_url"`
+	RuntimeMode        string              `json:"runtime_mode"`
+	RuntimeConfig      any                 `json:"runtime_config"`
+	CustomEnv          map[string]string   `json:"custom_env"`
+	CustomArgs         []string            `json:"custom_args"`
+	McpConfig          json.RawMessage     `json:"mcp_config"`
+	CustomEnvRedacted  bool                `json:"custom_env_redacted"`
+	McpConfigRedacted  bool                `json:"mcp_config_redacted"`
+	Visibility         string              `json:"visibility"`
+	Status             string              `json:"status"`
+	MaxConcurrentTasks int32               `json:"max_concurrent_tasks"`
+	Model              string              `json:"model"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
 	// for this agent (empty = use runtime default). The picker is per-runtime
 	// per-model; the API never normalizes across providers. See MUL-2339.
 	ThinkingLevel string              `json:"thinking_level"`
+	IsInternal    bool                `json:"is_internal"`
 	OwnerID       *string             `json:"owner_id"`
 	Skills        []AgentSkillSummary `json:"skills"`
 	CreatedAt     string              `json:"created_at"`
@@ -110,6 +115,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		MaxConcurrentTasks: a.MaxConcurrentTasks,
 		Model:              a.Model.String,
 		ThinkingLevel:      a.ThinkingLevel.String,
+		IsInternal:         a.IsInternal,
 		OwnerID:            uuidToPtr(a.OwnerID),
 		Skills:             []AgentSkillSummary{},
 		CreatedAt:          timestampToString(a.CreatedAt),
@@ -140,59 +146,73 @@ type ProjectResourceData struct {
 }
 
 type AgentTaskResponse struct {
-	ID                      string                `json:"id"`
-	AgentID                 string                `json:"agent_id"`
-	RuntimeID               string                `json:"runtime_id"`
-	IssueID                 string                `json:"issue_id"`
-	IssueIdentifier         string                `json:"issue_identifier,omitempty"`
-	WorkspaceID             string                `json:"workspace_id"`
-	Status                  string                `json:"status"`
-	Priority                int32                 `json:"priority"`
-	DispatchedAt            *string               `json:"dispatched_at"`
-	StartedAt               *string               `json:"started_at"`
-	CompletedAt             *string               `json:"completed_at"`
-	Result                  any                   `json:"result"`
-	Error                   *string               `json:"error"`
-	FailureReason           string                `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
-	Attempt                 int32                 `json:"attempt"`
-	MaxAttempts             int32                 `json:"max_attempts"`
-	ParentTaskID            *string               `json:"parent_task_id,omitempty"`
-	Agent                   *TaskAgentData        `json:"agent,omitempty"`
-	Repos                   []RepoData            `json:"repos,omitempty"`
-	ProjectID               string                `json:"project_id,omitempty"`        // issue's project, when present
-	ProjectTitle            string                `json:"project_title,omitempty"`     // for surfacing in agent context
-	ProjectResources        []ProjectResourceData `json:"project_resources,omitempty"` // resources attached to the project
-	CreatedAt               string                `json:"created_at"`
-	PriorSessionID          string                `json:"prior_session_id,omitempty"`          // session ID from a previous task on same issue
-	PriorWorkDir            string                `json:"prior_work_dir,omitempty"`            // work_dir from a previous task on same issue
-	WorkDir                 string                `json:"work_dir,omitempty"`                  // local working directory pinned for this task; populated once the daemon reports it
-	TriggerCommentID        *string               `json:"trigger_comment_id,omitempty"`        // comment that triggered this task
-	TriggerCommentContent   string                `json:"trigger_comment_content,omitempty"`   // content of the triggering comment
-	TriggerSummary          *string               `json:"trigger_summary,omitempty"`           // canonical short description snapshot — comment text / autopilot title — taken at task creation; survives source edits/deletes
-	TriggerAuthorType       string                `json:"trigger_author_type,omitempty"`       // "agent" or "member" — author kind of the triggering comment
-	TriggerAuthorName       string                `json:"trigger_author_name,omitempty"`       // display name of the triggering comment author
-	ChatSessionID           string                `json:"chat_session_id,omitempty"`           // non-empty for chat tasks
-	ChatMessage             string                `json:"chat_message,omitempty"`              // user message for chat tasks
-	ChatMessageAttachments  []ChatAttachmentMeta  `json:"chat_message_attachments,omitempty"`  // attachments on the user message — agent calls `multica attachment download <id>` per entry
-	AutopilotRunID          string                `json:"autopilot_run_id,omitempty"`          // non-empty for autopilot-spawned tasks
-	AutopilotID             string                `json:"autopilot_id,omitempty"`              // autopilot that spawned this task
-	AutopilotTitle          string                `json:"autopilot_title,omitempty"`           // autopilot title used as task context
-	AutopilotDescription    string                `json:"autopilot_description,omitempty"`     // autopilot description used as task prompt
-	AutopilotSource         string                `json:"autopilot_source,omitempty"`          // manual, schedule, webhook, or api
-	AutopilotTriggerPayload json.RawMessage       `json:"autopilot_trigger_payload,omitempty"` // optional trigger payload for webhook/api runs
-	QuickCreatePrompt       string                `json:"quick_create_prompt,omitempty"`       // user's natural-language input for quick-create tasks
+	ID                        string                `json:"id"`
+	AgentID                   string                `json:"agent_id"`
+	RuntimeID                 string                `json:"runtime_id"`
+	IssueID                   string                `json:"issue_id"`
+	IssueIdentifier           string                `json:"issue_identifier,omitempty"`
+	PlanItemID                string                `json:"plan_item_id,omitempty"`
+	PlanItemNodeType          string                `json:"plan_item_node_type,omitempty"`
+	PlanItemExecutionKind     string                `json:"plan_item_execution_kind,omitempty"`
+	PlanItemRequiresGitCommit bool                  `json:"plan_item_requires_git_commit,omitempty"`
+	PlanItemBranchName        string                `json:"plan_item_branch_name,omitempty"`
+	RepoCheckoutRef           string                `json:"repo_checkout_ref,omitempty"`
+	PublishBranchName         string                `json:"publish_branch_name,omitempty"`
+	ReviewTargetIssueID       string                `json:"review_target_issue_id,omitempty"`
+	ReviewTargetIdentifier    string                `json:"review_target_identifier,omitempty"`
+	ReviewTargetBranchName    string                `json:"review_target_branch_name,omitempty"`
+	ReviewTargetCommitSHA     string                `json:"review_target_commit_sha,omitempty"`
+	WorkspaceID               string                `json:"workspace_id"`
+	Status                    string                `json:"status"`
+	Priority                  int32                 `json:"priority"`
+	DispatchedAt              *string               `json:"dispatched_at"`
+	StartedAt                 *string               `json:"started_at"`
+	CompletedAt               *string               `json:"completed_at"`
+	Result                    any                   `json:"result"`
+	Error                     *string               `json:"error"`
+	FailureReason             string                `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
+	Attempt                   int32                 `json:"attempt"`
+	MaxAttempts               int32                 `json:"max_attempts"`
+	ParentTaskID              *string               `json:"parent_task_id,omitempty"`
+	Agent                     *TaskAgentData        `json:"agent,omitempty"`
+	Repos                     []RepoData            `json:"repos,omitempty"`
+	ProjectID                 string                `json:"project_id,omitempty"`        // issue's project, when present
+	ProjectTitle              string                `json:"project_title,omitempty"`     // for surfacing in agent context
+	ProjectResources          []ProjectResourceData `json:"project_resources,omitempty"` // resources attached to the project
+	CreatedAt                 string                `json:"created_at"`
+	PriorSessionID            string                `json:"prior_session_id,omitempty"`          // session ID from a previous task on same issue
+	PriorWorkDir              string                `json:"prior_work_dir,omitempty"`            // work_dir from a previous task on same issue
+	WorkDir                   string                `json:"work_dir,omitempty"`                  // local working directory pinned for this task; populated once the daemon reports it
+	TriggerCommentID          *string               `json:"trigger_comment_id,omitempty"`        // comment that triggered this task
+	TriggerCommentContent     string                `json:"trigger_comment_content,omitempty"`   // content of the triggering comment
+	TriggerSummary            *string               `json:"trigger_summary,omitempty"`           // canonical short description snapshot — comment text / autopilot title — taken at task creation; survives source edits/deletes
+	TriggerAuthorType         string                `json:"trigger_author_type,omitempty"`       // "agent" or "member" — author kind of the triggering comment
+	TriggerAuthorName         string                `json:"trigger_author_name,omitempty"`       // display name of the triggering comment author
+	ChatSessionID             string                `json:"chat_session_id,omitempty"`           // non-empty for chat tasks
+	ChatMessage               string                `json:"chat_message,omitempty"`              // user message for chat tasks
+	ChatMessageAttachments    []ChatAttachmentMeta  `json:"chat_message_attachments,omitempty"`  // attachments on the user message — agent calls `multica attachment download <id>` per entry
+	AutopilotRunID            string                `json:"autopilot_run_id,omitempty"`          // non-empty for autopilot-spawned tasks
+	AutopilotID               string                `json:"autopilot_id,omitempty"`              // autopilot that spawned this task
+	AutopilotTitle            string                `json:"autopilot_title,omitempty"`           // autopilot title used as task context
+	AutopilotDescription      string                `json:"autopilot_description,omitempty"`     // autopilot description used as task prompt
+	AutopilotSource           string                `json:"autopilot_source,omitempty"`          // manual, schedule, webhook, or api
+	AutopilotTriggerPayload   json.RawMessage       `json:"autopilot_trigger_payload,omitempty"` // optional trigger payload for webhook/api runs
+	QuickCreatePrompt         string                `json:"quick_create_prompt,omitempty"`       // user's natural-language input for quick-create tasks
 	// RequestingUserName + RequestingUserProfileDescription mirror the user
 	// the agent is acting on behalf of (see daemon/types.go). v1 sources them
 	// from the runtime owner so they're populated for daemon runtimes and
 	// empty otherwise. The daemon emits both into the brief under
 	// `## Requesting User`; the heading is skipped entirely when description
 	// is empty.
-	RequestingUserName               string          `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string          `json:"requesting_user_profile_description,omitempty"`
-	IssuePlanPrompt                  string          `json:"issue_plan_prompt,omitempty"` // user's natural-language input for plan tasks
-	IssuePlanID                      string          `json:"issue_plan_id,omitempty"`     // plan row receiving structured output
-	AvailableAgents                  []PlanAgentData `json:"available_agents,omitempty"`  // assignable agents planner may recommend
-	Kind                             string          `json:"kind"`                        // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+	RequestingUserName               string             `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string             `json:"requesting_user_profile_description,omitempty"`
+	IssuePlanPrompt                  string             `json:"issue_plan_prompt,omitempty"`   // user's natural-language input for plan tasks
+	IssuePlanID                      string             `json:"issue_plan_id,omitempty"`       // plan row receiving structured output
+	IssuePlanPhase                   string             `json:"issue_plan_phase,omitempty"`    // spec or items for two-stage planning
+	IssuePlanSpec                    service.PlanSpec   `json:"issue_plan_spec,omitempty"`     // approved spec for item-generation tasks
+	AvailableAgents                  []PlanAgentData    `json:"available_agents,omitempty"`    // assignable agents planner may recommend
+	AvailablePipelines               []PlanPipelineData `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
+	Kind                             string             `json:"kind"`                          // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
 }
 
 type PlanAgentData struct {
@@ -201,6 +221,26 @@ type PlanAgentData struct {
 	Description  string   `json:"description"`
 	Instructions string   `json:"instructions,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
+}
+
+type PlanPipelineData struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	IsSystem    bool                   `json:"is_system,omitempty"`
+	SystemKey   string                 `json:"system_key,omitempty"`
+	ReadOnly    bool                   `json:"read_only,omitempty"`
+	Nodes       []PlanPipelineNodeData `json:"nodes,omitempty"`
+}
+
+type PlanPipelineNodeData struct {
+	Key               string   `json:"key"`
+	Type              string   `json:"type"`
+	Title             string   `json:"title"`
+	Description       string   `json:"description"`
+	AgentID           string   `json:"agent_id,omitempty"`
+	Repos             []string `json:"repos,omitempty"`
+	DependsOnNodeKeys []string `json:"depends_on_node_keys,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in
@@ -569,6 +609,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		McpConfig:          mc,
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
 		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
+		IsInternal:         false,
 	})
 	if err != nil {
 		// Unique constraint on (workspace_id, name) — return a clear conflict error
@@ -665,6 +706,10 @@ func redactMcpConfig(resp *AgentResponse) {
 // Only the agent owner or workspace owner/admin can manage any agent,
 // regardless of whether it is public or private.
 func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent db.Agent) bool {
+	if agent.IsInternal {
+		writeError(w, http.StatusForbidden, "internal agents are managed by Multica")
+		return false
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {

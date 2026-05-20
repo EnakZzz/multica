@@ -15,7 +15,7 @@ const archivePipeline = `-- name: ArchivePipeline :one
 UPDATE pipeline
 SET archived_at = now(), updated_at = now()
 WHERE id = $1 AND archived_at IS NULL
-RETURNING id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at
+RETURNING id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at, is_system, system_key
 `
 
 func (q *Queries) ArchivePipeline(ctx context.Context, id pgtype.UUID) (Pipeline, error) {
@@ -31,6 +31,8 @@ func (q *Queries) ArchivePipeline(ctx context.Context, id pgtype.UUID) (Pipeline
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsSystem,
+		&i.SystemKey,
 	)
 	return i, err
 }
@@ -40,7 +42,7 @@ INSERT INTO pipeline (
     workspace_id, name, description, default_project_id, created_by
 ) VALUES (
     $1, $2, $3, $5, $4
-) RETURNING id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at
+) RETURNING id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at, is_system, system_key
 `
 
 type CreatePipelineParams struct {
@@ -70,6 +72,8 @@ func (q *Queries) CreatePipeline(ctx context.Context, arg CreatePipelineParams) 
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsSystem,
+		&i.SystemKey,
 	)
 	return i, err
 }
@@ -196,8 +200,8 @@ const createPipelineStage = `-- name: CreatePipelineStage :one
 INSERT INTO pipeline_stage (
     pipeline_id, key, title, description, role_key, node_type, agent_id, depends_on_stage_keys, position, position_x, position_y, repo_keys
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $11, $7, $8, $9, $10, $12
-) RETURNING id, pipeline_id, key, title, description, role_key, node_type, agent_id, depends_on_stage_keys, position, position_x, position_y, repo_keys, created_at, updated_at
+    $1, $2, $3, $4, $5, $6, $12, $7, $8, $9, $10, $11
+) RETURNING id, pipeline_id, key, title, description, role_key, depends_on_stage_keys, position, created_at, updated_at, node_type, agent_id, position_x, position_y, repo_keys
 `
 
 type CreatePipelineStageParams struct {
@@ -207,12 +211,12 @@ type CreatePipelineStageParams struct {
 	Description        string      `json:"description"`
 	RoleKey            string      `json:"role_key"`
 	NodeType           string      `json:"node_type"`
-	AgentID            pgtype.UUID `json:"agent_id"`
 	DependsOnStageKeys []string    `json:"depends_on_stage_keys"`
 	Position           int32       `json:"position"`
 	PositionX          int32       `json:"position_x"`
 	PositionY          int32       `json:"position_y"`
 	RepoKeys           []string    `json:"repo_keys"`
+	AgentID            pgtype.UUID `json:"agent_id"`
 }
 
 func (q *Queries) CreatePipelineStage(ctx context.Context, arg CreatePipelineStageParams) (PipelineStage, error) {
@@ -227,8 +231,8 @@ func (q *Queries) CreatePipelineStage(ctx context.Context, arg CreatePipelineSta
 		arg.Position,
 		arg.PositionX,
 		arg.PositionY,
-		arg.AgentID,
 		arg.RepoKeys,
+		arg.AgentID,
 	)
 	var i PipelineStage
 	err := row.Scan(
@@ -238,15 +242,58 @@ func (q *Queries) CreatePipelineStage(ctx context.Context, arg CreatePipelineSta
 		&i.Title,
 		&i.Description,
 		&i.RoleKey,
-		&i.NodeType,
-		&i.AgentID,
 		&i.DependsOnStageKeys,
 		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.NodeType,
+		&i.AgentID,
 		&i.PositionX,
 		&i.PositionY,
 		&i.RepoKeys,
+	)
+	return i, err
+}
+
+const createSystemPipeline = `-- name: CreateSystemPipeline :one
+INSERT INTO pipeline (
+    workspace_id, name, description, default_project_id, created_by, is_system, system_key
+) VALUES (
+    $1, $2, $3, $6, $4, true, $5
+) RETURNING id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at, is_system, system_key
+`
+
+type CreateSystemPipelineParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	Name             string      `json:"name"`
+	Description      string      `json:"description"`
+	CreatedBy        pgtype.UUID `json:"created_by"`
+	SystemKey        pgtype.Text `json:"system_key"`
+	DefaultProjectID pgtype.UUID `json:"default_project_id"`
+}
+
+func (q *Queries) CreateSystemPipeline(ctx context.Context, arg CreateSystemPipelineParams) (Pipeline, error) {
+	row := q.db.QueryRow(ctx, createSystemPipeline,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.Description,
+		arg.CreatedBy,
+		arg.SystemKey,
+		arg.DefaultProjectID,
+	)
+	var i Pipeline
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Description,
+		&i.DefaultProjectID,
+		&i.CreatedBy,
+		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsSystem,
+		&i.SystemKey,
 	)
 	return i, err
 }
@@ -270,7 +317,7 @@ func (q *Queries) DeletePipelineStages(ctx context.Context, pipelineID pgtype.UU
 }
 
 const getPipelineInWorkspace = `-- name: GetPipelineInWorkspace :one
-SELECT id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at FROM pipeline
+SELECT id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at, is_system, system_key FROM pipeline
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -292,6 +339,77 @@ func (q *Queries) GetPipelineInWorkspace(ctx context.Context, arg GetPipelineInW
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsSystem,
+		&i.SystemKey,
+	)
+	return i, err
+}
+
+const getPipelineRunStageForIssue = `-- name: GetPipelineRunStageForIssue :one
+SELECT
+    prs.id,
+    prs.pipeline_run_id,
+    prs.pipeline_stage_id,
+    prs.stage_key,
+    prs.issue_id,
+    prs.created_at,
+    ps.node_type
+FROM pipeline_run_stage prs
+JOIN pipeline_stage ps ON ps.id = prs.pipeline_stage_id
+WHERE prs.issue_id = $1
+LIMIT 1
+`
+
+type GetPipelineRunStageForIssueRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	PipelineRunID   pgtype.UUID        `json:"pipeline_run_id"`
+	PipelineStageID pgtype.UUID        `json:"pipeline_stage_id"`
+	StageKey        string             `json:"stage_key"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	NodeType        string             `json:"node_type"`
+}
+
+func (q *Queries) GetPipelineRunStageForIssue(ctx context.Context, issueID pgtype.UUID) (GetPipelineRunStageForIssueRow, error) {
+	row := q.db.QueryRow(ctx, getPipelineRunStageForIssue, issueID)
+	var i GetPipelineRunStageForIssueRow
+	err := row.Scan(
+		&i.ID,
+		&i.PipelineRunID,
+		&i.PipelineStageID,
+		&i.StageKey,
+		&i.IssueID,
+		&i.CreatedAt,
+		&i.NodeType,
+	)
+	return i, err
+}
+
+const getSystemPipelineByKey = `-- name: GetSystemPipelineByKey :one
+SELECT id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at, is_system, system_key FROM pipeline
+WHERE workspace_id = $1 AND system_key = $2 AND is_system = true
+`
+
+type GetSystemPipelineByKeyParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SystemKey   pgtype.Text `json:"system_key"`
+}
+
+func (q *Queries) GetSystemPipelineByKey(ctx context.Context, arg GetSystemPipelineByKeyParams) (Pipeline, error) {
+	row := q.db.QueryRow(ctx, getSystemPipelineByKey, arg.WorkspaceID, arg.SystemKey)
+	var i Pipeline
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Description,
+		&i.DefaultProjectID,
+		&i.CreatedBy,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IsSystem,
+		&i.SystemKey,
 	)
 	return i, err
 }
@@ -367,7 +485,7 @@ func (q *Queries) ListPipelineRunStages(ctx context.Context, pipelineRunID pgtyp
 }
 
 const listPipelineStages = `-- name: ListPipelineStages :many
-SELECT id, pipeline_id, key, title, description, role_key, node_type, agent_id, depends_on_stage_keys, position, position_x, position_y, repo_keys, created_at, updated_at FROM pipeline_stage
+SELECT id, pipeline_id, key, title, description, role_key, depends_on_stage_keys, position, created_at, updated_at, node_type, agent_id, position_x, position_y, repo_keys FROM pipeline_stage
 WHERE pipeline_id = $1
 ORDER BY position ASC, created_at ASC
 `
@@ -388,15 +506,15 @@ func (q *Queries) ListPipelineStages(ctx context.Context, pipelineID pgtype.UUID
 			&i.Title,
 			&i.Description,
 			&i.RoleKey,
-			&i.NodeType,
-			&i.AgentID,
 			&i.DependsOnStageKeys,
 			&i.Position,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.NodeType,
+			&i.AgentID,
 			&i.PositionX,
 			&i.PositionY,
 			&i.RepoKeys,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -409,9 +527,9 @@ func (q *Queries) ListPipelineStages(ctx context.Context, pipelineID pgtype.UUID
 }
 
 const listPipelines = `-- name: ListPipelines :many
-SELECT id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at FROM pipeline
+SELECT id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at, is_system, system_key FROM pipeline
 WHERE workspace_id = $1 AND archived_at IS NULL
-ORDER BY created_at DESC
+ORDER BY is_system DESC, created_at DESC
 `
 
 func (q *Queries) ListPipelines(ctx context.Context, workspaceID pgtype.UUID) ([]Pipeline, error) {
@@ -433,6 +551,8 @@ func (q *Queries) ListPipelines(ctx context.Context, workspaceID pgtype.UUID) ([
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IsSystem,
+			&i.SystemKey,
 		); err != nil {
 			return nil, err
 		}
@@ -451,7 +571,7 @@ UPDATE pipeline SET
     default_project_id = $4,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at
+RETURNING id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at, is_system, system_key
 `
 
 type UpdatePipelineParams struct {
@@ -479,6 +599,43 @@ func (q *Queries) UpdatePipeline(ctx context.Context, arg UpdatePipelineParams) 
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsSystem,
+		&i.SystemKey,
+	)
+	return i, err
+}
+
+const updateSystemPipelineMetadata = `-- name: UpdateSystemPipelineMetadata :one
+UPDATE pipeline SET
+    name = $2,
+    description = $3,
+    archived_at = NULL,
+    updated_at = now()
+WHERE id = $1 AND is_system = true
+RETURNING id, workspace_id, name, description, default_project_id, created_by, archived_at, created_at, updated_at, is_system, system_key
+`
+
+type UpdateSystemPipelineMetadataParams struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+}
+
+func (q *Queries) UpdateSystemPipelineMetadata(ctx context.Context, arg UpdateSystemPipelineMetadataParams) (Pipeline, error) {
+	row := q.db.QueryRow(ctx, updateSystemPipelineMetadata, arg.ID, arg.Name, arg.Description)
+	var i Pipeline
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Description,
+		&i.DefaultProjectID,
+		&i.CreatedBy,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IsSystem,
+		&i.SystemKey,
 	)
 	return i, err
 }

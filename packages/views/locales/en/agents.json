@@ -58,6 +58,7 @@
   },
   "row": {
     "you": "You",
+    "built_in": "Built-in",
     "archived": "Archived",
     "no_description": "No description",
     "fallback_runtime_cloud": "Cloud",

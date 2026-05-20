@@ -16,12 +16,48 @@ WHERE id = $1;
 SELECT * FROM agent
 WHERE id = $1 AND workspace_id = $2;
 
+-- name: GetInternalPlannerAgent :one
+SELECT * FROM agent
+WHERE workspace_id = $1 AND name = '规划Agent' AND is_internal = TRUE
+LIMIT 1;
+
 -- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, runtime_mode,
     runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    instructions, custom_env, custom_args, mcp_config, model, thinking_level
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+RETURNING *;
+
+-- name: UpsertInternalPlannerAgent :one
+INSERT INTO agent (
+    workspace_id, name, description, avatar_url, runtime_mode,
+    runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal
+) VALUES (
+    $1, '规划Agent', $2, NULL, $3,
+    '{}'::jsonb, $4, 'workspace', 1, NULL,
+    $5, '{}'::jsonb, '[]'::jsonb, NULL, sqlc.narg('model'), NULL, TRUE
+)
+ON CONFLICT (workspace_id, name) DO UPDATE SET
+    description = EXCLUDED.description,
+    avatar_url = EXCLUDED.avatar_url,
+    runtime_config = EXCLUDED.runtime_config,
+    runtime_mode = EXCLUDED.runtime_mode,
+    runtime_id = EXCLUDED.runtime_id,
+    visibility = 'workspace',
+    status = 'idle',
+    max_concurrent_tasks = 1,
+    owner_id = NULL,
+    instructions = EXCLUDED.instructions,
+    custom_env = EXCLUDED.custom_env,
+    custom_args = EXCLUDED.custom_args,
+    mcp_config = EXCLUDED.mcp_config,
+    model = EXCLUDED.model,
+    archived_at = NULL,
+    archived_by = NULL,
+    is_internal = TRUE,
+    updated_at = now()
 RETURNING *;
 
 -- name: UpdateAgent :one

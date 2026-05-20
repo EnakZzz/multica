@@ -503,6 +503,48 @@ func TestCreateWorktree(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeUsesPlannedBranchName(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cacheRoot := t.TempDir()
+
+	cache := New(cacheRoot, testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID:     "ws-1",
+		RepoURL:         sourceRepo,
+		WorkDir:         t.TempDir(),
+		BranchName:      "feature/backend-plan-branch-contract",
+		AgentName:       "Backend Engineer",
+		IssueIdentifier: "LOC-5",
+		TaskID:          "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree failed: %v", err)
+	}
+	if result.BranchName != "feature/backend-plan-branch-contract" {
+		t.Fatalf("branch = %q, want planned feature branch", result.BranchName)
+	}
+}
+
+func TestNormalizePlannedBranchName(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"feature/API Auth Flow": "feature/api-auth-flow",
+		"backend-auth-flow":     "feature/backend-auth-flow",
+		"main":                  "feature/main",
+		"refs/heads/main":       "feature/refs-heads-main",
+	}
+	for input, want := range tests {
+		if got := normalizePlannedBranchName(input); got != want {
+			t.Fatalf("normalizePlannedBranchName(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestCreateWorktreeExcludesOpenCodeSkills(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)

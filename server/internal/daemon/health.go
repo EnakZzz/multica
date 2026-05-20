@@ -51,6 +51,7 @@ type repoCheckoutRequest struct {
 	Ref             string `json:"ref,omitempty"`
 	AgentName       string `json:"agent_name"`
 	IssueIdentifier string `json:"issue_identifier,omitempty"`
+	BranchName      string `json:"branch_name,omitempty"`
 	TaskID          string `json:"task_id"`
 }
 
@@ -166,6 +167,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			Ref:                 req.Ref,
 			AgentName:           req.AgentName,
 			IssueIdentifier:     req.IssueIdentifier,
+			BranchName:          req.BranchName,
 			TaskID:              req.TaskID,
 			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
 		})

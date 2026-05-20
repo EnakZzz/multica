@@ -35,6 +35,12 @@ pipelines:
       agent-review: reviewer
       merge-main: developer
       deploy-update: deployer
+  - path: pipelines/review-gated-feature-development.yaml
+    role_bindings:
+      prepare-branch: developer
+      implement-feature: developer
+      spec-compliance-review: reviewer
+      code-quality-review: reviewer
   - path: pipelines/upstream-sync-watch.yaml
     role_bindings:
       fetch-upstream: upstream_analyst

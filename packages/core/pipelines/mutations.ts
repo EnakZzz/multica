@@ -3,6 +3,7 @@ import { api } from "../api";
 import { issueKeys } from "../issues/queries";
 import type {
   CreatePipelineRequest,
+  DuplicatePipelineRequest,
   ImportPipelineYamlRequest,
   RunPipelineRequest,
   UpdatePipelineRequest,
@@ -38,6 +39,17 @@ export function useDeletePipeline(wsId: string, pipelineId: string) {
     onSuccess: () => {
       qc.removeQueries({ queryKey: pipelineKeys.detail(wsId, pipelineId) });
       qc.invalidateQueries({ queryKey: pipelineKeys.list(wsId) });
+    },
+  });
+}
+
+export function useDuplicatePipeline(wsId: string, pipelineId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data?: DuplicatePipelineRequest) => api.duplicatePipeline(pipelineId, data ?? {}),
+    onSuccess: (pipeline) => {
+      qc.invalidateQueries({ queryKey: pipelineKeys.list(wsId) });
+      qc.setQueryData(pipelineKeys.detail(wsId, pipeline.id), pipeline);
     },
   });
 }

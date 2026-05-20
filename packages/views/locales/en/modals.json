@@ -131,6 +131,8 @@
       "sent_count": "{{count}} sent",
       "version_blocked_tooltip": "Daemon CLI must be ≥ {{min}}",
       "toast_sent": "Sent to agent — you'll get an inbox notification when it's done",
+      "toast_plan_created": "Created in Plans",
+      "open_plan": "Open Plan",
       "error_agent_unavailable_fallback": "Agent is unavailable. Pick another agent.",
       "error_daemon_version": "This agent's daemon CLI ({{current}}) is below the required {{min}}. Upgrade the daemon to use Create with agent.",
       "error_unknown": "Failed to submit. Try again."

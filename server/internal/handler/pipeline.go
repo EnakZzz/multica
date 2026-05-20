@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -20,6 +21,10 @@ type PipelineResponse struct {
 	WorkspaceID string                 `json:"workspace_id"`
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
+	IsSystem    bool                   `json:"is_system"`
+	SystemKey   *string                `json:"system_key"`
+	Editable    bool                   `json:"editable"`
+	Deletable   bool                   `json:"deletable"`
 	CreatedBy   string                 `json:"created_by"`
 	ArchivedAt  *string                `json:"archived_at"`
 	CreatedAt   string                 `json:"created_at"`
@@ -101,6 +106,10 @@ type runPipelineRequest struct {
 	ProjectID *string `json:"project_id"`
 }
 
+type duplicatePipelineRequest struct {
+	Name *string `json:"name"`
+}
+
 type importPipelineYAMLRequest struct {
 	Content    string  `json:"content"`
 	PipelineID *string `json:"pipeline_id"`
@@ -161,6 +170,10 @@ func pipelineToResponse(p db.Pipeline, nodes []db.PipelineStage) PipelineRespons
 		WorkspaceID: uuidToString(p.WorkspaceID),
 		Name:        p.Name,
 		Description: p.Description,
+		IsSystem:    p.IsSystem,
+		SystemKey:   textToPtr(p.SystemKey),
+		Editable:    !p.IsSystem,
+		Deletable:   !p.IsSystem,
 		CreatedBy:   uuidToString(p.CreatedBy),
 		ArchivedAt:  timestampToPtr(p.ArchivedAt),
 		CreatedAt:   timestampToString(p.CreatedAt),
@@ -220,7 +233,16 @@ func pipelineRunToResponse(run db.PipelineRun, stages []db.PipelineRunStage) Pip
 }
 
 func (h *Handler) ListPipelines(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
 	wsID := middleware.WorkspaceIDFromContext(r.Context())
+	if err := h.ensureSystemPipelines(r.Context(), parseUUID(wsID), parseUUID(userID)); err != nil {
+		slog.Error("failed to ensure system pipelines", "workspace_id", wsID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to ensure system pipelines")
+		return
+	}
 	pipelines, err := h.Queries.ListPipelines(r.Context(), parseUUID(wsID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list pipelines")
@@ -315,6 +337,10 @@ func (h *Handler) ImportPipelineYAML(w http.ResponseWriter, r *http.Request) {
 		}
 		if existing.ArchivedAt.Valid {
 			writeError(w, http.StatusBadRequest, "archived pipelines cannot be imported into")
+			return
+		}
+		if existing.IsSystem {
+			writeError(w, http.StatusForbidden, "built-in pipelines cannot be imported into")
 			return
 		}
 		pipeline, err = qtx.UpdatePipeline(r.Context(), db.UpdatePipelineParams{
@@ -426,6 +452,10 @@ func (h *Handler) UpdatePipeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "archived pipelines cannot be updated")
 		return
 	}
+	if pipeline.IsSystem {
+		writeError(w, http.StatusForbidden, "built-in pipelines cannot be updated")
+		return
+	}
 	var req updatePipelineRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -483,6 +513,10 @@ func (h *Handler) DeletePipeline(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if pipeline.IsSystem {
+		writeError(w, http.StatusForbidden, "built-in pipelines cannot be archived")
+		return
+	}
 	if _, err := h.Queries.ArchivePipeline(r.Context(), pipeline.ID); err != nil {
 		if isNotFound(err) {
 			w.WriteHeader(http.StatusNoContent)
@@ -492,6 +526,75 @@ func (h *Handler) DeletePipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) DuplicatePipeline(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	source, ok := h.loadPipeline(w, r)
+	if !ok {
+		return
+	}
+	if source.ArchivedAt.Valid {
+		writeError(w, http.StatusBadRequest, "archived pipelines cannot be duplicated")
+		return
+	}
+	var req duplicatePipelineRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	sourceNodes, err := h.Queries.ListPipelineStages(r.Context(), source.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list pipeline nodes")
+		return
+	}
+	if len(sourceNodes) == 0 {
+		writeError(w, http.StatusBadRequest, "pipeline must have at least one node")
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	name := strings.TrimSpace(source.Name + " Copy")
+	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
+		name = strings.TrimSpace(*req.Name)
+	}
+	name, err = h.uniquePipelineName(r.Context(), qtx, source.WorkspaceID, name, pgtype.UUID{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to choose pipeline name")
+		return
+	}
+	created, err := qtx.CreatePipeline(r.Context(), db.CreatePipelineParams{
+		WorkspaceID:      source.WorkspaceID,
+		Name:             name,
+		Description:      source.Description,
+		DefaultProjectID: pgtype.UUID{},
+		CreatedBy:        parseUUID(userID),
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "pipeline name already exists")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to duplicate pipeline")
+		return
+	}
+	copiedNodes, err := h.copyPipelineStages(r.Context(), qtx, created.ID, sourceNodes)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to duplicate pipeline nodes")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit pipeline duplicate")
+		return
+	}
+	writeJSON(w, http.StatusCreated, pipelineToResponse(created, copiedNodes))
 }
 
 func (h *Handler) RunPipeline(w http.ResponseWriter, r *http.Request) {
@@ -599,7 +702,7 @@ func (h *Handler) RunPipeline(w http.ResponseWriter, r *http.Request) {
 			assigneeType = pgtype.Text{String: "agent", Valid: true}
 			assigneeID = node.AgentID
 		}
-		description := pipelineIssueDescription(node.Description, repoTargetsByStage[node.Key])
+		description := pipelineIssueDescription(node.Description, node.NodeType, repoTargetsByStage[node.Key])
 		child, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
 			WorkspaceID:   pipeline.WorkspaceID,
 			Title:         node.Title,
@@ -870,7 +973,7 @@ func (h *Handler) normalizePipelineDefinition(r *http.Request, workspaceID pgtyp
 		if nodeType == "" {
 			nodeType = "issue"
 		}
-		if nodeType != "issue" && nodeType != "manual" && nodeType != "check" {
+		if nodeType != "issue" && nodeType != "manual" && nodeType != "check" && nodeType != "spec_review" && nodeType != "code_review" {
 			return normalizedPipelineDefinition{}, &pipelineValidationError{"node type is invalid"}
 		}
 		title := strings.TrimSpace(req.Title)
@@ -960,6 +1063,31 @@ func (h *Handler) replacePipelineDefinition(r *http.Request, qtx *db.Queries, pi
 			PositionX:          node.positionX,
 			PositionY:          node.positionY,
 			RepoKeys:           node.repoKeys,
+		})
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, created)
+	}
+	return nodes, nil
+}
+
+func (h *Handler) copyPipelineStages(ctx context.Context, qtx *db.Queries, pipelineID pgtype.UUID, sourceNodes []db.PipelineStage) ([]db.PipelineStage, error) {
+	nodes := make([]db.PipelineStage, 0, len(sourceNodes))
+	for _, node := range sourceNodes {
+		created, err := qtx.CreatePipelineStage(ctx, db.CreatePipelineStageParams{
+			PipelineID:         pipelineID,
+			Key:                node.Key,
+			Title:              node.Title,
+			Description:        node.Description,
+			RoleKey:            node.RoleKey,
+			NodeType:           node.NodeType,
+			AgentID:            node.AgentID,
+			DependsOnStageKeys: node.DependsOnStageKeys,
+			Position:           node.Position,
+			PositionX:          node.PositionX,
+			PositionY:          node.PositionY,
+			RepoKeys:           normalizeRepoKeys(node.RepoKeys),
 		})
 		if err != nil {
 			return nil, err
@@ -1073,9 +1201,10 @@ func projectResourceRepoURL(resource db.ProjectResource) string {
 	return strings.TrimSpace(ref.URL)
 }
 
-func pipelineIssueDescription(description string, repos []pipelineRepoTarget) string {
+func pipelineIssueDescription(description, nodeType string, repos []pipelineRepoTarget) string {
 	description = strings.TrimSpace(description)
-	if len(repos) == 0 {
+	reviewContract := pipelineReviewGateContract(nodeType)
+	if len(repos) == 0 && reviewContract == "" {
 		return description
 	}
 	var b strings.Builder
@@ -1083,11 +1212,56 @@ func pipelineIssueDescription(description string, repos []pipelineRepoTarget) st
 		b.WriteString(description)
 		b.WriteString("\n\n")
 	}
-	b.WriteString("Target repositories:\n")
-	for _, repo := range repos {
-		fmt.Fprintf(&b, "- %s: %s\n", repo.Key, repo.URL)
+	if len(repos) > 0 {
+		b.WriteString("Target repositories:\n")
+		for _, repo := range repos {
+			fmt.Fprintf(&b, "- %s: %s\n", repo.Key, repo.URL)
+		}
+	}
+	if reviewContract != "" {
+		if len(repos) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(reviewContract)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func pipelineReviewGateContract(nodeType string) string {
+	switch nodeType {
+	case "spec_review":
+		return `Review gate output contract:
+Return a final JSON object with this exact shape:
+{
+  "review_gate": {
+    "status": "pass" | "fail",
+    "summary": "Brief spec compliance review summary.",
+    "findings": [
+      { "severity": "blocker" | "major" | "minor", "title": "Finding title", "details": "Finding details" }
+    ],
+    "checked_against": ["Spec, issue, plan, or requirement checked"]
+  }
+}
+
+Use "pass" only when the implementation satisfies the requested spec. Use "fail" when downstream work must stay blocked.`
+	case "code_review":
+		return `Review gate output contract:
+Return a final JSON object with this exact shape:
+{
+  "review_gate": {
+    "status": "pass" | "fail",
+    "summary": "Brief code quality review summary.",
+    "findings": [
+      { "severity": "blocker" | "major" | "minor", "title": "Finding title", "details": "Finding details" }
+    ],
+    "checked_against": ["Diff, tests, architecture, or risk area checked"]
+  }
+}
+
+Use "pass" only when the code quality review has no blocking findings. Use "fail" when downstream work must stay blocked.`
+	default:
+		return ""
+	}
 }
 
 func (h *Handler) parseOptionalProjectIDPtr(w http.ResponseWriter, r *http.Request, raw *string, workspaceID pgtype.UUID) (pgtype.UUID, bool) {

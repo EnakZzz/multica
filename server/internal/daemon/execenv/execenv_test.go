@@ -1190,9 +1190,40 @@ func TestInjectRuntimeConfigRequiresExplicitCommentPost(t *testing.T) {
 	}
 }
 
-// TestInjectRuntimeConfigAvailableCommandsIsNeutral pins that the core
-// Available Commands section lists comment input modes neutrally for every
-// non-Codex provider on every host OS, with no "MUST pipe via stdin" mandate.
+func TestInjectRuntimeConfigPlanAgentTaskMarksDone(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := TaskContextForEnv{
+		IssueID:               "issue-1",
+		PlanItemExecutionKind: "agent_task",
+	}
+	if _, err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{
+		"execution_kind=agent_task",
+		"Status: done",
+		"multica issue status issue-1 done",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("plan agent_task CLAUDE.md missing %q\n---\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "multica issue status issue-1 in_review") {
+		t.Errorf("plan agent_task CLAUDE.md should not instruct in_review\n---\n%s", s)
+	}
+}
+
+// TestInjectRuntimeConfigAvailableCommandsIsNeutral pins that the global
+// Available Commands section lists the three input modes neutrally for
+// every non-Codex provider on every host OS, with no "MUST pipe via stdin"
+// mandate.
 //
 // Background: #1795 / #1851 introduced "MUST pipe via stdin" /
 // `--description-stdin` directives in the global section to fix Codex's

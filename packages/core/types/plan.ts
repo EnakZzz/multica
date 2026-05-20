@@ -1,4 +1,17 @@
-export type PlanStatus = "planning" | "ready" | "failed" | "committed";
+export type PlanStatus = "planning" | "spec_review" | "ready" | "failed" | "committed";
+export type PlanItemExecutionKind = "agent_task" | "human_confirmation";
+export type PlanItemNodeType = "issue" | "manual" | "check" | "spec_review" | "code_review";
+
+export interface PlanSpec {
+  summary: string;
+  goal: string;
+  success_criteria: string[];
+  in_scope: string[];
+  out_of_scope: string[];
+  approach: string;
+  assumptions: string[];
+  open_questions: string[];
+}
 
 export interface PlanItem {
   id: string;
@@ -6,6 +19,17 @@ export interface PlanItem {
   position: number;
   title: string;
   description: string;
+  acceptance_criteria: string[];
+  suggested_test_commands: string[];
+  context_resources: string[];
+  risk_notes: string[];
+  node_type: PlanItemNodeType;
+  execution_kind: PlanItemExecutionKind;
+  confirmation_question: string;
+  confirmation_reason: string;
+  required_evidence: string[];
+  requires_git_commit: boolean;
+  branch_name: string;
   recommended_agent_id: string | null;
   match_score: number;
   match_reason: string;
@@ -29,6 +53,9 @@ export interface Plan {
   parent_title: string;
   parent_description: string;
   parent_issue_id: string | null;
+  spec: PlanSpec;
+  spec_approved_at: string | null;
+  spec_approved_by: string | null;
   error: string | null;
   created_by: string;
   created_at: string;
@@ -45,11 +72,23 @@ export interface CreatePlanRequest {
   prompt: string;
   planner_agent_id: string;
   project_id?: string | null;
+  source_issue_id?: string;
 }
 
 export interface UpdatePlanItemRequest {
   title: string;
   description: string;
+  acceptance_criteria?: string[];
+  suggested_test_commands?: string[];
+  context_resources?: string[];
+  risk_notes?: string[];
+  node_type?: PlanItemNodeType;
+  execution_kind?: PlanItemExecutionKind;
+  confirmation_question?: string;
+  confirmation_reason?: string;
+  required_evidence?: string[];
+  requires_git_commit?: boolean;
+  branch_name?: string;
   recommended_agent_id?: string | null;
   match_score: number;
   match_reason: string;
@@ -62,5 +101,14 @@ export interface UpdatePlanRequest {
   title?: string;
   parent_title: string;
   parent_description: string;
+  spec?: PlanSpec;
   items: UpdatePlanItemRequest[];
+}
+
+export interface ApprovePlanSpecRequest {
+  spec?: PlanSpec;
+}
+
+export interface CommitPlanRequest {
+  acknowledged_human_confirmation_item_ids?: string[];
 }

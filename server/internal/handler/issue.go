@@ -19,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -1415,7 +1416,8 @@ type QuickCreateIssueRequest struct {
 // QuickCreateIssueResponse echoes the queued task id so the frontend can
 // correlate the eventual inbox item, even though completion is fully async.
 type QuickCreateIssueResponse struct {
-	TaskID string `json:"task_id"`
+	TaskID string `json:"task_id,omitempty"`
+	PlanID string `json:"plan_id,omitempty"`
 }
 
 func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -1482,19 +1484,6 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Daemon CLI version gate. The agent-side prompt + create-flow rely on
-	// behaviors introduced in MinQuickCreateCLIVersion (URL attachment
-	// handling, no-retry on partial failure). Older daemons either
-	// double-create issues on partial CLI failures or mishandle pasted
-	// screenshot URLs; fail closed before enqueuing rather than surface
-	// the breakage as an inbox failure twenty seconds later. Dev-built
-	// daemons (git-describe shape) are exempted inside CheckMinCLIVersion
-	// so `make daemon` works without weakening staging or production.
-	if status, payload := h.checkQuickCreateDaemonVersion(r.Context(), agent.RuntimeID); status != 0 {
-		writeJSON(w, status, payload)
-		return
-	}
-
 	// Optional project_id — validate it belongs to the same workspace before
 	// pinning the task to it. The handler is the trust boundary; the frontend
 	// already only shows projects from the active workspace, but we re-check
@@ -1515,6 +1504,52 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		projectUUID = pid
 	}
 
+	if isQuickCreatePlannerAgent(agent) {
+		if status, msg := h.validatePlanAgent(r, agent.ID, wsUUID); status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+		title := firstLine(prompt)
+		plan, err := h.Queries.CreatePlan(r.Context(), db.CreatePlanParams{
+			WorkspaceID:    wsUUID,
+			Title:          title,
+			Prompt:         prompt,
+			PlannerAgentID: agent.ID,
+			CreatedBy:      requesterUUID,
+			ProjectID:      projectUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create plan")
+			return
+		}
+		task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), wsUUID, requesterUUID, plan.ID, agent.ID, prompt, projectUUID, service.IssuePlanPhaseSpec, service.PlanSpec{})
+		if err != nil {
+			h.Queries.MarkPlanFailed(r.Context(), db.MarkPlanFailedParams{ID: plan.ID, Error: pgtype.Text{String: err.Error(), Valid: true}})
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		plan, err = h.Queries.SetPlanTask(r.Context(), db.SetPlanTaskParams{ID: plan.ID, TaskID: task.ID})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to attach plan task")
+			return
+		}
+		writeJSON(w, http.StatusCreated, QuickCreateIssueResponse{PlanID: uuidToString(plan.ID)})
+		return
+	}
+
+	// Daemon CLI version gate. The agent-side prompt + create-flow rely on
+	// behaviors introduced in MinQuickCreateCLIVersion (URL attachment
+	// handling, no-retry on partial failure). Older daemons either
+	// double-create issues on partial CLI failures or mishandle pasted
+	// screenshot URLs; fail closed before enqueuing rather than surface
+	// the breakage as an inbox failure twenty seconds later. Dev-built
+	// daemons (git-describe shape) are exempted inside CheckMinCLIVersion
+	// so `make daemon` works without weakening staging or production.
+	if status, payload := h.checkQuickCreateDaemonVersion(r.Context(), agent.RuntimeID); status != 0 {
+		writeJSON(w, status, payload)
+		return
+	}
+
 	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, prompt, projectUUID)
 	if err != nil {
 		slog.Warn("quick-create enqueue failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -1523,6 +1558,10 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, QuickCreateIssueResponse{TaskID: uuidToString(task.ID)})
+}
+
+func isQuickCreatePlannerAgent(agent db.Agent) bool {
+	return agent.IsInternal && strings.EqualFold(strings.TrimSpace(agent.Name), internalPlannerAgentName)
 }
 
 // writeAgentUnavailable returns 422 with a stable error code so the modal
@@ -1924,9 +1963,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Enqueue agent task when an agent-assigned issue is created.
 	if issue.AssigneeType.Valid && issue.AssigneeID.Valid {
-		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-		}
+		h.enqueueAssignedIssueTask(r.Context(), issue, parseUUID(creatorID))
 	}
 
 	writeJSON(w, http.StatusCreated, resp)
@@ -2170,10 +2207,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// Reconcile task queue when assignee changes.
 	if assigneeChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-
-		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-		}
+		h.enqueueAssignedIssueTask(r.Context(), issue, parseUUID(userID))
 	}
 
 	// Trigger the assigned agent when a member moves an issue out of backlog.
@@ -2181,9 +2215,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// issue is ready for work.
 	if statusChanged && !assigneeChanged && actorType == "member" &&
 		prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" {
-		if h.isAgentAssigneeReady(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-		}
+		h.enqueueAssignedIssueTask(r.Context(), issue, parseUUID(userID))
 	}
 
 	// Cancel active tasks when the issue is cancelled by a user.
@@ -2264,7 +2296,39 @@ func (h *Handler) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue) bo
 	if h.hasOpenIssueDependencies(ctx, issue.ID) {
 		return false
 	}
+	if _, ok := h.internalPlannerAssignee(ctx, issue); ok {
+		return false
+	}
 	return h.isAgentAssigneeReady(ctx, issue)
+}
+
+func (h *Handler) enqueueAssignedIssueTask(ctx context.Context, issue db.Issue, requesterID pgtype.UUID) {
+	if issue.Status == "backlog" || h.hasOpenIssueDependencies(ctx, issue.ID) {
+		return
+	}
+	if planner, ok := h.internalPlannerAssignee(ctx, issue); ok {
+		if !planner.RuntimeID.Valid || planner.ArchivedAt.Valid {
+			return
+		}
+		if _, _, err := h.TaskService.EnqueuePlannerIssueTask(ctx, issue, planner, requesterID); err != nil {
+			slog.Warn("planner issue task enqueue failed", "issue_id", uuidToString(issue.ID), "agent_id", uuidToString(planner.ID), "error", err)
+		}
+		return
+	}
+	if h.isAgentAssigneeReady(ctx, issue) {
+		h.TaskService.EnqueueTaskForIssue(ctx, issue)
+	}
+}
+
+func (h *Handler) internalPlannerAssignee(ctx context.Context, issue db.Issue) (db.Agent, bool) {
+	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
+		return db.Agent{}, false
+	}
+	agent, err := h.Queries.GetAgent(ctx, issue.AssigneeID)
+	if err != nil {
+		return db.Agent{}, false
+	}
+	return agent, agent.IsInternal && agent.Name == internalPlannerAgentName
 }
 
 func (h *Handler) hasOpenIssueDependencies(ctx context.Context, issueID pgtype.UUID) bool {
@@ -2328,6 +2392,9 @@ func (h *Handler) isAgentAssigneeReady(ctx context.Context, issue db.Issue) bool
 
 	agent, err := h.Queries.GetAgent(ctx, issue.AssigneeID)
 	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+		return false
+	}
+	if agent.IsInternal {
 		return false
 	}
 
@@ -2602,17 +2669,13 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		if assigneeChanged {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-			if h.shouldEnqueueAgentTask(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-			}
+			h.enqueueAssignedIssueTask(r.Context(), issue, parseUUID(userID))
 		}
 
 		// Trigger agent when moving out of backlog (batch).
 		if statusChanged && !assigneeChanged && actorType == "member" &&
 			prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" {
-			if h.isAgentAssigneeReady(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-			}
+			h.enqueueAssignedIssueTask(r.Context(), issue, parseUUID(userID))
 		}
 
 		// Cancel active tasks when the issue is cancelled by a user.

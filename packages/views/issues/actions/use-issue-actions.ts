@@ -1,23 +1,29 @@
 "use client";
 
 import { useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
+import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
+import { issueKeys } from "@multica/core/issues/queries";
+import { useCreatePlan } from "@multica/core/plans/mutations";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { pinListOptions, useCreatePin, useDeletePin } from "@multica/core/pins";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 const BACKLOG_HINT_LS_KEY = "multica:backlog-agent-hint-dismissed";
+const INTERNAL_PLANNER_AGENT_NAME = "规划Agent";
 
 export interface UseIssueActionsResult {
   isPinned: boolean;
   updateField: (updates: Partial<UpdateIssueRequest>) => void;
+  rerunIssue: () => void;
   togglePin: () => void;
   copyLink: () => Promise<void>;
   openCreateSubIssue: () => void;
@@ -36,9 +42,11 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
+  const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const userId = user?.id;
 
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: pinnedItems = [] } = useQuery({
     ...pinListOptions(wsId, userId ?? ""),
     enabled: !!userId,
@@ -51,11 +59,31 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
     );
 
   const updateIssue = useUpdateIssue();
+  const createPlan = useCreatePlan(wsId);
   const createPin = useCreatePin();
   const deletePin = useDeletePin();
   const openModal = useModalStore((s) => s.open);
+  const rerunIssueMutation = useMutation({
+    mutationFn: (id: string) => api.rerunIssue(id),
+    onSuccess: (_task, id) => {
+      toast.success(t(($) => $.actions.rerun_issue_enqueued));
+      void queryClient.invalidateQueries({ queryKey: issueKeys.detail(wsId, id) });
+      void queryClient.invalidateQueries({ queryKey: issueKeys.tasks(id) });
+      void queryClient.invalidateQueries({ queryKey: issueKeys.tasksAll() });
+      void queryClient.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t(($) => $.actions.rerun_issue_failed),
+      );
+    },
+  });
 
   const issueId = issue?.id ?? null;
+  const issueTitle = issue?.title ?? "";
+  const issueDescription = issue?.description ?? null;
   const issueStatus = issue?.status ?? null;
   const issueIdentifier = issue?.identifier ?? null;
   const issueProjectId = issue?.project_id ?? null;
@@ -63,6 +91,48 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   const updateField = useCallback(
     (updates: Partial<UpdateIssueRequest>) => {
       if (!issueId) return;
+      const plannerAgent =
+        updates.assignee_type === "agent" && updates.assignee_id
+          ? agents.find(
+              (agent) =>
+                agent.id === updates.assignee_id &&
+                !agent.archived_at &&
+                agent.is_internal &&
+                agent.name === INTERNAL_PLANNER_AGENT_NAME,
+            )
+          : undefined;
+      if (plannerAgent) {
+        const prompt = [issueTitle, issueDescription]
+          .map((part) => part?.trim() ?? "")
+          .filter(Boolean)
+          .join("\n\n");
+        createPlan.mutate(
+          {
+            title: issueTitle.trim() || undefined,
+            prompt,
+            planner_agent_id: plannerAgent.id,
+            project_id: issueProjectId,
+            source_issue_id: issueId,
+          },
+          {
+            onSuccess: (plan) => {
+              toast.success(t(($) => $.detail.plan_created), {
+                action: {
+                  label: t(($) => $.detail.open_plan),
+                  onClick: () => navigation.push(paths.planDetail(plan.id)),
+                },
+              });
+            },
+            onError: (error) =>
+              toast.error(
+                error instanceof Error
+                  ? error.message
+                  : t(($) => $.detail.plan_create_failed),
+              ),
+          },
+        );
+        return;
+      }
       updateIssue.mutate(
         { id: issueId, ...updates },
         {
@@ -86,7 +156,20 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
         openModal("issue-backlog-agent-hint", { issueId });
       }
     },
-    [issueId, issueStatus, updateIssue, openModal, t],
+    [
+      issueId,
+      issueTitle,
+      issueDescription,
+      issueStatus,
+      issueProjectId,
+      agents,
+      createPlan,
+      updateIssue,
+      openModal,
+      navigation,
+      paths,
+      t,
+    ],
   );
 
   const togglePin = useCallback(() => {
@@ -97,6 +180,11 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
       createPin.mutate({ item_type: "issue", item_id: issueId });
     }
   }, [isPinned, issueId, createPin, deletePin]);
+
+  const rerunIssue = useCallback(() => {
+    if (!issueId) return;
+    rerunIssueMutation.mutate(issueId);
+  }, [issueId, rerunIssueMutation]);
 
   const copyLink = useCallback(async () => {
     if (!issueId) return;
@@ -143,6 +231,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   return {
     isPinned,
     updateField,
+    rerunIssue,
     togglePin,
     copyLink,
     openCreateSubIssue,

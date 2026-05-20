@@ -100,12 +100,101 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("quickCreateIssue", () => {
+    it("accepts a plan response from planner-routed quick create", async () => {
+      stubFetchJson({ plan_id: "plan-1" });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.quickCreateIssue({ agent_id: "agent-1", prompt: "Plan this" });
+      expect(res).toEqual({ task_id: "", plan_id: "plan-1" });
+    });
+
+    it("uses safe defaults when quick create response fields are missing or malformed", async () => {
+      stubFetchJson({ task_id: 123, extra: "kept" });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.quickCreateIssue({ agent_id: "agent-1", prompt: "Create this" });
+      expect(res).toMatchObject({ task_id: "", plan_id: "" });
+    });
+  });
+
   describe("listPlans", () => {
     it("falls back to an empty plan list when the response is malformed", async () => {
       stubFetchJson({ plans: "not-an-array" });
       const client = new ApiClient("https://api.example.test");
       const res = await client.listPlans();
       expect(res).toEqual({ plans: [] });
+    });
+
+    it("uses safe spec defaults and accepts spec_review status", async () => {
+      stubFetchJson({
+        plans: [
+          {
+            id: "plan-1",
+            workspace_id: "ws-1",
+            title: "Plan",
+            prompt: "Build it",
+            status: "spec_review",
+            planner_agent_id: "agent-1",
+            spec: { goal: "Ship it" },
+          },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPlans();
+      expect(res.plans[0]?.status).toBe("spec_review");
+      expect(res.plans[0]?.spec).toMatchObject({
+        summary: "",
+        goal: "Ship it",
+        success_criteria: [],
+        open_questions: [],
+      });
+      expect(res.plans[0]?.spec_approved_at).toBeNull();
+    });
+
+    it("uses safe execution contract defaults for malformed plan items", async () => {
+      stubFetchJson({
+        plans: [
+          {
+            id: "plan-1",
+            workspace_id: "ws-1",
+            title: "Plan",
+            prompt: "Build it",
+            status: "ready",
+            planner_agent_id: "agent-1",
+            items: [
+              {
+                id: "item-1",
+                plan_id: "plan-1",
+                position: 1,
+                title: "Build backend",
+                acceptance_criteria: "not-an-array",
+                suggested_test_commands: null,
+                context_resources: ["server/internal/handler/plan.go"],
+                risk_notes: [123],
+                execution_kind: "not-valid",
+                confirmation_question: null,
+                confirmation_reason: 123,
+                required_evidence: "not-an-array",
+                depends_on_positions: "not-an-array",
+              },
+            ],
+          },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPlans();
+      expect(res.plans[0]?.items[0]).toMatchObject({
+        acceptance_criteria: [],
+        suggested_test_commands: [],
+        context_resources: ["server/internal/handler/plan.go"],
+        risk_notes: [],
+        execution_kind: "agent_task",
+        confirmation_question: "",
+        confirmation_reason: "",
+        required_evidence: [],
+        requires_git_commit: true,
+        branch_name: "",
+        depends_on_positions: [],
+      });
     });
   });
 
@@ -126,7 +215,35 @@ describe("ApiClient schema fallback", () => {
       expect(res.pipelines[0]).toMatchObject({
         id: "pipe-1",
         description: "",
+        is_system: false,
+        system_key: null,
+        editable: true,
+        deletable: true,
         nodes: [],
+      });
+    });
+
+    it("parses built-in pipeline metadata safely", async () => {
+      stubFetchJson({
+        pipelines: [
+          {
+            id: "pipe-1",
+            workspace_id: "ws-1",
+            name: "Systematic Debugging",
+            is_system: true,
+            system_key: "systematic-debugging",
+            editable: false,
+            deletable: false,
+          },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPipelines();
+      expect(res.pipelines[0]).toMatchObject({
+        is_system: true,
+        system_key: "systematic-debugging",
+        editable: false,
+        deletable: false,
       });
     });
 
@@ -135,6 +252,26 @@ describe("ApiClient schema fallback", () => {
       const client = new ApiClient("https://api.example.test");
       const res = await client.listPipelines();
       expect(res).toEqual({ pipelines: [], total: 0 });
+    });
+
+    it("accepts review gate node types and downgrades unknown node types", async () => {
+      stubFetchJson({
+        pipelines: [
+          {
+            id: "pipe-1",
+            workspace_id: "ws-1",
+            name: "Review gates",
+            nodes: [
+              { id: "node-1", pipeline_id: "pipe-1", key: "spec", type: "spec_review", title: "Spec review" },
+              { id: "node-2", pipeline_id: "pipe-1", key: "code", type: "code_review", title: "Code review" },
+              { id: "node-3", pipeline_id: "pipe-1", key: "future", type: "future_gate", title: "Future gate" },
+            ],
+          },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPipelines();
+      expect(res.pipelines[0]?.nodes.map((node) => node.type)).toEqual(["spec_review", "code_review", "issue"]);
     });
   });
 

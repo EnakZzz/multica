@@ -113,6 +113,7 @@ function makeTemplate(runtimeId: string): Agent {
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
+    is_internal: false,
     owner_id: ME,
     skills: [],
     created_at: "2026-04-01T00:00:00Z",

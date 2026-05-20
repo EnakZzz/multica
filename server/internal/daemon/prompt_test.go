@@ -86,3 +86,95 @@ func TestBuildQuickCreatePromptProjectPinning(t *testing.T) {
 		t.Errorf("buildQuickCreatePrompt without project must NOT mention --project, got:\n%s", plain)
 	}
 }
+
+func TestBuildIssuePlanSpecPromptPreservesUserLanguage(t *testing.T) {
+	out := buildIssuePlanSpecPrompt(Task{
+		IssuePlanPrompt: "实现一个 Web 版多人贪吃蛇，先生成 spec 给我确认",
+	})
+
+	mustContain := []string{
+		"Keep JSON property names exactly as requested in English.",
+		"same primary language as the user goal",
+		"If the user goal is primarily Chinese",
+		"summary, goal, criteria, scope, approach, assumptions, and open questions in Chinese",
+		"Keep code identifiers, commands, file paths, API names, and proper nouns unchanged.",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildIssuePlanSpecPrompt output missing language rule: %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
+func TestBuildIssuePlanSpecPromptIncludesBuiltInPlannerQualityRules(t *testing.T) {
+	out := buildIssuePlanSpecPrompt(Task{
+		IssuePlanPrompt: "Ship a risky billing workflow behind review gates",
+	})
+
+	mustContain := []string{
+		"Planning quality rules:",
+		"Treat the user goal as the source of truth.",
+		"Success criteria must be observable.",
+		"Separate assumptions from open questions.",
+		"Keep in_scope as the smallest coherent delivery slice.",
+		"whether review-gated-feature-development should be used for high-risk work.",
+		"do not invent agents, skills, repos, files, or commands.",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildIssuePlanSpecPrompt output missing planner quality rule: %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
+func TestBuildIssuePlanItemsPromptPreservesApprovedSpecLanguage(t *testing.T) {
+	out := buildIssuePlanPrompt(Task{
+		IssuePlanPrompt: "实现一个 Web 版多人贪吃蛇",
+		IssuePlanSpec: PlanSpecData{
+			Summary: "用现有 Multica 流程拆出多人贪吃蛇 Web 版本的实现任务。",
+			Goal:    "生成可执行 issue 列表。",
+		},
+	})
+
+	mustContain := []string{
+		"same primary language as the approved spec and user goal",
+		"If the approved spec or user goal is primarily Chinese",
+		"write titles, descriptions, criteria, risk notes, confirmation questions, and confirmation reasons in Chinese",
+		"Keep JSON property names, code identifiers, commands, file paths, API names, and proper nouns unchanged.",
+		"requires_git_commit=true and provide branch_name",
+		"Do not use `agent/<agent-role>/<issue>` style names.",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildIssuePlanPrompt output missing language rule: %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
+func TestBuildIssuePlanItemsPromptIncludesBuiltInPlannerQualityRules(t *testing.T) {
+	out := buildIssuePlanPrompt(Task{
+		IssuePlanPrompt: "Ship a risky billing workflow behind review gates",
+		IssuePlanSpec: PlanSpecData{
+			Summary: "Build the workflow safely.",
+			Goal:    "Generate executable issue drafts.",
+		},
+	})
+
+	mustContain := []string{
+		"Executable planning rules:",
+		"The approved spec is binding.",
+		"Every selected item must be independently assignable to one agent",
+		"Split by deliverable and dependency boundary, not by job title.",
+		"No hidden work:",
+		"Use review-gated-feature-development for high-risk feature work",
+		"Review gates must depend on the implementation or repair work they review.",
+		"Create explicit dependencies for true blocking order",
+		"Leave independent work dependency-free so it can run in parallel.",
+		"Recommend agents only from Available agents",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildIssuePlanPrompt output missing planner quality rule: %q\n--- output ---\n%s", s, out)
+		}
+	}
+}

@@ -37,8 +37,8 @@ var repoCheckoutCmd = &cobra.Command{
 
 var repoPublishCmd = &cobra.Command{
 	Use:   "publish",
-	Short: "Push the current agent branch",
-	Long:  "Pushes the current agent/* branch to origin and records branch metadata for the daemon task result.",
+	Short: "Push the current generated work branch",
+	Long:  "Pushes the current generated work branch to origin and records branch metadata for the daemon task result.",
 	Args:  exactArgs(0),
 	RunE:  runRepoPublish,
 }
@@ -94,6 +94,11 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	agentName := os.Getenv("MULTICA_AGENT_NAME")
 	issueIdentifier := os.Getenv("MULTICA_ISSUE_IDENTIFIER")
 	taskID := os.Getenv("MULTICA_TASK_ID")
+	branchName := os.Getenv("MULTICA_PLAN_BRANCH_NAME")
+	checkoutRef := repoCheckoutRef
+	if checkoutRef == "" {
+		checkoutRef = os.Getenv("MULTICA_REPO_CHECKOUT_REF")
+	}
 
 	// Use current working directory as the checkout target.
 	workDir, err := os.Getwd()
@@ -105,9 +110,10 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 		"url":              repoURL,
 		"workspace_id":     workspaceID,
 		"workdir":          workDir,
-		"ref":              repoCheckoutRef,
+		"ref":              checkoutRef,
 		"agent_name":       agentName,
 		"issue_identifier": issueIdentifier,
+		"branch_name":      branchName,
 		"task_id":          taskID,
 	}
 
@@ -150,7 +156,7 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const agentBranchPrefix = "agent/"
+var allowedPublishBranchPrefixes = []string{"agent/", "feature/", "fix/", "chore/", "docs/", "refactor/", "test/", "ci/"}
 
 func runRepoPublish(cmd *cobra.Command, args []string) error {
 	root, err := gitOutput("", "rev-parse", "--show-toplevel")
@@ -167,6 +173,12 @@ func runRepoPublish(cmd *cobra.Command, args []string) error {
 	if err := validateAgentPublishBranch(branch); err != nil {
 		return err
 	}
+	publishBranch := strings.TrimSpace(os.Getenv("MULTICA_PUBLISH_BRANCH_NAME"))
+	if publishBranch != "" {
+		if err := validateAgentPublishBranch(publishBranch); err != nil {
+			return err
+		}
+	}
 
 	commit, err := gitOutput(root, "rev-parse", "HEAD")
 	if err != nil {
@@ -177,15 +189,21 @@ func runRepoPublish(cmd *cobra.Command, args []string) error {
 	remote, _ := gitOutput(root, "remote", "get-url", "origin")
 	remote = strings.TrimSpace(remote)
 
-	push := exec.Command("git", "-C", root, "push", "-u", "origin", branch)
+	pushBranch := branch
+	pushRef := branch
+	if publishBranch != "" {
+		pushBranch = publishBranch
+		pushRef = "HEAD:refs/heads/" + publishBranch
+	}
+	push := exec.Command("git", "-C", root, "push", "-u", "origin", pushRef)
 	push.Stdout = os.Stdout
 	push.Stderr = os.Stderr
 	if err := push.Run(); err != nil {
-		return fmt.Errorf("git push origin %s: %w", branch, err)
+		return fmt.Errorf("git push origin %s: %w", pushRef, err)
 	}
 
 	meta := repoPublishMetadata{
-		BranchName: branch,
+		BranchName: pushBranch,
 		CommitSHA:  commit,
 		PushedAt:   time.Now().UTC().Format(time.RFC3339),
 		Remote:     remote,
@@ -195,7 +213,7 @@ func runRepoPublish(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stdout, "Pushed branch %s (%s)\n", branch, shortCommit(commit))
+	fmt.Fprintf(os.Stdout, "Pushed branch %s (%s)\n", pushBranch, shortCommit(commit))
 	return nil
 }
 
@@ -213,12 +231,14 @@ func validateAgentPublishBranch(branch string) error {
 		return fmt.Errorf("cannot publish detached HEAD; run `multica repo checkout <url>` first")
 	}
 	if branch == "main" || branch == "master" {
-		return fmt.Errorf("Agents must push to agent/* branches. Current branch %s is protected.", branch)
+		return fmt.Errorf("Agents must push to generated work branches, not protected branches. Current branch %s is protected.", branch)
 	}
-	if !strings.HasPrefix(branch, agentBranchPrefix) {
-		return fmt.Errorf("Agents must push to agent/* branches. Current branch %s is not allowed.", branch)
+	for _, prefix := range allowedPublishBranchPrefixes {
+		if strings.HasPrefix(branch, prefix) {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("Agents must push to generated work branches (%s). Current branch %s is not allowed.", strings.Join(allowedPublishBranchPrefixes, ", "), branch)
 }
 
 func writeRepoPublishMetadata(root string, meta repoPublishMetadata) error {

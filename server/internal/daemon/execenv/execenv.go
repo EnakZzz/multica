@@ -43,25 +43,29 @@ type PrepareParams struct {
 
 // TaskContextForEnv is the subset of task context used for writing context files.
 type TaskContextForEnv struct {
-	IssueID                 string
-	IssueIdentifier         string
-	TriggerCommentID        string // comment that triggered this task (empty for on_assign)
-	AgentID                 string // unique ID of the dispatched agent
-	AgentName               string
-	AgentInstructions       string // agent identity/persona instructions, injected into CLAUDE.md
-	AgentSkills             []SkillContextForEnv
-	Repos                   []RepoContextForEnv     // workspace repos available for checkout
-	ProjectID               string                  // issue's project, when present
-	ProjectTitle            string                  // human-readable project title
-	ProjectResources        []ProjectResourceForEnv // resources attached to the project
-	ChatSessionID           string                  // non-empty for chat tasks
-	AutopilotRunID          string                  // non-empty for autopilot run_only tasks
-	AutopilotID             string
-	AutopilotTitle          string
-	AutopilotDescription    string
-	AutopilotSource         string
-	AutopilotTriggerPayload string
-	QuickCreatePrompt       string // non-empty for quick-create tasks
+	IssueID                   string
+	IssueIdentifier           string
+	PlanItemID                string
+	PlanItemExecutionKind     string
+	PlanItemRequiresGitCommit bool
+	PlanItemBranchName        string
+	TriggerCommentID          string // comment that triggered this task (empty for on_assign)
+	AgentID                   string // unique ID of the dispatched agent
+	AgentName                 string
+	AgentInstructions         string // agent identity/persona instructions, injected into CLAUDE.md
+	AgentSkills               []SkillContextForEnv
+	Repos                     []RepoContextForEnv     // workspace repos available for checkout
+	ProjectID                 string                  // issue's project, when present
+	ProjectTitle              string                  // human-readable project title
+	ProjectResources          []ProjectResourceForEnv // resources attached to the project
+	ChatSessionID             string                  // non-empty for chat tasks
+	AutopilotRunID            string                  // non-empty for autopilot run_only tasks
+	AutopilotID               string
+	AutopilotTitle            string
+	AutopilotDescription      string
+	AutopilotSource           string
+	AutopilotTriggerPayload   string
+	QuickCreatePrompt         string // non-empty for quick-create tasks
 	// RequestingUserName + RequestingUserProfileDescription describe the
 	// human the agent is acting on behalf of. v1 sources them from the
 	// runtime owner (the user who registered the daemon). Rendered into the

@@ -48,6 +48,7 @@ import { PageHeader } from "../../layout/page-header";
 import { availabilityConfig } from "../presence";
 import { AgentDetailInspector } from "./agent-detail-inspector";
 import { AgentOverviewPane } from "./agent-overview-pane";
+import { InternalAgentBadge } from "./internal-agent-badge";
 import { useT } from "../../i18n";
 
 interface AgentDetailPageProps {
@@ -379,6 +380,7 @@ function DetailHeader({
         </AppLink>
         <span className="text-muted-foreground/40">/</span>
         <h1 className="truncate text-sm font-medium">{agent.name}</h1>
+        {agent.is_internal && <InternalAgentBadge />}
         {!isArchived && av && presence && (
           <span
             className={`inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-xs ${av.textClass}`}

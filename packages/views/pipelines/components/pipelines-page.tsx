@@ -75,6 +75,7 @@ export function PipelinesPage() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
+                  {pipeline.is_system && <Badge variant="outline">Built-in</Badge>}
                   <Badge variant="secondary">{pipeline.nodes.length} nodes</Badge>
                 </div>
               </button>

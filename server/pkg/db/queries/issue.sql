@@ -123,6 +123,22 @@ WHERE d.depends_on_issue_id = $1
   AND i.workspace_id = $2
 ORDER BY i.status = 'done', i.position ASC, i.created_at ASC;
 
+-- name: ListIssueBlockingDependencies :many
+SELECT dep.*
+FROM issue_dependency d
+JOIN issue dep ON dep.id = d.depends_on_issue_id
+WHERE d.issue_id = $1
+  AND d.type = 'blocked_by'
+ORDER BY dep.status = 'done', dep.position ASC, dep.created_at ASC;
+
+-- name: ListOpenReviewGateRepairIssues :many
+SELECT *
+FROM issue
+WHERE origin_type = 'review_gate_repair'
+  AND origin_id = $1
+  AND status NOT IN ('done', 'cancelled')
+ORDER BY created_at ASC;
+
 -- name: CreateIssueWithOrigin :one
 INSERT INTO issue (
     workspace_id, title, description, status, priority,

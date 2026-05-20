@@ -367,6 +367,7 @@ type WorktreeParams struct {
 	RepoURL             string // remote URL to look up in the cache
 	WorkDir             string // parent directory for the worktree (e.g. task workdir)
 	Ref                 string // optional branch, tag, or commit to base the worktree on
+	BranchName          string // optional plan-specified branch name
 	AgentName           string // for branch naming
 	IssueIdentifier     string // human-readable issue key for branch naming (e.g. LOC-18)
 	TaskID              string // for branch naming uniqueness
@@ -432,10 +433,13 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		return nil, fmt.Errorf("cannot resolve default branch for %s: bare cache at %s has no usable refs (origin/* is empty or ambiguous and bare HEAD has no match). The cache may be corrupted; delete it and retry", params.RepoURL, barePath)
 	}
 
-	// Build branch name: agent/{agent-slug}/{issue-identifier}-{short-task-id}.
-	// params.Ref is only the base ref; agent work must always happen on a
-	// dedicated agent/* branch.
-	branchName := fmt.Sprintf("agent/%s/%s-%s", sanitizeName(params.AgentName), sanitizeBranchSegment(params.IssueIdentifier), shortID(params.TaskID))
+	// Build branch name. Plan-created issues can carry a module/function branch
+	// such as feature/api-auth-flow; otherwise fall back to the legacy
+	// agent/{agent-slug}/{issue-identifier}-{short-task-id} shape.
+	branchName := normalizePlannedBranchName(params.BranchName)
+	if branchName == "" {
+		branchName = fmt.Sprintf("agent/%s/%s-%s", sanitizeName(params.AgentName), sanitizeBranchSegment(params.IssueIdentifier), shortID(params.TaskID))
+	}
 
 	// Derive directory name from repo URL.
 	dirName := repoNameFromURL(params.RepoURL)
@@ -1021,6 +1025,43 @@ func sanitizeBranchSegment(name string) string {
 		return "task"
 	}
 	return s
+}
+
+func normalizePlannedBranchName(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	raw = strings.ReplaceAll(raw, "\\", "/")
+	if raw == "" {
+		return ""
+	}
+	allowedPrefixes := map[string]bool{
+		"agent":    true,
+		"feature":  true,
+		"fix":      true,
+		"chore":    true,
+		"docs":     true,
+		"refactor": true,
+		"test":     true,
+		"ci":       true,
+	}
+	parts := strings.Split(raw, "/")
+	clean := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.ToLower(nonAlphanumeric.ReplaceAllString(part, "-"))
+		part = strings.Trim(part, "-")
+		if part != "" {
+			clean = append(clean, part)
+		}
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+	if clean[0] == "main" || clean[0] == "master" || clean[0] == "refs" || !allowedPrefixes[clean[0]] {
+		clean = []string{"feature", strings.Join(clean, "-")}
+	}
+	if len(clean) == 1 {
+		clean = append([]string{"feature"}, clean...)
+	}
+	return strings.Join(clean, "/")
 }
 
 // shortID returns the first 8 characters of a UUID string (dashes stripped).

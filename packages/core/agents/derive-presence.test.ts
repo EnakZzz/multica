@@ -26,6 +26,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     status: "idle",
     max_concurrent_tasks: 6,
     model: "",
+    is_internal: false,
     owner_id: null,
     skills: [],
     created_at: "2026-04-01T00:00:00Z",

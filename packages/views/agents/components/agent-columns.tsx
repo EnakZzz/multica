@@ -17,6 +17,7 @@ import {
 import { ActorAvatar } from "../../common/actor-avatar";
 import { availabilityConfig, workloadConfig } from "../presence";
 import { AgentRowActions } from "./agent-row-actions";
+import { InternalAgentBadge } from "./internal-agent-badge";
 import { Sparkline } from "./sparkline";
 import { useT } from "../../i18n";
 
@@ -188,6 +189,7 @@ function AgentNameCell({ row }: { row: AgentRow }) {
           >
             {agent.name}
           </span>
+          {agent.is_internal && <InternalAgentBadge />}
           {isPrivate && !isArchived && (
             <Tooltip>
               <TooltipTrigger

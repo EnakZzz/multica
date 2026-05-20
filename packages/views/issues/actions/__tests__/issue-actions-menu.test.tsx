@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -75,6 +75,17 @@ vi.mock("@multica/core/issues/mutations", () => ({
   useUpdateIssue: () => ({ mutate: vi.fn() }),
 }));
 
+const apiMocks = vi.hoisted(() => ({
+  listTasksByIssue: vi.fn(),
+  rerunIssue: vi.fn(),
+}));
+vi.mock("@multica/core/api", () => ({
+  api: {
+    listTasksByIssue: apiMocks.listTasksByIssue,
+    rerunIssue: apiMocks.rerunIssue,
+  },
+}));
+
 vi.mock("@multica/core/paths", async () => {
   const actual = await vi.importActual<typeof import("@multica/core/paths")>(
     "@multica/core/paths",
@@ -142,6 +153,10 @@ function wrap(ui: React.ReactNode) {
 
 beforeEach(() => {
   mockOpenModal.mockReset();
+  apiMocks.listTasksByIssue.mockReset();
+  apiMocks.listTasksByIssue.mockResolvedValue([]);
+  apiMocks.rerunIssue.mockReset();
+  apiMocks.rerunIssue.mockResolvedValue({ id: "task-1" });
 });
 
 describe("IssueActionsDropdown", () => {
@@ -213,6 +228,30 @@ describe("IssueActionsDropdown", () => {
       issueId: "issue-1",
       identifier: "TES-1",
       onDeletedNavigateTo: "/test/issues",
+    });
+  });
+
+  it("shows Rerun issue for agent-assigned issues and enqueues the rerun", async () => {
+    const agentIssue = {
+      ...mockIssue,
+      assignee_type: "agent",
+      assignee_id: "agent-1",
+    } as Issue;
+    render(
+      wrap(
+        <IssueActionsDropdown
+          issue={agentIssue}
+          trigger={<button data-testid="trigger">Menu</button>}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("trigger"));
+    const rerun = await screen.findByText("Rerun issue");
+    fireEvent.click(rerun);
+
+    await waitFor(() => {
+      expect(apiMocks.rerunIssue).toHaveBeenCalledWith("issue-1");
     });
   });
 });

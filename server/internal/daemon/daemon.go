@@ -2199,6 +2199,17 @@ func providerNeedsInlineSystemPrompt(provider string) bool {
 	}
 }
 
+func shouldReusePriorExecution(task Task) bool {
+	return !isReviewGateNodeType(task.PlanItemNodeType)
+}
+
+func priorSessionIDForExecution(task Task) string {
+	if !shouldReusePriorExecution(task) {
+		return ""
+	}
+	return task.PriorSessionID
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
 	// Refuse to spawn an agent without a workspace. An empty workspace_id
 	// here would make MULTICA_WORKSPACE_ID empty in the agent env, and the
@@ -2208,6 +2219,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.WorkspaceID == "" {
 		return TaskResult{}, fmt.Errorf("refusing to spawn agent: task has no workspace_id (task_id=%s)", task.ID)
 	}
+	allowPriorExecution := shouldReusePriorExecution(task)
 
 	// task.Repos is the authoritative repo list for this task — when the
 	// claimed task belongs to a project with github_repo resources the server
@@ -2239,6 +2251,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	taskCtx := execenv.TaskContextForEnv{
 		IssueID:                          task.IssueID,
 		IssueIdentifier:                  task.IssueIdentifier,
+		PlanItemID:                       task.PlanItemID,
+		PlanItemExecutionKind:            task.PlanItemExecutionKind,
+		PlanItemRequiresGitCommit:        task.PlanItemRequiresGitCommit,
+		PlanItemBranchName:               task.PlanItemBranchName,
 		TriggerCommentID:                 task.TriggerCommentID,
 		AgentID:                          agentID,
 		AgentName:                        agentName,
@@ -2267,7 +2283,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	predictedRoot := execenv.PredictRootDir(d.cfg.WorkspacesRoot, task.WorkspaceID, task.ID)
 	d.markActiveEnvRoot(predictedRoot)
 	defer d.unmarkActiveEnvRoot(predictedRoot)
-	if task.PriorWorkDir != "" {
+	if allowPriorExecution && task.PriorWorkDir != "" {
 		priorRoot := filepath.Dir(task.PriorWorkDir)
 		if priorRoot != predictedRoot {
 			d.markActiveEnvRoot(priorRoot)
@@ -2282,7 +2298,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if provider == "openclaw" {
 		openclawBin = entry.Path
 	}
-	if task.PriorWorkDir != "" {
+	if allowPriorExecution && task.PriorWorkDir != "" {
 		env = execenv.Reuse(execenv.ReuseParams{
 			WorkDir:      task.PriorWorkDir,
 			Provider:     provider,
@@ -2331,16 +2347,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// per-agent. When one daemon hosts multiple agents, slots index shared
 	// daemon-level resources such as GPUs.
 	agentEnv := map[string]string{
-		"MULTICA_TOKEN":            d.client.Token(),
-		"MULTICA_SERVER_URL":       d.cfg.ServerBaseURL,
-		"MULTICA_DAEMON_PORT":      fmt.Sprintf("%d", d.cfg.HealthPort),
-		"MULTICA_WORKSPACE_ID":     task.WorkspaceID,
-		"MULTICA_AGENT_NAME":       agentName,
-		"MULTICA_AGENT_ID":         task.AgentID,
-		"MULTICA_PROJECT_ID":       task.ProjectID,
-		"MULTICA_ISSUE_IDENTIFIER": task.IssueIdentifier,
-		"MULTICA_TASK_ID":          task.ID,
-		"MULTICA_TASK_SLOT":        strconv.Itoa(slot),
+		"MULTICA_TOKEN":               d.client.Token(),
+		"MULTICA_SERVER_URL":          d.cfg.ServerBaseURL,
+		"MULTICA_DAEMON_PORT":         fmt.Sprintf("%d", d.cfg.HealthPort),
+		"MULTICA_WORKSPACE_ID":        task.WorkspaceID,
+		"MULTICA_AGENT_NAME":          agentName,
+		"MULTICA_AGENT_ID":            task.AgentID,
+		"MULTICA_PROJECT_ID":          task.ProjectID,
+		"MULTICA_ISSUE_IDENTIFIER":    task.IssueIdentifier,
+		"MULTICA_PLAN_BRANCH_NAME":    task.PlanItemBranchName,
+		"MULTICA_REPO_CHECKOUT_REF":   task.RepoCheckoutRef,
+		"MULTICA_PUBLISH_BRANCH_NAME": task.PublishBranchName,
+		"MULTICA_TASK_ID":             task.ID,
+		"MULTICA_TASK_SLOT":           strconv.Itoa(slot),
 	}
 	if task.AutopilotRunID != "" {
 		agentEnv["MULTICA_AUTOPILOT_RUN_ID"] = task.AutopilotRunID
@@ -2407,14 +2426,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
 	}
 
-	reused := task.PriorWorkDir != "" && env.WorkDir == task.PriorWorkDir
+	reused := allowPriorExecution && task.PriorWorkDir != "" && env.WorkDir == task.PriorWorkDir
 	taskLog.Info("starting agent",
 		"provider", provider,
 		"workdir", env.WorkDir,
 		"model", entry.Model,
 		"reused", reused,
 	)
-	if task.PriorSessionID != "" {
+	if allowPriorExecution && task.PriorSessionID != "" {
 		taskLog.Info("resuming session", "session_id", task.PriorSessionID)
 	}
 
@@ -2480,7 +2499,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		Model:                     model,
 		Timeout:                   d.cfg.AgentTimeout,
 		SemanticInactivityTimeout: d.cfg.CodexSemanticInactivityTimeout,
-		ResumeSessionID:           task.PriorSessionID,
+		ResumeSessionID:           priorSessionIDForExecution(task),
 		ExtraArgs:                 extraArgs,
 		CustomArgs:                customArgs,
 		McpConfig:                 mcpConfig,

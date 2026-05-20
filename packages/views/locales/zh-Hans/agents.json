@@ -58,6 +58,7 @@
   },
   "row": {
     "you": "你",
+    "built_in": "内置",
     "archived": "已归档",
     "no_description": "暂无描述",
     "fallback_runtime_cloud": "云端",

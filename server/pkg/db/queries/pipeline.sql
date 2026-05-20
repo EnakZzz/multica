@@ -1,17 +1,28 @@
 -- name: ListPipelines :many
 SELECT * FROM pipeline
 WHERE workspace_id = $1 AND archived_at IS NULL
-ORDER BY created_at DESC;
+ORDER BY is_system DESC, created_at DESC;
 
 -- name: GetPipelineInWorkspace :one
 SELECT * FROM pipeline
 WHERE id = $1 AND workspace_id = $2;
+
+-- name: GetSystemPipelineByKey :one
+SELECT * FROM pipeline
+WHERE workspace_id = $1 AND system_key = $2 AND is_system = true;
 
 -- name: CreatePipeline :one
 INSERT INTO pipeline (
     workspace_id, name, description, default_project_id, created_by
 ) VALUES (
     $1, $2, $3, sqlc.narg('default_project_id'), $4
+) RETURNING *;
+
+-- name: CreateSystemPipeline :one
+INSERT INTO pipeline (
+    workspace_id, name, description, default_project_id, created_by, is_system, system_key
+) VALUES (
+    $1, $2, $3, sqlc.narg('default_project_id'), $4, true, $5
 ) RETURNING *;
 
 -- name: UpdatePipeline :one
@@ -21,6 +32,15 @@ UPDATE pipeline SET
     default_project_id = sqlc.narg('default_project_id'),
     updated_at = now()
 WHERE id = $1
+RETURNING *;
+
+-- name: UpdateSystemPipelineMetadata :one
+UPDATE pipeline SET
+    name = $2,
+    description = $3,
+    archived_at = NULL,
+    updated_at = now()
+WHERE id = $1 AND is_system = true
 RETURNING *;
 
 -- name: ArchivePipeline :one
@@ -77,3 +97,17 @@ INSERT INTO pipeline_run_stage (
 SELECT * FROM pipeline_run_stage
 WHERE pipeline_run_id = $1
 ORDER BY created_at ASC;
+
+-- name: GetPipelineRunStageForIssue :one
+SELECT
+    prs.id,
+    prs.pipeline_run_id,
+    prs.pipeline_stage_id,
+    prs.stage_key,
+    prs.issue_id,
+    prs.created_at,
+    ps.node_type
+FROM pipeline_run_stage prs
+JOIN pipeline_stage ps ON ps.id = prs.pipeline_stage_id
+WHERE prs.issue_id = $1
+LIMIT 1;

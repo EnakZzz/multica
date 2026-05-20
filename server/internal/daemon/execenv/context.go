@@ -337,6 +337,12 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 
 	b.WriteString("## Quick Start\n\n")
 	fmt.Fprintf(&b, "Run `multica issue get %s --output json` to fetch the full issue details.\n\n", ctx.IssueID)
+	if ctx.PlanItemBranchName != "" {
+		fmt.Fprintf(&b, "**Planned branch:** `%s`\n\n", ctx.PlanItemBranchName)
+	}
+	if ctx.PlanItemID != "" && !ctx.PlanItemRequiresGitCommit {
+		b.WriteString("**Git commit expected:** no\n\n")
+	}
 
 	if len(ctx.AgentSkills) > 0 {
 		b.WriteString("## Agent Skills\n\n")

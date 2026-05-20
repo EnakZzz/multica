@@ -33,44 +33,69 @@ type ProjectResourceData struct {
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
-	ID                      string                `json:"id"`
-	AgentID                 string                `json:"agent_id"`
-	RuntimeID               string                `json:"runtime_id"`
-	IssueID                 string                `json:"issue_id"`
-	IssueIdentifier         string                `json:"issue_identifier,omitempty"`
-	WorkspaceID             string                `json:"workspace_id"`
-	Agent                   *AgentData            `json:"agent,omitempty"`
-	Repos                   []RepoData            `json:"repos,omitempty"`
-	ProjectID               string                `json:"project_id,omitempty"`                // issue's project, when present
-	ProjectTitle            string                `json:"project_title,omitempty"`             // human-readable project title for context injection
-	ProjectResources        []ProjectResourceData `json:"project_resources,omitempty"`         // project-scoped resources to expose to the agent
-	PriorSessionID          string                `json:"prior_session_id,omitempty"`          // Claude session ID from a previous task on this issue
-	PriorWorkDir            string                `json:"prior_work_dir,omitempty"`            // work_dir from a previous task on this issue
-	TriggerCommentID        string                `json:"trigger_comment_id,omitempty"`        // comment that triggered this task
-	TriggerCommentContent   string                `json:"trigger_comment_content,omitempty"`   // content of the triggering comment
-	TriggerAuthorType       string                `json:"trigger_author_type,omitempty"`       // "agent" or "member" — author kind for the triggering comment
-	TriggerAuthorName       string                `json:"trigger_author_name,omitempty"`       // display name of the triggering comment author
-	ChatSessionID           string                `json:"chat_session_id,omitempty"`           // non-empty for chat tasks
-	ChatMessage             string                `json:"chat_message,omitempty"`              // user message content for chat tasks
-	ChatMessageAttachments  []ChatAttachmentMeta  `json:"chat_message_attachments,omitempty"`  // attachments linked to the chat message; agent uses these to `multica attachment download <id>`
-	AutopilotRunID          string                `json:"autopilot_run_id,omitempty"`          // non-empty for autopilot run_only tasks
-	AutopilotID             string                `json:"autopilot_id,omitempty"`              // autopilot that spawned this run
-	AutopilotTitle          string                `json:"autopilot_title,omitempty"`           // autopilot title used as task context
-	AutopilotDescription    string                `json:"autopilot_description,omitempty"`     // autopilot description used as task prompt
-	AutopilotSource         string                `json:"autopilot_source,omitempty"`          // manual, schedule, webhook, or api
-	AutopilotTriggerPayload json.RawMessage       `json:"autopilot_trigger_payload,omitempty"` // optional trigger payload for webhook/api runs
-	QuickCreatePrompt       string                `json:"quick_create_prompt,omitempty"`       // user's natural-language input for quick-create tasks
+	ID                        string                `json:"id"`
+	AgentID                   string                `json:"agent_id"`
+	RuntimeID                 string                `json:"runtime_id"`
+	IssueID                   string                `json:"issue_id"`
+	IssueIdentifier           string                `json:"issue_identifier,omitempty"`
+	PlanItemID                string                `json:"plan_item_id,omitempty"`
+	PlanItemNodeType          string                `json:"plan_item_node_type,omitempty"`
+	PlanItemExecutionKind     string                `json:"plan_item_execution_kind,omitempty"`
+	PlanItemRequiresGitCommit bool                  `json:"plan_item_requires_git_commit,omitempty"`
+	PlanItemBranchName        string                `json:"plan_item_branch_name,omitempty"`
+	RepoCheckoutRef           string                `json:"repo_checkout_ref,omitempty"`
+	PublishBranchName         string                `json:"publish_branch_name,omitempty"`
+	ReviewTargetIssueID       string                `json:"review_target_issue_id,omitempty"`
+	ReviewTargetIdentifier    string                `json:"review_target_identifier,omitempty"`
+	ReviewTargetBranchName    string                `json:"review_target_branch_name,omitempty"`
+	ReviewTargetCommitSHA     string                `json:"review_target_commit_sha,omitempty"`
+	WorkspaceID               string                `json:"workspace_id"`
+	Agent                     *AgentData            `json:"agent,omitempty"`
+	Repos                     []RepoData            `json:"repos,omitempty"`
+	ProjectID                 string                `json:"project_id,omitempty"`                // issue's project, when present
+	ProjectTitle              string                `json:"project_title,omitempty"`             // human-readable project title for context injection
+	ProjectResources          []ProjectResourceData `json:"project_resources,omitempty"`         // project-scoped resources to expose to the agent
+	PriorSessionID            string                `json:"prior_session_id,omitempty"`          // Claude session ID from a previous task on this issue
+	PriorWorkDir              string                `json:"prior_work_dir,omitempty"`            // work_dir from a previous task on this issue
+	TriggerCommentID          string                `json:"trigger_comment_id,omitempty"`        // comment that triggered this task
+	TriggerCommentContent     string                `json:"trigger_comment_content,omitempty"`   // content of the triggering comment
+	TriggerAuthorType         string                `json:"trigger_author_type,omitempty"`       // "agent" or "member" — author kind for the triggering comment
+	TriggerAuthorName         string                `json:"trigger_author_name,omitempty"`       // display name of the triggering comment author
+	ChatSessionID             string                `json:"chat_session_id,omitempty"`           // non-empty for chat tasks
+	ChatMessage               string                `json:"chat_message,omitempty"`              // user message content for chat tasks
+	ChatMessageAttachments    []ChatAttachmentMeta  `json:"chat_message_attachments,omitempty"`  // attachments linked to the chat message; agent uses these to `multica attachment download <id>`
+	AutopilotRunID            string                `json:"autopilot_run_id,omitempty"`          // non-empty for autopilot run_only tasks
+	AutopilotID               string                `json:"autopilot_id,omitempty"`              // autopilot that spawned this run
+	AutopilotTitle            string                `json:"autopilot_title,omitempty"`           // autopilot title used as task context
+	AutopilotDescription      string                `json:"autopilot_description,omitempty"`     // autopilot description used as task prompt
+	AutopilotSource           string                `json:"autopilot_source,omitempty"`          // manual, schedule, webhook, or api
+	AutopilotTriggerPayload   json.RawMessage       `json:"autopilot_trigger_payload,omitempty"` // optional trigger payload for webhook/api runs
+	QuickCreatePrompt         string                `json:"quick_create_prompt,omitempty"`       // user's natural-language input for quick-create tasks
 	// RequestingUserName + RequestingUserProfileDescription describe the human
 	// the agent is working on behalf of. v1 sources them from the runtime
 	// owner (the user who registered the daemon). Empty when the runtime has
 	// no owner (cloud / system runtimes) or the user hasn't set a description.
 	// Injected into the brief under `## Requesting User`; omitted entirely
 	// when description is empty so the agent doesn't see a useless heading.
-	RequestingUserName               string          `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string          `json:"requesting_user_profile_description,omitempty"`
-	IssuePlanPrompt                  string          `json:"issue_plan_prompt,omitempty"` // user's natural-language input for plan tasks
-	IssuePlanID                      string          `json:"issue_plan_id,omitempty"`     // plan row receiving the structured output
-	AvailableAgents                  []PlanAgentData `json:"available_agents,omitempty"`  // assignable agents planner may recommend
+	RequestingUserName               string             `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string             `json:"requesting_user_profile_description,omitempty"`
+	IssuePlanPrompt                  string             `json:"issue_plan_prompt,omitempty"`   // user's natural-language input for plan tasks
+	IssuePlanID                      string             `json:"issue_plan_id,omitempty"`       // plan row receiving the structured output
+	IssuePlanPhase                   string             `json:"issue_plan_phase,omitempty"`    // spec or items for two-stage planning
+	IssuePlanSpec                    PlanSpecData       `json:"issue_plan_spec,omitempty"`     // approved spec for item-generation tasks
+	AvailableAgents                  []PlanAgentData    `json:"available_agents,omitempty"`    // assignable agents planner may recommend
+	AvailablePipelines               []PlanPipelineData `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
+}
+
+type PlanSpecData struct {
+	Summary         string   `json:"summary"`
+	Goal            string   `json:"goal"`
+	SuccessCriteria []string `json:"success_criteria"`
+	InScope         []string `json:"in_scope"`
+	OutOfScope      []string `json:"out_of_scope"`
+	Approach        string   `json:"approach"`
+	Assumptions     []string `json:"assumptions"`
+	OpenQuestions   []string `json:"open_questions"`
 }
 
 type PlanAgentData struct {
@@ -79,6 +104,26 @@ type PlanAgentData struct {
 	Description  string   `json:"description"`
 	Instructions string   `json:"instructions,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
+}
+
+type PlanPipelineData struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	IsSystem    bool                   `json:"is_system,omitempty"`
+	SystemKey   string                 `json:"system_key,omitempty"`
+	ReadOnly    bool                   `json:"read_only,omitempty"`
+	Nodes       []PlanPipelineNodeData `json:"nodes,omitempty"`
+}
+
+type PlanPipelineNodeData struct {
+	Key               string   `json:"key"`
+	Type              string   `json:"type"`
+	Title             string   `json:"title"`
+	Description       string   `json:"description"`
+	AgentID           string   `json:"agent_id,omitempty"`
+	Repos             []string `json:"repos,omitempty"`
+	DependsOnNodeKeys []string `json:"depends_on_node_keys,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon

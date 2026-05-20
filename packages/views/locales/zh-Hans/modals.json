@@ -131,6 +131,8 @@
       "sent_count": "已发送 {{count}}",
       "version_blocked_tooltip": "守护进程 CLI 必须 ≥ {{min}}",
       "toast_sent": "已交给智能体——完成后会在收件箱通知你",
+      "toast_plan_created": "已创建到 Plan",
+      "open_plan": "打开 Plan",
       "error_agent_unavailable_fallback": "智能体不可用，请换一个。",
       "error_daemon_version": "该智能体的守护进程 CLI（{{current}}）低于要求的 {{min}}。请升级守护进程后再使用通过智能体创建。",
       "error_unknown": "提交失败，请重试。"

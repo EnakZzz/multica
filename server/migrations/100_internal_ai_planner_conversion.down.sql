@@ -1,0 +1,2 @@
+-- No-op: converting a legacy AI Planner into the built-in planner discards
+-- ownership and skill links that cannot be reconstructed reliably.

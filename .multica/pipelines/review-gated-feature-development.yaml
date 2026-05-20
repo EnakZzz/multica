@@ -1,0 +1,122 @@
+version: 1
+name: Review gated feature development
+description: >
+  Feature workflow that stops after implementation for spec compliance review,
+  then code quality review, then a pull request and explicit human-ready
+  handoff. Upstream commit merge requests use this same pipeline after the
+  owner assigns the generated upstream commit review issue to a developer
+  agent.
+nodes:
+  - key: prepare-branch
+    type: issue
+    repo: multica
+    title: Create feature branch and scope the change
+    description: >
+      Confirm the feature scope and base branch, create a dedicated feature
+      branch from main, and record the branch name. Keep unrelated dirty work
+      out of the branch.
+
+      For upstream commit merge work, read the triggering or referenced issue
+      description and extract:
+
+      - upstream-sha:<full-sha>
+      - upstream-url
+      - recommended-action
+
+      Create the branch from origin/main using this name format:
+
+      codex/upstream-<shortsha>-<slug>
+
+      The slug should come from the upstream commit subject, lowercased and
+      sanitized to letters, numbers, and hyphens. Do not cherry-pick in this
+      node; only prepare the branch, verify the upstream remote, fetch
+      upstream/main, and record the exact branch name and upstream SHA for the
+      implementation node.
+    position:
+      x: 120
+      y: 120
+
+  - key: implement-feature
+    type: issue
+    repo: multica
+    title: Implement the feature on the branch
+    description: >
+      Implement the requested feature on the dedicated branch. Follow AGENTS.md
+      and CLAUDE.md, preserve unrelated user changes, and update focused tests
+      with the implementation.
+
+      For upstream commit merge work, cherry-pick the extracted upstream SHA or
+      apply an equivalent minimal merge onto the prepared branch. If conflicts
+      occur, resolve them in favor of preserving this fork's local
+      customizations unless the upstream commit is explicitly intended to
+      replace that behavior. Document every conflict, chosen resolution, and
+      affected file. Run focused tests for the changed surface and keep the
+      branch limited to the approved upstream commit plus required conflict
+      fixes.
+    depends_on:
+      - prepare-branch
+    position:
+      x: 460
+      y: 120
+
+  - key: spec-compliance-review
+    type: spec_review
+    repo: multica
+    title: Review implementation against the spec
+    description: >
+      Compare the implementation against the requested behavior, accepted plan,
+      issue context, and success criteria. Fail the gate when the implementation
+      misses required behavior, scope boundaries, or acceptance criteria.
+    depends_on:
+      - implement-feature
+    position:
+      x: 800
+      y: 120
+
+  - key: code-quality-review
+    type: code_review
+    repo: multica
+    title: Review code quality and risk
+    description: >
+      Review the changed code for correctness, regressions, missing tests,
+      data-loss risk, security risk, maintainability, and repo convention drift.
+      Fail the gate when downstream human handoff should stay blocked.
+    depends_on:
+      - spec-compliance-review
+    position:
+      x: 1140
+      y: 120
+
+  - key: create-pr
+    type: issue
+    repo: multica
+    title: Create pull request for human review
+    description: >
+      After spec and code review gates pass, push the dedicated branch and
+      create a GitHub pull request against the fork's main branch. Use gh pr
+      create when available. The PR title should match the pipeline run title
+      or summarize the upstream commit being merged. The PR body must include
+      the upstream SHA, source URL, conflict resolutions, tests run, review gate
+      results, and residual risks.
+
+      If gh is missing, not authenticated, lacks permission, or the push fails,
+      do not mark this issue done. Report the exact command, stderr, current
+      branch, remote URLs, and whether the branch was pushed.
+    depends_on:
+      - code-quality-review
+    position:
+      x: 1480
+      y: 120
+
+  - key: ready-for-human
+    type: manual
+    title: Ready for human decision
+    description: >
+      Human handoff point. Review the completed implementation, spec gate, code
+      review gate, and pull request before merge, deployment, or additional
+      work.
+    depends_on:
+      - create-pr
+    position:
+      x: 1820
+      y: 120

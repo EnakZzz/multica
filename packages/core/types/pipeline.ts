@@ -1,4 +1,4 @@
-export type PipelineNodeType = "issue" | "manual" | "check";
+export type PipelineNodeType = "issue" | "manual" | "check" | "spec_review" | "code_review";
 
 export interface PipelineNode {
   id: string;
@@ -23,6 +23,10 @@ export interface Pipeline {
   workspace_id: string;
   name: string;
   description: string;
+  is_system: boolean;
+  system_key: string | null;
+  editable: boolean;
+  deletable: boolean;
   created_by: string;
   archived_at: string | null;
   created_at: string;
@@ -84,6 +88,10 @@ export interface UpdatePipelineRequest {
 export interface RunPipelineRequest {
   title?: string;
   project_id?: string | null;
+}
+
+export interface DuplicatePipelineRequest {
+  name?: string;
 }
 
 export interface ImportPipelineYamlRequest {

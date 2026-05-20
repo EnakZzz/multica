@@ -14,6 +14,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  RotateCcw,
   Trash2,
   UserMinus,
 } from "lucide-react";
@@ -98,6 +99,7 @@ export function IssueActionsMenuItems({
   const {
     isPinned,
     updateField,
+    rerunIssue,
     togglePin,
     copyLink,
     openCreateSubIssue,
@@ -270,6 +272,12 @@ export function IssueActionsMenuItems({
         <FolderOpen className="h-3.5 w-3.5" />
         {t(($) => $.actions.copy_workdir_path)}
       </P.Item>
+      {issue.assignee_type === "agent" && issue.assignee_id && (
+        <P.Item onClick={rerunIssue}>
+          <RotateCcw className="h-3.5 w-3.5" />
+          {t(($) => $.actions.rerun_issue)}
+        </P.Item>
+      )}
 
       <P.Separator />
 

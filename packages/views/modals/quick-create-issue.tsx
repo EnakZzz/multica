@@ -15,7 +15,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useCurrentWorkspace } from "@multica/core/paths";
+import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { useQuickCreateStore } from "@multica/core/issues/stores/quick-create-store";
@@ -44,6 +44,7 @@ import {
 } from "../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { useT } from "../i18n";
+import { useNavigation } from "../navigation";
 
 // AgentCreatePanel — agent-mode body of the create-issue dialog. Renders
 // only the inner content; the surrounding `<Dialog>` AND `<DialogContent>`
@@ -76,6 +77,8 @@ export function AgentCreatePanel({
   const { t } = useT("modals");
   const workspaceName = useCurrentWorkspace()?.name;
   const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const nav = useNavigation();
   const userId = useAuthStore((s) => s.user?.id);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -216,7 +219,7 @@ export function AgentCreatePanel({
     setSubmitting(true);
     setError(null);
     try {
-      await api.quickCreateIssue({
+      const result = await api.quickCreateIssue({
         agent_id: agentId,
         prompt: md,
         project_id: projectId ?? undefined,
@@ -225,9 +228,20 @@ export function AgentCreatePanel({
       setLastProjectId(projectId);
       clearPrompt();
       setLastMode("agent");
-      toast.success(t(($) => $.create_issue.agent.toast_sent), {
-        duration: 4000,
-      });
+      const planId = result?.plan_id;
+      if (planId) {
+        toast.success(t(($) => $.create_issue.agent.toast_plan_created), {
+          duration: 6000,
+          action: {
+            label: t(($) => $.create_issue.agent.open_plan),
+            onClick: () => nav.push(paths.planDetail(planId)),
+          },
+        });
+      } else {
+        toast.success(t(($) => $.create_issue.agent.toast_sent), {
+          duration: 4000,
+        });
+      }
       if (keepOpen) {
         // Stay open for continuous creation — clear the editor so the
         // user can immediately type the next prompt.

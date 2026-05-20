@@ -153,6 +153,7 @@ export interface Agent {
    * (MUL-2339).
    */
   thinking_level?: string;
+  is_internal: boolean;
   owner_id: string | null;
   skills: AgentSkillSummary[];
   created_at: string;

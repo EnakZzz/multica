@@ -131,6 +131,206 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 	testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 }
 
+func TestDaemonRegister_CreatesInternalPlannerAgent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1 AND name = $2 AND is_internal = TRUE`, testWorkspaceID, internalPlannerAgentName)
+		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, "test-daemon-internal-planner")
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id":      testWorkspaceID,
+		"daemon_id":         "test-daemon-internal-planner",
+		"device_name":       "planner-device",
+		"capabilities":      []string{daemonCapabilityIssuePlan},
+		"legacy_daemon_ids": []string{},
+		"runtimes": []map[string]any{
+			{"name": "planner-runtime", "type": "codex", "version": "1.0.0", "status": "online"},
+		},
+	}, testWorkspaceID, "test-daemon-internal-planner")
+
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	agent, err := testHandler.Queries.GetInternalPlannerAgent(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("GetInternalPlannerAgent: %v", err)
+	}
+	if agent.Name != internalPlannerAgentName {
+		t.Fatalf("internal planner name = %q, want %q", agent.Name, internalPlannerAgentName)
+	}
+	if !agent.IsInternal {
+		t.Fatalf("internal planner should be marked internal")
+	}
+	if !agent.RuntimeID.Valid {
+		t.Fatalf("internal planner should be bound to the registered runtime")
+	}
+}
+
+func TestDaemonRegister_ConvertsLegacyAIPlannerAndClearsSkills(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, internalPlannerAgentName); err != nil {
+		t.Fatalf("cleanup existing internal planner: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, internalPlannerAgentName)
+		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, "legacy-planner-daemon")
+		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, "test-daemon-convert-internal-planner")
+		testPool.Exec(ctx, `DELETE FROM skill WHERE workspace_id = $1 AND name LIKE 'legacy planner skill %'`, testWorkspaceID)
+	})
+
+	var agentID, skillID, legacyRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider,
+			status, device_info, metadata
+		)
+		VALUES ($1, 'legacy-planner-daemon', 'legacy planner runtime', 'local', 'codex',
+			'online', '', '{}'::jsonb)
+		RETURNING id::text
+	`, testWorkspaceID).Scan(&legacyRuntimeID); err != nil {
+		t.Fatalf("insert legacy runtime: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id, instructions,
+			custom_env, custom_args, is_internal
+		)
+		VALUES ($1, '规划Agent', 'legacy custom planner', 'local', '{}'::jsonb, $3,
+			'private', 3, $2, 'legacy instructions', '{}'::jsonb, '[]'::jsonb, FALSE)
+		RETURNING id::text
+	`, testWorkspaceID, testUserID, legacyRuntimeID).Scan(&agentID); err != nil {
+		t.Fatalf("insert legacy planner: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO skill (workspace_id, name, description, content, created_by)
+		VALUES ($1, 'legacy planner skill ' || gen_random_uuid()::text, '', '', $2)
+		RETURNING id::text
+	`, testWorkspaceID, testUserID).Scan(&skillID); err != nil {
+		t.Fatalf("insert skill: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`, agentID, skillID); err != nil {
+		t.Fatalf("attach skill: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    "test-daemon-convert-internal-planner",
+		"device_name":  "planner-device",
+		"capabilities": []string{daemonCapabilityIssuePlan},
+		"runtimes": []map[string]any{
+			{"name": "planner-runtime", "type": "codex", "version": "1.0.0", "status": "online"},
+		},
+	}, testWorkspaceID, "test-daemon-convert-internal-planner")
+
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	agent, err := testHandler.Queries.GetInternalPlannerAgent(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("GetInternalPlannerAgent: %v", err)
+	}
+	if uuidToString(agent.ID) != agentID {
+		t.Fatalf("converted planner id = %s, want legacy id %s", uuidToString(agent.ID), agentID)
+	}
+	if agent.OwnerID.Valid {
+		t.Fatalf("converted planner owner_id should be NULL")
+	}
+	if agent.Visibility != "workspace" {
+		t.Fatalf("converted planner visibility = %q, want workspace", agent.Visibility)
+	}
+	var skillCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_skill WHERE agent_id = $1`, agent.ID).Scan(&skillCount); err != nil {
+		t.Fatalf("count planner skills: %v", err)
+	}
+	if skillCount != 0 {
+		t.Fatalf("converted planner skill count = %d, want 0", skillCount)
+	}
+}
+
+func TestDaemonRegister_SyncsExistingInternalPlannerMetadata(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	daemonID := "test-daemon-sync-internal-planner"
+	if _, err := testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, internalPlannerAgentName); err != nil {
+		t.Fatalf("cleanup existing internal planner: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, internalPlannerAgentName)
+		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, daemonID)
+	})
+
+	register := func() {
+		w := httptest.NewRecorder()
+		req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+			"workspace_id": testWorkspaceID,
+			"daemon_id":    daemonID,
+			"device_name":  "planner-device",
+			"capabilities": []string{daemonCapabilityIssuePlan},
+			"runtimes": []map[string]any{
+				{"name": "planner-runtime", "type": "codex", "version": "1.0.0", "status": "online"},
+			},
+		}, testWorkspaceID, daemonID)
+		testHandler.DaemonRegister(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	}
+
+	register()
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET description = 'stale description',
+		    instructions = 'stale planner instructions',
+		    visibility = 'private',
+		    max_concurrent_tasks = 3,
+		    owner_id = $2
+		WHERE workspace_id = $1 AND name = '规划Agent'
+	`, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("stale planner metadata: %v", err)
+	}
+
+	register()
+
+	agent, err := testHandler.Queries.GetInternalPlannerAgent(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("GetInternalPlannerAgent: %v", err)
+	}
+	if agent.Description != internalPlannerDescription {
+		t.Fatalf("description = %q, want %q", agent.Description, internalPlannerDescription)
+	}
+	if agent.Instructions != internalPlannerInstructions {
+		t.Fatalf("instructions = %q, want %q", agent.Instructions, internalPlannerInstructions)
+	}
+	if agent.Visibility != "workspace" {
+		t.Fatalf("visibility = %q, want workspace", agent.Visibility)
+	}
+	if agent.OwnerID.Valid {
+		t.Fatalf("owner_id should be NULL")
+	}
+	if agent.MaxConcurrentTasks != 1 {
+		t.Fatalf("max_concurrent_tasks = %d, want 1", agent.MaxConcurrentTasks)
+	}
+}
+
 func TestDaemonRegister_WithDaemonToken_WorkspaceMismatch(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multica/core/types";
+import { toast } from "sonner";
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -27,6 +28,14 @@ vi.mock("@multica/core/auth", () => ({
   registerAuthStore: vi.fn(),
 }));
 
+const agentListRef: { value: any[] } = { value: [] };
+vi.mock("@multica/core/workspace/queries", () => ({
+  agentListOptions: () => ({
+    queryKey: ["workspaces", "ws-1", "agents"],
+    queryFn: () => Promise.resolve(agentListRef.value),
+  }),
+}));
+
 // Mutable so individual tests can seed the pin list.
 const pinListRef: { value: Array<{ item_type: string; item_id: string }> } = {
   value: [],
@@ -47,6 +56,20 @@ vi.mock("@multica/core/issues/mutations", () => ({
   useUpdateIssue: () => ({ mutate: mockUpdateMutate }),
 }));
 
+const apiMocks = vi.hoisted(() => ({
+  rerunIssue: vi.fn(),
+}));
+vi.mock("@multica/core/api", () => ({
+  api: {
+    rerunIssue: apiMocks.rerunIssue,
+  },
+}));
+
+const mockCreatePlanMutate = vi.fn();
+vi.mock("@multica/core/plans/mutations", () => ({
+  useCreatePlan: () => ({ mutate: mockCreatePlanMutate }),
+}));
+
 vi.mock("@multica/core/paths", async () => {
   const actual = await vi.importActual<typeof import("@multica/core/paths")>(
     "@multica/core/paths",
@@ -58,9 +81,10 @@ vi.mock("@multica/core/paths", async () => {
   };
 });
 
+const mockNavigationPush = vi.fn();
 vi.mock("../../../navigation", () => ({
   useNavigation: () => ({
-    push: vi.fn(),
+    push: mockNavigationPush,
     pathname: "/test/issues/issue-1",
     searchParams: new URLSearchParams(),
     back: vi.fn(),
@@ -97,19 +121,29 @@ const mockIssue: Issue = {
   updated_at: "2026-01-01T00:00:00Z",
 } as Issue;
 
+let latestQueryClient: QueryClient;
+
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  latestQueryClient = qc;
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
 beforeEach(() => {
   mockOpenModal.mockReset();
   mockUpdateMutate.mockReset();
+  mockCreatePlanMutate.mockReset();
+  mockNavigationPush.mockReset();
   mockCreatePinMutate.mockReset();
   mockDeletePinMutate.mockReset();
+  agentListRef.value = [];
   pinListRef.value = [];
+  apiMocks.rerunIssue.mockReset();
+  apiMocks.rerunIssue.mockResolvedValue({ id: "task-1" });
+  vi.mocked(toast.success).mockReset();
+  vi.mocked(toast.error).mockReset();
   localStorage.clear();
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -162,6 +196,75 @@ describe("useIssueActions", () => {
     expect(mockOpenModal).not.toHaveBeenCalled();
   });
 
+  it("assigning the internal planner agent creates a source issue plan instead of updating the issue", async () => {
+    agentListRef.value = [
+      {
+        id: "planner-1",
+        workspace_id: "ws-1",
+        runtime_id: "runtime-1",
+        name: "规划Agent",
+        description: "Built-in planner",
+        instructions: "",
+        avatar_url: null,
+        runtime_mode: "cloud",
+        runtime_config: {},
+        custom_env: {},
+        custom_args: [],
+        custom_env_redacted: false,
+        visibility: "workspace",
+        status: "idle",
+        max_concurrent_tasks: 1,
+        model: "",
+        is_internal: true,
+        owner_id: null,
+        skills: [],
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        archived_at: null,
+        archived_by: null,
+      },
+    ];
+    mockCreatePlanMutate.mockImplementation((_payload, options) => {
+      options?.onSuccess?.({ id: "plan-1" });
+    });
+    const issueWithDescription = {
+      ...mockIssue,
+      title: "Plan this feature",
+      description: "Break it into executable work.",
+      project_id: "project-1",
+    } as Issue;
+    const { result } = renderHook(() => useIssueActions(issueWithDescription), {
+      wrapper,
+    });
+    await waitFor(() => {
+      expect(latestQueryClient.getQueryData(["workspaces", "ws-1", "agents"])).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.updateField({
+        assignee_type: "agent",
+        assignee_id: "planner-1",
+      });
+    });
+
+    expect(mockUpdateMutate).not.toHaveBeenCalled();
+    expect(mockCreatePlanMutate).toHaveBeenCalledWith(
+      {
+        title: "Plan this feature",
+        prompt: "Plan this feature\n\nBreak it into executable work.",
+        planner_agent_id: "planner-1",
+        project_id: "project-1",
+        source_issue_id: "issue-1",
+      },
+      expect.any(Object),
+    );
+    const toastOptions = vi.mocked(toast.success).mock.calls[0]?.[1] as
+      | { action?: { onClick?: () => void } }
+      | undefined;
+    toastOptions?.action?.onClick?.();
+    expect(mockNavigationPush).toHaveBeenCalledWith("/test/plans/plan-1");
+  });
+
   it("copyLink writes the issue's shareable URL to the clipboard", async () => {
     const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
 
@@ -172,6 +275,19 @@ describe("useIssueActions", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       "https://app.multica.com/test/issues/issue-1",
     );
+  });
+
+  it("rerunIssue enqueues a new task for the issue", async () => {
+    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
+
+    act(() => {
+      result.current.rerunIssue();
+    });
+
+    await waitFor(() => {
+      expect(apiMocks.rerunIssue).toHaveBeenCalledWith("issue-1");
+    });
+    expect(toast.success).toHaveBeenCalled();
   });
 
   it("openSetParent / openAddChild / openDeleteConfirm / openCreateSubIssue open the correct modal with payload", () => {

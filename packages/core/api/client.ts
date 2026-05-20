@@ -97,16 +97,19 @@ import type {
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
   Plan,
+  ApprovePlanSpecRequest,
+  CommitPlanRequest,
   CreatePlanRequest,
   UpdatePlanRequest,
   ListPlansResponse,
   Pipeline,
-  PipelineImportValidationResponse,
-  PipelineRun,
-  CreatePipelineRequest,
-  ImportPipelineYamlRequest,
-  UpdatePipelineRequest,
-  RunPipelineRequest,
+    PipelineImportValidationResponse,
+    PipelineRun,
+    CreatePipelineRequest,
+    DuplicatePipelineRequest,
+    ImportPipelineYamlRequest,
+    UpdatePipelineRequest,
+    RunPipelineRequest,
   ListPipelinesResponse,
   IssueDependenciesResponse,
 } from "../types";
@@ -139,6 +142,7 @@ import {
   EMPTY_PIPELINE_IMPORT_VALIDATION_RESPONSE,
   EMPTY_PIPELINE_RUN,
   EMPTY_PLAN,
+  EMPTY_QUICK_CREATE_ISSUE_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
@@ -155,6 +159,7 @@ import {
   PipelineRunSchema,
   PipelineSchema,
   PlanSchema,
+  QuickCreateIssueResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
   UserSchema,
@@ -565,10 +570,13 @@ export class ApiClient {
     });
   }
 
-  async quickCreateIssue(data: { agent_id: string; prompt: string; project_id?: string | null }): Promise<{ task_id: string }> {
-    return this.fetch("/api/issues/quick-create", {
+  async quickCreateIssue(data: { agent_id: string; prompt: string; project_id?: string | null }): Promise<{ task_id?: string; plan_id?: string }> {
+    const raw = await this.fetch<unknown>("/api/issues/quick-create", {
       method: "POST",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, QuickCreateIssueResponseSchema, EMPTY_QUICK_CREATE_ISSUE_RESPONSE, {
+      endpoint: "POST /api/issues/quick-create",
     });
   }
 
@@ -609,6 +617,16 @@ export class ApiClient {
     });
   }
 
+  async approvePlanSpec(id: string, data: ApprovePlanSpecRequest = {}): Promise<Plan> {
+    const raw = await this.fetch<unknown>(`/api/plans/${id}/approve-spec`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
+      endpoint: "POST /api/plans/{id}/approve-spec",
+    });
+  }
+
   async rerunPlan(id: string): Promise<Plan> {
     const raw = await this.fetch<unknown>(`/api/plans/${id}/rerun`, {
       method: "POST",
@@ -618,9 +636,10 @@ export class ApiClient {
     });
   }
 
-  async commitPlan(id: string): Promise<Plan> {
+  async commitPlan(id: string, data: CommitPlanRequest = {}): Promise<Plan> {
     const raw = await this.fetch<unknown>(`/api/plans/${id}/commit`, {
       method: "POST",
+      body: JSON.stringify(data),
     });
     return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
       endpoint: "POST /api/plans/{id}/commit",
@@ -666,6 +685,16 @@ export class ApiClient {
 
   async deletePipeline(id: string): Promise<void> {
     await this.fetch(`/api/pipelines/${id}`, { method: "DELETE" });
+  }
+
+  async duplicatePipeline(id: string, data: DuplicatePipelineRequest = {}): Promise<Pipeline> {
+    const raw = await this.fetch<unknown>(`/api/pipelines/${id}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<Pipeline>(raw, PipelineSchema, EMPTY_PIPELINE, {
+      endpoint: "POST /api/pipelines/{id}/duplicate",
+    });
   }
 
   async validatePipelineYamlImport(

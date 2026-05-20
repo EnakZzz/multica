@@ -25,6 +25,7 @@ export type DecisionReason =
   | "not_owner_role"
   | "not_admin_role"
   | "not_resource_owner"
+  | "internal_resource"
   | "last_owner"
   | "private_visibility"
   | "unknown";

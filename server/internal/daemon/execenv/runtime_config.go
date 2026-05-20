@@ -233,11 +233,11 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica autopilot trigger <id>` — Manually trigger an autopilot to run once\n")
 	b.WriteString("- `multica autopilot delete <id>` — Delete an autopilot\n\n")
 	b.WriteString("### Git Safety\n")
-	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out code into a dedicated `agent/<agent>/<issue>-<task>` branch. `--ref` is only the base ref; it never makes main/master the working branch.\n")
+	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out code into a dedicated generated work branch. Plan-created issues may specify a module/function branch such as `feature/api-auth-flow`; otherwise checkout falls back to `agent/<agent>/<issue>-<task>`. `--ref` is only the base ref; it never makes main/master the working branch.\n")
 	b.WriteString("- `multica repo import-context` loads committed `.multica/project.yaml` and pipeline YAML into Multica. Manifest roles may be bound with `--role developer=<agent-id>`; roles not bound yet intentionally stay unassigned so project setup can proceed before every role agent exists.\n")
 	b.WriteString("- `multica repo sync-context` writes commit-ready `.multica/skills/` and `.multica/pipelines/` files. Use it before committing when Multica-designed project-specific skills or UI-created project pipelines must travel with the code branch; generic cross-project agent skills should stay out of the repository.\n")
-	b.WriteString("- `multica repo publish` — Push the current `agent/*` branch to origin and record branch metadata for the task result. This command refuses `main`, `master`, and any non-`agent/*` branch.\n")
-	b.WriteString("- Agents must never run `git push origin main`, `git push origin master`, or push directly to protected branches. Final comments for code changes must include `Branch: agent/...` and `Status: ready for review`.\n\n")
+	b.WriteString("- `multica repo publish` — Push the current generated work branch to origin and record branch metadata for the task result. This command refuses `main`, `master`, and unknown branch families.\n")
+	b.WriteString("- Agents must never run `git push origin main`, `git push origin master`, or push directly to protected branches. Final comments for code changes must include `Branch: ...` and the final issue status you are setting, such as `Status: done` or `Status: ready for review` depending on the task workflow.\n\n")
 
 	if provider == "codex" {
 		b.WriteString("## Codex-Specific Comment Formatting\n\n")
@@ -260,7 +260,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		for _, repo := range ctx.Repos {
 			fmt.Fprintf(&b, "- %s\n", repo.URL)
 		}
-		b.WriteString("\nThe checkout command creates a git worktree with a dedicated `agent/*` branch. Publish code with `multica repo publish`; do not push directly to main/master.\n\n")
+		b.WriteString("\nThe checkout command creates a git worktree with a dedicated generated work branch. Publish code with `multica repo publish`; do not push directly to main/master.\n\n")
 	}
 
 	// Inject project-scoped context (resources attached to the issue's project).
@@ -351,14 +351,28 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("7. Do NOT change the issue status unless the comment explicitly asks for it\n\n")
 	} else {
 		// Assignment-triggered: defer to agent Skills for workflow specifics.
+		planAgentTask := ctx.PlanItemExecutionKind == "agent_task"
 		b.WriteString("You are responsible for managing the issue status throughout your work.\n\n")
+		if planAgentTask {
+			b.WriteString("This issue was created from a Plan item with `execution_kind=agent_task`. That kind is the execution contract: complete the task directly and do not put it into `in_review` unless the issue or a human comment explicitly asks for a separate review.\n")
+			if ctx.PlanItemRequiresGitCommit && ctx.PlanItemBranchName != "" {
+				fmt.Fprintf(&b, "The Plan item has a planned branch name: `%s`. `multica repo checkout <url>` will create that branch; use that name in the final Branch line after publishing.\n\n", ctx.PlanItemBranchName)
+			} else {
+				b.WriteString("The Plan item is not expected to produce a git commit. Do not create or publish a branch unless the issue body or a human comment explicitly changes that.\n\n")
+			}
+		}
 		fmt.Fprintf(&b, "1. Run `multica issue get %s --output json` to understand your task\n", ctx.IssueID)
 		fmt.Fprintf(&b, "2. Run `multica issue comment list %s --output json` to read the full comment history (returns all comments, capped server-side at 2000) — this is mandatory, not optional. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions. When the flat dump is too large to ingest in one shot, treat `--recent 20 --output json` plus the `--before` / `--before-id` cursor (from the stderr `Next thread cursor:` line) as a paging strategy: keep walking older threads until you have read enough history to satisfy this mandatory step. `--recent` is a way to read the full history page-by-page, not a shortcut that replaces it.\n", ctx.IssueID)
 		fmt.Fprintf(&b, "3. Run `multica issue status %s in_progress`\n", ctx.IssueID)
 		b.WriteString("4. Follow your Skills and Agent Identity to complete the task (write code, investigate, etc.)\n")
-		b.WriteString("5. For code changes, run `multica repo checkout <url>`, commit on the generated `agent/*` branch, then run `multica repo publish`. The publish command is the required push path and records the branch for review.\n")
-		fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. For code changes the comment must include `Branch: agent/...` and `Status: ready for review`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
-		fmt.Fprintf(&b, "7. Only after a code branch has been published, run `multica issue status %s in_review`. If no branch was produced, do not mark the issue `in_review` just to finish a run.\n", ctx.IssueID)
+		b.WriteString("5. For code changes, run `multica repo checkout <url>`, commit on the generated work branch, then run `multica repo publish`. The publish command is the required push path and records the branch for review.\n")
+		if planAgentTask {
+			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. For code changes the comment must include `Branch: ...` and `Status: done`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
+			fmt.Fprintf(&b, "7. After posting your final result, run `multica issue status %s done`. The platform also treats completed Plan `agent_task` runs as done so downstream dependencies can continue.\n", ctx.IssueID)
+		} else {
+			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. For code changes the comment must include `Branch: ...` and `Status: ready for review`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
+			fmt.Fprintf(&b, "7. Only after a code branch has been published, run `multica issue status %s in_review`. If no branch was produced, do not mark the issue `in_review` just to finish a run.\n", ctx.IssueID)
+		}
 		fmt.Fprintf(&b, "8. If blocked, run `multica issue status %s blocked` and post a comment explaining why\n\n", ctx.IssueID)
 	}
 

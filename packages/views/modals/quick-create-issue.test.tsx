@@ -11,6 +11,7 @@ const mockClearPrompt = vi.hoisted(() => vi.fn());
 const mockSetKeepOpen = vi.hoisted(() => vi.fn());
 const mockSetLastMode = vi.hoisted(() => vi.fn());
 const mockToastSuccess = vi.hoisted(() => vi.fn());
+const mockNavigationPush = vi.hoisted(() => vi.fn());
 
 const mockQuickCreateStore = {
   lastAgentId: null as string | null,
@@ -66,6 +67,15 @@ vi.mock("@multica/core/hooks", () => ({
 
 vi.mock("@multica/core/paths", () => ({
   useCurrentWorkspace: () => ({ name: "Test Workspace" }),
+  useWorkspacePaths: () => ({
+    planDetail: (planId: string) => `/test/plans/${planId}`,
+  }),
+}));
+
+vi.mock("../navigation", () => ({
+  useNavigation: () => ({
+    push: mockNavigationPush,
+  }),
 }));
 
 vi.mock("@multica/core/workspace/queries", () => ({
@@ -233,7 +243,7 @@ describe("AgentCreatePanel", () => {
     mockQuickCreateStore.keepOpen = false;
     mockProjectsQuery.data = [];
     mockProjectsQuery.isSuccess = true;
-    mockQuickCreateIssue.mockResolvedValue(undefined);
+    mockQuickCreateIssue.mockResolvedValue({ task_id: "task-1" });
     mockSetKeepOpen.mockImplementation((value: boolean) => {
       mockQuickCreateStore.keepOpen = value;
     });
@@ -280,6 +290,35 @@ describe("AgentCreatePanel", () => {
     expect(mockClearPrompt).toHaveBeenCalled();
     expect(mockSetLastMode).toHaveBeenCalledWith("agent");
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("shows a plan link when quick create is routed into Plans", async () => {
+    const user = userEvent.setup();
+    mockQuickCreateIssue.mockResolvedValue({ plan_id: "plan-1" });
+
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+
+    const editor = screen.getByPlaceholderText(
+      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
+    );
+    await user.clear(editor);
+    await user.type(editor, "Create multiplayer snake MVP");
+    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
+
+    await waitFor(() => {
+      expect(mockToastSuccess).toHaveBeenCalledWith(
+        "Created in Plans",
+        expect.objectContaining({
+          action: expect.objectContaining({
+            label: "Open Plan",
+          }),
+        }),
+      );
+    });
+
+    const options = mockToastSuccess.mock.calls.at(-1)?.[1];
+    options.action.onClick();
+    expect(mockNavigationPush).toHaveBeenCalledWith("/test/plans/plan-1");
   });
 
   // If the user's persisted `lastProjectId` points at a project that has

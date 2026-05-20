@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/daemonws"
@@ -88,6 +89,195 @@ func (h *Handler) requireDaemonRuntimeAccess(w http.ResponseWriter, r *http.Requ
 		return db.AgentRuntime{}, false
 	}
 	return rt, true
+}
+
+type reviewRepairTarget struct {
+	IssueID     string
+	Number      int32
+	Title       string
+	BranchName  string
+	CommitSHA   string
+	CompletedAt time.Time
+}
+
+func (h *Handler) latestReviewRepairTarget(ctx context.Context, reviewIssue db.Issue) (*reviewRepairTarget, error) {
+	if h.DB == nil {
+		return nil, pgx.ErrNoRows
+	}
+
+	var target reviewRepairTarget
+	var result []byte
+	err := h.DB.QueryRow(ctx, `
+		SELECT ri.id::text, ri.number, ri.title, atq.result, atq.completed_at
+		FROM issue ri
+		JOIN agent_task_queue atq ON atq.issue_id = ri.id
+		WHERE ri.workspace_id = $2
+		  AND ri.origin_type = 'review_gate_repair'
+		  AND ri.origin_id = $1
+		  AND ri.status = 'done'
+		  AND atq.status = 'completed'
+		  AND atq.result IS NOT NULL
+		ORDER BY atq.completed_at DESC NULLS LAST, atq.created_at DESC
+		LIMIT 1
+	`, reviewIssue.ID, reviewIssue.WorkspaceID).Scan(&target.IssueID, &target.Number, &target.Title, &result, &target.CompletedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload struct {
+		BranchName      string `json:"branch_name"`
+		BranchCommitSHA string `json:"branch_commit_sha"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return nil, err
+	}
+	target.BranchName = strings.TrimSpace(payload.BranchName)
+	target.CommitSHA = strings.TrimSpace(payload.BranchCommitSHA)
+	if target.BranchName == "" {
+		return nil, pgx.ErrNoRows
+	}
+	return &target, nil
+}
+
+type issueBranchTarget struct {
+	IssueID    string
+	Number     int32
+	Title      string
+	BranchName string
+	CommitSHA  string
+}
+
+func (h *Handler) latestCompletedIssueBranch(ctx context.Context, issueID pgtype.UUID) (*issueBranchTarget, error) {
+	if h.DB == nil {
+		return nil, pgx.ErrNoRows
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT i.id::text, i.number, i.title, atq.result
+		FROM agent_task_queue atq
+		JOIN issue i ON i.id = atq.issue_id
+		WHERE atq.issue_id = $1
+		  AND atq.status = 'completed'
+		  AND atq.result IS NOT NULL
+		ORDER BY atq.completed_at DESC NULLS LAST, atq.created_at DESC
+		LIMIT 20
+	`, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var target issueBranchTarget
+		var result []byte
+		if err := rows.Scan(&target.IssueID, &target.Number, &target.Title, &result); err != nil {
+			return nil, err
+		}
+		var payload struct {
+			BranchName      string `json:"branch_name"`
+			BranchCommitSHA string `json:"branch_commit_sha"`
+		}
+		if err := json.Unmarshal(result, &payload); err != nil {
+			continue
+		}
+		target.BranchName = strings.TrimSpace(payload.BranchName)
+		target.CommitSHA = strings.TrimSpace(payload.BranchCommitSHA)
+		if target.BranchName != "" {
+			return &target, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return nil, pgx.ErrNoRows
+}
+
+func (h *Handler) reviewGateNodeTypeForIssue(ctx context.Context, issueID pgtype.UUID) (string, bool) {
+	stage, err := h.Queries.GetPipelineRunStageForIssue(ctx, issueID)
+	if err == nil {
+		nodeType := service.NormalizePlanItemNodeType(stage.NodeType)
+		return nodeType, service.IsReviewGateNodeType(nodeType)
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		slog.Warn("review gate pipeline lookup failed", "issue_id", uuidToString(issueID), "error", err)
+		return "", false
+	}
+	item, err := h.Queries.GetPlanItemByGeneratedIssue(ctx, issueID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("review gate plan item lookup failed", "issue_id", uuidToString(issueID), "error", err)
+		}
+		return "", false
+	}
+	nodeType := service.NormalizePlanItemNodeType(item.NodeType)
+	return nodeType, service.IsReviewGateNodeType(nodeType)
+}
+
+func (h *Handler) isRepairBranchTargetCandidate(ctx context.Context, issue db.Issue) bool {
+	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
+		return false
+	}
+	if issue.OriginType.Valid && issue.OriginType.String == "review_gate_repair" {
+		return false
+	}
+	if _, isReviewGate := h.reviewGateNodeTypeForIssue(ctx, issue.ID); isReviewGate {
+		return false
+	}
+	return true
+}
+
+func (h *Handler) findRepairBranchSourceIssue(ctx context.Context, reviewIssueID pgtype.UUID) (db.Issue, bool) {
+	visited := map[string]bool{}
+	queue := []pgtype.UUID{reviewIssueID}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		key := uuidToString(current)
+		if visited[key] {
+			continue
+		}
+		visited[key] = true
+		deps, err := h.Queries.ListIssueBlockingDependencies(ctx, current)
+		if err != nil {
+			return db.Issue{}, false
+		}
+		for _, dep := range deps {
+			if h.isRepairBranchTargetCandidate(ctx, dep) {
+				return dep, true
+			}
+		}
+		for _, dep := range deps {
+			if _, isReviewGate := h.reviewGateNodeTypeForIssue(ctx, dep.ID); isReviewGate {
+				queue = append(queue, dep.ID)
+			}
+		}
+	}
+	return db.Issue{}, false
+}
+
+func (h *Handler) repairIssueBranchTarget(ctx context.Context, repairIssue db.Issue) (*issueBranchTarget, error) {
+	if !repairIssue.OriginType.Valid || repairIssue.OriginType.String != "review_gate_repair" || !repairIssue.OriginID.Valid {
+		return nil, pgx.ErrNoRows
+	}
+	reviewIssue, err := h.Queries.GetIssue(ctx, repairIssue.OriginID)
+	if err != nil {
+		return nil, err
+	}
+	if target, err := h.latestReviewRepairTarget(ctx, reviewIssue); err == nil {
+		return &issueBranchTarget{
+			IssueID:    target.IssueID,
+			Number:     target.Number,
+			Title:      target.Title,
+			BranchName: target.BranchName,
+			CommitSHA:  target.CommitSHA,
+		}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	sourceIssue, ok := h.findRepairBranchSourceIssue(ctx, reviewIssue.ID)
+	if !ok {
+		return nil, pgx.ErrNoRows
+	}
+	return h.latestCompletedIssueBranch(ctx, sourceIssue.ID)
 }
 
 // requireDaemonTaskAccess looks up a task and verifies the caller owns its workspace.
@@ -422,6 +612,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		// the stale row so there's only ever one runtime per machine.
 		h.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
 
+		if registered.Status == "online" && runtimeHasCapability(registered.Metadata, daemonCapabilityIssuePlan) {
+			h.ensureInternalPlannerAgent(r.Context(), registered)
+		}
+
 		resp = append(resp, runtimeToResponse(registered))
 	}
 
@@ -439,6 +633,65 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		"repos_version": repoResp.ReposVersion,
 		"settings":      repoResp.Settings,
 	})
+}
+
+const (
+	internalPlannerDescription  = "内置规划助手：把较大的目标拆成可审核的规格说明、可执行的 issue 或 pipeline 节点。"
+	internalPlannerInstructions = "你是 Multica 内置的 issue 规划智能体。以 issue-plan task prompt 为唯一准则：先产出便于人工审核的规格说明，再拆解成可执行的 issue 或 pipeline 节点，并写清验收标准、验证证据、依赖关系、review gate 和真实工作区 agent 推荐。规划 task 中不要直接创建 issue。"
+)
+
+func (h *Handler) ensureInternalPlannerAgent(ctx context.Context, runtime db.AgentRuntime) {
+	workspaceID := runtime.WorkspaceID
+	existing, err := h.Queries.GetInternalPlannerAgent(ctx, workspaceID)
+	hadPlanner := err == nil
+	if err != nil && !isNotFound(err) {
+		slog.Warn("internal planner lookup failed", "workspace_id", uuidToString(workspaceID), "error", err)
+		return
+	}
+	if hadPlanner && !internalPlannerAgentNeedsSync(existing, runtime) && existing.RuntimeID.Valid {
+		if current, err := h.Queries.GetAgentRuntime(ctx, existing.RuntimeID); err == nil &&
+			current.Status == "online" &&
+			runtimeHasCapability(current.Metadata, daemonCapabilityIssuePlan) {
+			return
+		}
+	}
+
+	agent, err := h.Queries.UpsertInternalPlannerAgent(ctx, db.UpsertInternalPlannerAgentParams{
+		WorkspaceID:  workspaceID,
+		Description:  internalPlannerDescription,
+		RuntimeMode:  runtime.RuntimeMode,
+		RuntimeID:    runtime.ID,
+		Instructions: internalPlannerInstructions,
+		Model:        pgtype.Text{},
+	})
+	if err != nil {
+		slog.Warn("internal planner upsert failed", "workspace_id", uuidToString(workspaceID), "runtime_id", uuidToString(runtime.ID), "error", err)
+		return
+	}
+	if err := h.Queries.RemoveAllAgentSkills(ctx, agent.ID); err != nil {
+		slog.Warn("internal planner skill cleanup failed", "workspace_id", uuidToString(workspaceID), "agent_id", uuidToString(agent.ID), "error", err)
+	}
+
+	eventType := protocol.EventAgentStatus
+	if !hadPlanner {
+		eventType = protocol.EventAgentCreated
+	}
+	h.publish(eventType, uuidToString(workspaceID), "system", "", map[string]any{
+		"agent": agentToResponse(agent),
+	})
+}
+
+func internalPlannerAgentNeedsSync(agent db.Agent, runtime db.AgentRuntime) bool {
+	return !agent.IsInternal ||
+		agent.Description != internalPlannerDescription ||
+		agent.Instructions != internalPlannerInstructions ||
+		agent.RuntimeMode != runtime.RuntimeMode ||
+		agent.Visibility != "workspace" ||
+		agent.OwnerID.Valid ||
+		agent.ArchivedAt.Valid ||
+		agent.MaxConcurrentTasks != 1 ||
+		!agent.RuntimeID.Valid ||
+		uuidToString(agent.RuntimeID) != uuidToString(runtime.ID)
 }
 
 // mergeLegacyRuntimes folds every runtime row keyed on a prior hostname-derived
@@ -1183,7 +1436,11 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// for issues inside that project. When the project has no Git repo
 	// resources (or no project at all), we fall back to the workspace repos.
 	if task.IssueID.Valid {
+		var claimedIssue db.Issue
+		var hasClaimedIssue bool
 		if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
+			claimedIssue = issue
+			hasClaimedIssue = true
 			resp.WorkspaceID = uuidToString(issue.WorkspaceID)
 			if prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID); prefix != "" && issue.Number > 0 {
 				resp.IssueIdentifier = fmt.Sprintf("%s-%d", prefix, issue.Number)
@@ -1235,6 +1492,46 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
 					resp.Repos = repos
 				}
+			}
+		}
+		if item, err := h.Queries.GetPlanItemByGeneratedIssue(r.Context(), task.IssueID); err == nil {
+			resp.PlanItemID = uuidToString(item.ID)
+			resp.PlanItemNodeType = service.NormalizePlanItemNodeType(item.NodeType)
+			resp.PlanItemExecutionKind = normalizePlanItemExecutionKind(item.ExecutionKind)
+			resp.PlanItemRequiresGitCommit = item.RequiresGitCommit
+			resp.PlanItemBranchName = strings.TrimSpace(item.BranchName)
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("failed to load plan item execution contract", "issue_id", uuidToString(task.IssueID), "error", err)
+		}
+		if resp.PlanItemNodeType == "" {
+			if stage, err := h.Queries.GetPipelineRunStageForIssue(r.Context(), task.IssueID); err == nil {
+				resp.PlanItemNodeType = service.NormalizePlanItemNodeType(stage.NodeType)
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				slog.Warn("failed to load pipeline stage node type", "issue_id", uuidToString(task.IssueID), "error", err)
+			}
+		}
+		if hasClaimedIssue && service.IsReviewGateNodeType(resp.PlanItemNodeType) {
+			if target, err := h.latestReviewRepairTarget(r.Context(), claimedIssue); err == nil {
+				resp.ReviewTargetIssueID = target.IssueID
+				resp.ReviewTargetBranchName = target.BranchName
+				resp.ReviewTargetCommitSHA = target.CommitSHA
+				if prefix := h.getIssuePrefix(r.Context(), claimedIssue.WorkspaceID); prefix != "" && target.Number > 0 {
+					resp.ReviewTargetIdentifier = fmt.Sprintf("%s-%d", prefix, target.Number)
+				} else {
+					resp.ReviewTargetIdentifier = target.IssueID
+				}
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				slog.Warn("failed to load review repair target", "issue_id", uuidToString(task.IssueID), "error", err)
+			}
+		}
+		if hasClaimedIssue && claimedIssue.OriginType.Valid && claimedIssue.OriginType.String == "review_gate_repair" {
+			if target, err := h.repairIssueBranchTarget(r.Context(), claimedIssue); err == nil {
+				resp.PlanItemRequiresGitCommit = true
+				resp.PlanItemBranchName = target.BranchName
+				resp.RepoCheckoutRef = target.BranchName
+				resp.PublishBranchName = target.BranchName
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				slog.Warn("failed to load repair branch target", "issue_id", uuidToString(task.IssueID), "error", err)
 			}
 		}
 
@@ -1460,6 +1757,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			hasIssuePlan = true
 			resp.IssuePlanPrompt = ip.Prompt
 			resp.IssuePlanID = ip.PlanID
+			resp.IssuePlanPhase = ip.Phase
+			resp.IssuePlanSpec = ip.Spec
 			resp.WorkspaceID = ip.WorkspaceID
 
 			if ip.ProjectID != "" {
@@ -1472,6 +1771,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			resp.AvailableAgents = h.availablePlanAgents(r.Context(), parseUUID(ip.WorkspaceID), ip.RequesterID)
+			resp.AvailablePipelines = h.availablePlanPipelines(r.Context(), parseUUID(ip.WorkspaceID), ip.RequesterID)
 			if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(ip.WorkspaceID)); err == nil && ws.Repos != nil {
 				var repos []RepoData
 				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
@@ -1557,6 +1857,9 @@ func (h *Handler) availablePlanAgents(ctx context.Context, workspaceID pgtype.UU
 		if a.ArchivedAt.Valid {
 			continue
 		}
+		if a.IsInternal {
+			continue
+		}
 		if !h.canAccessPrivateAgent(ctx, a, "member", requesterID, uuidToString(workspaceID)) {
 			continue
 		}
@@ -1567,6 +1870,53 @@ func (h *Handler) availablePlanAgents(ctx context.Context, workspaceID pgtype.UU
 			Description:  a.Description,
 			Instructions: a.Instructions,
 			Skills:       skillsByAgent[agentID],
+		})
+	}
+	return out
+}
+
+func (h *Handler) availablePlanPipelines(ctx context.Context, workspaceID pgtype.UUID, requesterID string) []PlanPipelineData {
+	if requesterID != "" {
+		if err := h.ensureSystemPipelines(ctx, workspaceID, parseUUID(requesterID)); err != nil {
+			slog.Warn("issue-plan claim: failed to ensure system pipelines", "workspace_id", uuidToString(workspaceID), "error", err)
+		}
+	}
+	pipelines, err := h.Queries.ListPipelines(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("issue-plan claim: failed to list pipelines", "workspace_id", uuidToString(workspaceID), "error", err)
+		return nil
+	}
+	out := make([]PlanPipelineData, 0, len(pipelines))
+	for _, p := range pipelines {
+		nodes, err := h.Queries.ListPipelineStages(ctx, p.ID)
+		if err != nil {
+			slog.Warn("issue-plan claim: failed to list pipeline nodes", "pipeline_id", uuidToString(p.ID), "error", err)
+			continue
+		}
+		nodeData := make([]PlanPipelineNodeData, 0, len(nodes))
+		for _, node := range nodes {
+			agentID := ""
+			if node.AgentID.Valid {
+				agentID = uuidToString(node.AgentID)
+			}
+			nodeData = append(nodeData, PlanPipelineNodeData{
+				Key:               node.Key,
+				Type:              node.NodeType,
+				Title:             node.Title,
+				Description:       node.Description,
+				AgentID:           agentID,
+				Repos:             normalizeRepoKeys(node.RepoKeys),
+				DependsOnNodeKeys: node.DependsOnStageKeys,
+			})
+		}
+		out = append(out, PlanPipelineData{
+			ID:          uuidToString(p.ID),
+			Name:        p.Name,
+			Description: p.Description,
+			IsSystem:    p.IsSystem,
+			SystemKey:   strings.TrimSpace(p.SystemKey.String),
+			ReadOnly:    p.IsSystem,
+			Nodes:       nodeData,
 		})
 	}
 	return out

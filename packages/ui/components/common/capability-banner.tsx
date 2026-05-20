@@ -10,6 +10,7 @@ type Reason =
   | "not_owner_role"
   | "not_admin_role"
   | "not_resource_owner"
+  | "internal_resource"
   | "last_owner"
   | "private_visibility"
   | "unknown";
@@ -76,6 +77,8 @@ function getCopy(reason: Reason, noun: string, ownerName?: string): string {
         return `View only — only ${ownerName} and workspace admins can edit this ${noun}.`;
       }
       return `View only — only the ${noun} owner and workspace admins can edit this ${noun}.`;
+    case "internal_resource":
+      return `Built-in ${noun}s are managed by Multica.`;
     case "last_owner":
       return `A workspace must keep at least one owner — promote another member first.`;
     case "private_visibility":

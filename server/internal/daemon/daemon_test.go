@@ -327,6 +327,127 @@ func TestBuildPromptNoIssueDetails(t *testing.T) {
 	}
 }
 
+func TestBuildPromptPlanAgentTaskUsesDoneStatus(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildPrompt(Task{
+		IssueID:               "issue-1",
+		PlanItemExecutionKind: "agent_task",
+		Agent:                 &AgentData{Name: "Test"},
+	}, "claude")
+
+	for _, want := range []string{
+		"execution_kind=agent_task",
+		"Status: done",
+		"mark the issue `done`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Status: ready for review") {
+		t.Fatalf("plan agent_task prompt should not ask for ready for review\n---\n%s", prompt)
+	}
+}
+
+func TestBuildPromptReviewGateUsesJSONContract(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildPrompt(Task{
+		IssueID:                "issue-1",
+		PlanItemNodeType:       "code_review",
+		PlanItemExecutionKind:  "agent_task",
+		ReviewTargetIdentifier: "LOC-9",
+		ReviewTargetBranchName: "agent/backend-engineer/LOC-9-repair",
+		ReviewTargetCommitSHA:  "abc123",
+		Agent:                  &AgentData{Name: "Reviewer"},
+	}, "claude")
+
+	for _, want := range []string{
+		"node_type=code_review",
+		"Do not mark the issue `done`",
+		"completed repair issue is the current review target: LOC-9",
+		"agent/backend-engineer/LOC-9-repair",
+		"abc123",
+		"review_gate",
+		"task completion output must also be that same JSON object",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+	for _, absent := range []string{
+		"Status: done",
+		"mark the issue `done` after publish succeeds",
+	} {
+		if strings.Contains(prompt, absent) {
+			t.Fatalf("review gate prompt should not contain %q\n---\n%s", absent, prompt)
+		}
+	}
+}
+
+func TestBuildPromptReviewGateRepairUsesTargetBranch(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildPrompt(Task{
+		IssueID:            "repair-1",
+		PlanItemBranchName: "agent/backend-engineer/LOC-5",
+		RepoCheckoutRef:    "agent/backend-engineer/LOC-5",
+		PublishBranchName:  "agent/backend-engineer/LOC-5",
+		Agent:              &AgentData{Name: "Backend Engineer"},
+	}, "claude")
+
+	for _, want := range []string{
+		"review gate repair",
+		"Continue the existing target branch `agent/backend-engineer/LOC-5`",
+		"will default to ref `agent/backend-engineer/LOC-5`",
+		"will push your HEAD back to `agent/backend-engineer/LOC-5`",
+		"Branch: agent/backend-engineer/LOC-5",
+		"mark the issue `done`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "generated work branch") {
+		t.Fatalf("repair prompt should not ask for a generated branch\n---\n%s", prompt)
+	}
+}
+
+func TestReviewGateDoesNotReusePriorExecution(t *testing.T) {
+	t.Parallel()
+
+	task := Task{
+		PlanItemNodeType: "code_review",
+		PriorSessionID:   "old-session",
+		PriorWorkDir:     "/tmp/old-workdir",
+	}
+
+	if shouldReusePriorExecution(task) {
+		t.Fatal("review gate tasks must not reuse prior workdirs or sessions")
+	}
+	if got := priorSessionIDForExecution(task); got != "" {
+		t.Fatalf("review gate resume session = %q, want empty", got)
+	}
+}
+
+func TestNormalIssueReusesPriorExecution(t *testing.T) {
+	t.Parallel()
+
+	task := Task{
+		PlanItemNodeType: "issue",
+		PriorSessionID:   "old-session",
+		PriorWorkDir:     "/tmp/old-workdir",
+	}
+
+	if !shouldReusePriorExecution(task) {
+		t.Fatal("ordinary issue tasks should keep prior execution reuse")
+	}
+	if got := priorSessionIDForExecution(task); got != "old-session" {
+		t.Fatalf("ordinary issue resume session = %q, want old-session", got)
+	}
+}
+
 func TestBuildPromptAutopilotRunOnly(t *testing.T) {
 	t.Parallel()
 

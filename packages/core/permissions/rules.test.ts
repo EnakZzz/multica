@@ -35,6 +35,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     status: "idle",
     max_concurrent_tasks: 1,
     model: "default",
+    is_internal: false,
     owner_id: ALICE,
     skills: [],
     created_at: "2026-04-01T00:00:00Z",
@@ -140,6 +141,12 @@ describe("canEditAgent", () => {
     expect(canEditAgent(orphan, { userId: BOB, role: "admin" }).allowed).toBe(
       true,
     );
+  });
+  it("denies internal agents even for admins", () => {
+    const internal = makeAgent({ is_internal: true });
+    const d = canEditAgent(internal, { userId: BOB, role: "admin" });
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toBe("internal_resource");
   });
 });
 

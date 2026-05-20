@@ -83,11 +83,15 @@ export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest }
 export type {
   Plan,
   PlanItem,
+  PlanItemExecutionKind,
+  PlanSpec,
   PlanStatus,
   ListPlansResponse,
   CreatePlanRequest,
   UpdatePlanRequest,
   UpdatePlanItemRequest,
+  ApprovePlanSpecRequest,
+  CommitPlanRequest,
 } from "./plan";
 export type {
   Pipeline,
@@ -97,6 +101,7 @@ export type {
   PipelineRunNode,
   ListPipelinesResponse,
   CreatePipelineRequest,
+  DuplicatePipelineRequest,
   ImportPipelineYamlRequest,
   PipelineImportPreview,
   PipelineImportValidationResponse,

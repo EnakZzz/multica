@@ -15,6 +15,7 @@ import type {
   PipelineImportValidationResponse,
   PipelineRun,
   Plan,
+  PlanSpec,
   TimelineEntry,
   User,
   WebhookDelivery,
@@ -192,6 +193,16 @@ export const EMPTY_GROUPED_ISSUES_RESPONSE: GroupedIssuesResponse = {
   groups: [],
 };
 
+export const QuickCreateIssueResponseSchema = z.object({
+  task_id: z.string().catch("").default(""),
+  plan_id: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_QUICK_CREATE_ISSUE_RESPONSE = {
+  task_id: "",
+  plan_id: "",
+};
+
 const IssueDependencySummarySchema = z.object({
   id: z.string(),
   type: z.string().default("blocked_by"),
@@ -214,17 +225,67 @@ export const EMPTY_ISSUE_DEPENDENCIES_RESPONSE: IssueDependenciesResponse = {
   blocks: [],
 };
 
+const StringListSchema = z.array(z.string()).catch([]).default([]);
+const NumberListSchema = z.array(z.number()).catch([]).default([]);
+const PlanItemExecutionKindSchema = z.preprocess(
+  (value) => (value === "human_confirmation" ? value : "agent_task"),
+  z.enum(["agent_task", "human_confirmation"]),
+);
+const PlanItemNodeTypeSchema = z.preprocess(
+  (value) =>
+    value === "manual" ||
+    value === "check" ||
+    value === "spec_review" ||
+    value === "code_review"
+      ? value
+      : "issue",
+  z.enum(["issue", "manual", "check", "spec_review", "code_review"]),
+);
+
+export const PlanSpecSchema = z.object({
+  summary: z.string().default(""),
+  goal: z.string().default(""),
+  success_criteria: StringListSchema,
+  in_scope: StringListSchema,
+  out_of_scope: StringListSchema,
+  approach: z.string().default(""),
+  assumptions: StringListSchema,
+  open_questions: StringListSchema,
+});
+
+export const EMPTY_PLAN_SPEC: PlanSpec = {
+  summary: "",
+  goal: "",
+  success_criteria: [],
+  in_scope: [],
+  out_of_scope: [],
+  approach: "",
+  assumptions: [],
+  open_questions: [],
+};
+
 const PlanItemSchema = z.object({
   id: z.string(),
   plan_id: z.string(),
   position: z.number(),
   title: z.string(),
   description: z.string().default(""),
+  acceptance_criteria: StringListSchema,
+  suggested_test_commands: StringListSchema,
+  context_resources: StringListSchema,
+  risk_notes: StringListSchema,
+  node_type: PlanItemNodeTypeSchema,
+  execution_kind: PlanItemExecutionKindSchema,
+  confirmation_question: z.string().catch("").default(""),
+  confirmation_reason: z.string().catch("").default(""),
+  required_evidence: StringListSchema,
+  requires_git_commit: z.boolean().catch(true).default(true),
+  branch_name: z.string().catch("").default(""),
   recommended_agent_id: z.string().nullable().default(null),
   match_score: z.number().default(0),
   match_reason: z.string().default(""),
   missing_capability: z.string().default(""),
-  depends_on_positions: z.array(z.number()).default([]),
+  depends_on_positions: NumberListSchema,
   selected: z.boolean().default(true),
   generated_issue_id: z.string().nullable().default(null),
   created_at: z.string().default(""),
@@ -243,6 +304,9 @@ export const PlanSchema = z.object({
   parent_title: z.string().default(""),
   parent_description: z.string().default(""),
   parent_issue_id: z.string().nullable().default(null),
+  spec: PlanSpecSchema.catch(EMPTY_PLAN_SPEC).default(EMPTY_PLAN_SPEC),
+  spec_approved_at: z.string().nullable().default(null),
+  spec_approved_by: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
   created_by: z.string().default(""),
   created_at: z.string().default(""),
@@ -262,6 +326,9 @@ export const EMPTY_PLAN: Plan = {
   parent_title: "",
   parent_description: "",
   parent_issue_id: null,
+  spec: EMPTY_PLAN_SPEC,
+  spec_approved_at: null,
+  spec_approved_by: null,
   error: null,
   created_by: "",
   created_at: "",
@@ -278,8 +345,9 @@ export const EMPTY_LIST_PLANS_RESPONSE: ListPlansResponse = {
 };
 
 const PipelineNodeTypeSchema = z.preprocess(
-  (value) => (value === "manual" || value === "check" || value === "issue" ? value : "issue"),
-  z.enum(["issue", "manual", "check"]),
+  (value) =>
+    value === "manual" || value === "check" || value === "issue" || value === "spec_review" || value === "code_review" ? value : "issue",
+  z.enum(["issue", "manual", "check", "spec_review", "code_review"]),
 );
 
 const PipelineNodeSchema = z.object({
@@ -305,6 +373,10 @@ export const PipelineSchema = z.object({
   workspace_id: z.string(),
   name: z.string(),
   description: z.string().default(""),
+  is_system: z.boolean().default(false),
+  system_key: z.string().nullable().default(null),
+  editable: z.boolean().default(true),
+  deletable: z.boolean().default(true),
   created_by: z.string().default(""),
   archived_at: z.string().nullable().default(null),
   created_at: z.string().default(""),
@@ -317,6 +389,10 @@ export const EMPTY_PIPELINE: Pipeline = {
   workspace_id: "",
   name: "",
   description: "",
+  is_system: false,
+  system_key: null,
+  editable: true,
+  deletable: true,
   created_by: "",
   archived_at: null,
   created_at: "",

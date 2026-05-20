@@ -35,19 +35,100 @@ func BuildPrompt(task Task, provider string) string {
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
-	b.WriteString("For code changes, use `multica repo checkout <url>` and publish only the generated `agent/*` branch with `multica repo publish`. Never push directly to main or master. Your final issue comment must include `Branch: agent/...` and `Status: ready for review` after publish succeeds.\n")
+	if isReviewGateNodeType(task.PlanItemNodeType) {
+		fmt.Fprintf(&b, "This issue is a blocking review gate with `node_type=%s`. Do not mark the issue `done`, `blocked`, or any other status yourself; the server applies the gate state after your task completes.\n", task.PlanItemNodeType)
+		if strings.TrimSpace(task.ReviewTargetBranchName) != "" {
+			identifier := strings.TrimSpace(task.ReviewTargetIdentifier)
+			if identifier == "" {
+				identifier = strings.TrimSpace(task.ReviewTargetIssueID)
+			}
+			fmt.Fprintf(&b, "A completed repair issue is the current review target: %s. Review the repair branch `%s`", identifier, task.ReviewTargetBranchName)
+			if strings.TrimSpace(task.ReviewTargetCommitSHA) != "" {
+				fmt.Fprintf(&b, " at commit `%s`", task.ReviewTargetCommitSHA)
+			}
+			b.WriteString(". When checking out the repository, pass this branch as the ref; do not review an older upstream implementation branch unless the repair branch cannot be fetched.\n")
+		}
+		b.WriteString("You must return the structured `review_gate` JSON required by the issue body. If you post a final issue comment, make that comment a single JSON object containing `review_gate` only: no markdown, no prose before or after it, and no natural-language PASS/FAIL as the automation contract. Your task completion output must also be that same JSON object.\n")
+		b.WriteString("Use `review_gate.status=\"pass\"` only when downstream work can continue. Use `review_gate.status=\"fail\"` when blocking findings require implementation repair.\n")
+	} else if strings.TrimSpace(task.PublishBranchName) != "" {
+		checkoutRef := strings.TrimSpace(task.RepoCheckoutRef)
+		if checkoutRef == "" {
+			checkoutRef = strings.TrimSpace(task.PublishBranchName)
+		}
+		fmt.Fprintf(&b, "This issue is a review gate repair. Continue the existing target branch `%s`; do not create a separate repair branch for this work.\n", task.PublishBranchName)
+		fmt.Fprintf(&b, "`multica repo checkout <url>` will default to ref `%s` and `multica repo publish` will push your HEAD back to `%s`. Your final issue comment must include `Branch: %s` and `Status: done` after publish succeeds, then mark the issue `done`.\n", checkoutRef, task.PublishBranchName, task.PublishBranchName)
+	} else if task.PlanItemExecutionKind == "agent_task" {
+		if task.PlanItemRequiresGitCommit && strings.TrimSpace(task.PlanItemBranchName) != "" {
+			fmt.Fprintf(&b, "This issue was created from a Plan item with `execution_kind=agent_task`; that kind is the execution contract. For code changes, use `multica repo checkout <url>` and publish the planned branch `%s` with `multica repo publish`. Never push directly to main or master. Your final issue comment must include `Branch: %s` and `Status: done` after publish succeeds, then mark the issue `done`.\n", task.PlanItemBranchName, task.PlanItemBranchName)
+		} else {
+			b.WriteString("This issue was created from a Plan item with `execution_kind=agent_task`; that kind is the execution contract. This Plan item is not expected to produce a git commit unless the issue body or a human comment explicitly changes that. If code changes become necessary, use `multica repo checkout <url>` and publish with `multica repo publish`; never push directly to main or master. Your final issue comment must include `Status: done`, include `Branch: ...` only when a branch was actually published, then mark the issue `done`.\n")
+		}
+	} else {
+		b.WriteString("For code changes, use `multica repo checkout <url>` and publish the generated work branch with `multica repo publish`. Never push directly to main or master. Your final issue comment must include `Branch: ...` and `Status: ready for review` after publish succeeds.\n")
+	}
 	return b.String()
 }
 
+func isReviewGateNodeType(nodeType string) bool {
+	switch strings.TrimSpace(nodeType) {
+	case "spec_review", "code_review":
+		return true
+	default:
+		return false
+	}
+}
+
 func buildIssuePlanPrompt(task Task) string {
+	if task.IssuePlanPhase == "spec" {
+		return buildIssuePlanSpecPrompt(task)
+	}
 	var b strings.Builder
 	b.WriteString("You are running as an issue-planning assistant for a Multica workspace.\n\n")
-	b.WriteString("A user wants a large goal broken into actionable issues. Do not create issues, do not call `multica issue create`, and do not modify workspace data. Your only job is to return one JSON object.\n\n")
-	fmt.Fprintf(&b, "Plan ID: %s\n\n", task.IssuePlanID)
+	b.WriteString("A user approved a planning spec and now wants executable issue drafts. Do not create issues, do not call `multica issue create`, and do not modify workspace data. Your only job is to return one JSON object.\n\n")
+	if task.IssuePlanID != "" {
+		fmt.Fprintf(&b, "Plan ID: %s\n\n", task.IssuePlanID)
+	}
 	fmt.Fprintf(&b, "User goal:\n> %s\n\n", task.IssuePlanPrompt)
 	if task.ProjectTitle != "" {
 		fmt.Fprintf(&b, "Project: %s (%s)\n\n", task.ProjectTitle, task.ProjectID)
 	}
+	b.WriteString("Approved spec:\n")
+	writePlanSpec(&b, task.IssuePlanSpec)
+	b.WriteString("\n")
+	b.WriteString("Language rules:\n")
+	b.WriteString("- Write all user-facing natural-language fields in the returned JSON using the same primary language as the approved spec and user goal.\n")
+	b.WriteString("- If the approved spec or user goal is primarily Chinese, write titles, descriptions, criteria, risk notes, confirmation questions, and confirmation reasons in Chinese.\n")
+	b.WriteString("- Keep JSON property names, code identifiers, commands, file paths, API names, and proper nouns unchanged.\n\n")
+	writeIssuePlanItemsQualityRules(&b)
+	b.WriteString("Available pipelines you may select:\n")
+	if len(task.AvailablePipelines) == 0 {
+		b.WriteString("- none\n")
+	} else {
+		for _, p := range task.AvailablePipelines {
+			fmt.Fprintf(&b, "- id=%s name=%q description=%q", p.ID, p.Name, p.Description)
+			if p.IsSystem {
+				fmt.Fprintf(&b, " system_key=%q readonly=true methodology=true", p.SystemKey)
+			}
+			b.WriteString("\n")
+			for _, n := range p.Nodes {
+				fmt.Fprintf(&b, "  - node key=%s type=%s title=%q", n.Key, n.Type, n.Title)
+				if n.AgentID != "" {
+					fmt.Fprintf(&b, " agent_id=%s", n.AgentID)
+				}
+				if len(n.DependsOnNodeKeys) > 0 {
+					fmt.Fprintf(&b, " depends_on=%q", strings.Join(n.DependsOnNodeKeys, ", "))
+				}
+				if len(n.Repos) > 0 {
+					fmt.Fprintf(&b, " repos=%q", strings.Join(n.Repos, ", "))
+				}
+				if strings.TrimSpace(n.Description) != "" {
+					fmt.Fprintf(&b, " description=%q", trimForPrompt(n.Description, 300))
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
+	b.WriteString("\n")
 	b.WriteString("Available agents you may recommend:\n")
 	if len(task.AvailableAgents) == 0 {
 		b.WriteString("- none\n")
@@ -65,15 +146,75 @@ func buildIssuePlanPrompt(task Task) string {
 	}
 	b.WriteString("\nOutput JSON schema:\n")
 	b.WriteString(`{
+  "needs_plan": true,
+  "reason": "Why this needs or does not need a plan",
+  "pipeline_id": "pipeline uuid when using a pipeline",
+  "pipeline_name": "pipeline name fallback",
   "title": "Short plan title",
   "parent_issue": { "title": "Parent issue title", "description": "Parent issue description" },
-  "items": [
-    {
-      "title": "Child issue title",
-      "description": "Child issue description with enough context for the assigned agent",
-      "recommended_agent_id": "agent uuid or empty string",
+  "pipeline": {
+    "id": "pipeline uuid",
+    "name": "pipeline name",
+    "parent_issue": { "title": "Parent issue title", "description": "Parent issue description" },
+    "nodes": [
+        {
+          "key": "existing pipeline node key",
+          "title": "Issue title for this node",
+          "description": "Issue description with node-specific context",
+          "acceptance_criteria": ["Observable condition that proves this node is complete"],
+          "suggested_test_commands": ["Exact command to verify this node, or []"],
+          "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
+          "risk_notes": ["Concrete edge case, dependency, or failure mode"],
+          "node_type": "issue | manual | check | spec_review | code_review",
+          "execution_kind": "agent_task | human_confirmation",
+          "confirmation_question": "Question a human must answer when execution_kind is human_confirmation, otherwise empty string",
+          "confirmation_reason": "Why this cannot be safely confirmed during planning, otherwise empty string",
+          "required_evidence": ["Evidence the human should inspect before marking confirmation done"],
+          "requires_git_commit": true,
+          "branch_name": "feature/module-capability-slug, or empty string when requires_git_commit is false",
+          "agent_id": "agent uuid or empty string",
+          "depends_on_node_keys": ["earlier-node-key"],
+          "selected": true
+      }
+    ]
+  },
+    "direct_issue": {
+      "title": "Issue title when needs_plan is false",
+      "description": "Issue description with enough context for the assigned agent",
+      "acceptance_criteria": ["Observable condition that proves this issue is complete"],
+      "suggested_test_commands": ["Exact command to verify this issue, or []"],
+      "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
+      "risk_notes": ["Concrete edge case, dependency, or failure mode"],
+      "node_type": "issue | manual | check | spec_review | code_review",
+      "execution_kind": "agent_task | human_confirmation",
+      "confirmation_question": "Question a human must answer when execution_kind is human_confirmation, otherwise empty string",
+      "confirmation_reason": "Why this cannot be safely confirmed during planning, otherwise empty string",
+      "required_evidence": ["Evidence the human should inspect before marking confirmation done"],
+      "requires_git_commit": true,
+      "branch_name": "feature/module-capability-slug, or empty string when requires_git_commit is false",
+      "recommended_agent_id": "agent uuid, null, or empty string",
       "match_score": 0,
-      "match_reason": "Why this agent matches, or why no agent matches",
+      "match_reason": "Why this agent should handle the direct issue",
+    "missing_capability": "Capability gap when no agent fits"
+  },
+  "items": [
+      {
+        "title": "Child issue title",
+        "description": "Child issue description with enough context for the assigned agent",
+        "acceptance_criteria": ["Observable condition that proves this item is complete"],
+        "suggested_test_commands": ["Exact command to verify this item, or []"],
+        "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
+        "risk_notes": ["Concrete edge case, dependency, or failure mode"],
+        "node_type": "issue | manual | check | spec_review | code_review",
+        "execution_kind": "agent_task | human_confirmation",
+        "confirmation_question": "Question a human must answer when execution_kind is human_confirmation, otherwise empty string",
+        "confirmation_reason": "Why this cannot be safely confirmed during planning, otherwise empty string",
+        "required_evidence": ["Evidence the human should inspect before marking confirmation done"],
+        "requires_git_commit": true,
+        "branch_name": "feature/module-capability-slug, or empty string when requires_git_commit is false",
+        "recommended_agent_id": "agent uuid or empty string",
+        "match_score": 0,
+        "match_reason": "Why this agent matches, or why no agent matches",
       "missing_capability": "Capability gap when match_score < 60 or no agent fits",
       "depends_on_positions": [1, 2],
       "selected": true
@@ -82,12 +223,140 @@ func buildIssuePlanPrompt(task Task) string {
 }`)
 	b.WriteString("\n\nRules:\n")
 	b.WriteString("- Return JSON only. No markdown fences, prose, comments, or trailing text.\n")
-	b.WriteString("- Split into 2-8 child issues unless the goal is clearly smaller.\n")
+	b.WriteString("- First decide whether the goal needs planning. Feature work, multi-step changes, cross-agent work, or unclear large goals should use needs_plan=true. Simple bug fixes or small single-agent changes should use needs_plan=false.\n")
+	b.WriteString("- When needs_plan=false, do not execute the work yourself. Fill direct_issue with a concrete title and description so the server can save it as one editable plan item.\n")
+	b.WriteString("- For direct_issue, use only agent IDs from Available agents. If no agent fits, set recommended_agent_id to null or empty string, match_score below 60, and put the missing role/tooling in missing_capability; the server will leave the plan item unassigned for a human to route before creating issues.\n")
+	b.WriteString("- When needs_plan=true and Available pipelines is non-empty, choose the best existing pipeline and fill pipeline.nodes using only existing node keys. The server will create issues from that pipeline.\n")
+	b.WriteString("- Built-in methodology pipelines are readonly references. Prefer systematic-debugging for bugfix/build/integration failures, test-driven-development when the goal calls for TDD, and review-gated-feature-development for high-risk feature work that needs spec and code review gates.\n")
+	b.WriteString("- Fill each selected pipeline node with a concrete title, description, optional agent_id override, and dependency keys. Dependency keys should point to prerequisite nodes in the chosen pipeline.\n")
+	b.WriteString("- If no available pipeline fits, fall back to items and split into 2-8 child issues.\n")
+	b.WriteString("- For every direct_issue, item, or selected pipeline node, include a lightweight execution contract: 2-5 acceptance_criteria when possible, suggested_test_commands as exact runnable commands or [], context_resources as known files/repos/docs/issues/APIs/URLs, and risk_notes as concrete edge cases or blockers.\n")
+	b.WriteString("- Preserve review gate semantics in node_type: use spec_review for spec compliance gates, code_review for blocking code quality gates, manual for human confirmation, check for agent-executable verification, and issue for implementation or ordinary work.\n")
+	b.WriteString("- For every direct_issue, item, or selected pipeline node that can produce an actual git commit, set requires_git_commit=true and provide branch_name. Branch names must be module/function based, not agent-role based: prefer `feature/<module>-<capability>` for feature work, `fix/<module>-<bug>` for bug fixes, `refactor/<module>-<change>` for refactors, `test/<module>-<coverage>` for test-only work, `docs/<area>-<topic>` for documentation, `ci/<pipeline>-<change>` for CI, or `chore/<area>-<task>` for maintenance. Do not use `agent/<agent-role>/<issue>` style names.\n")
+	b.WriteString("- Only set requires_git_commit=false and branch_name=\"\" when the issue is purely human confirmation, discussion, investigation/reporting, external coordination, or another task that is not expected to create a repository commit.\n")
+	b.WriteString("- Set execution_kind=\"human_confirmation\" only when downstream work depends on a human decision that cannot be safely pre-planned, such as destructive changes, deploy or merge approval, ambiguous product choices, credential/access handoff, external dependency decisions, legal/content approval, or explicit risk acceptance.\n")
+	b.WriteString("- Do not use human_confirmation for ordinary implementation, tests, routine review gates, or agent-executable checks. Use execution_kind=\"agent_task\" for normal agent work.\n")
+	b.WriteString("- For human_confirmation items, leave recommended_agent_id empty, match_score 0, and provide confirmation_question, confirmation_reason, and required_evidence. Downstream items should depend on the confirmation item when they must wait for the human decision.\n")
+	b.WriteString("- Keep execution contracts concise. Do not include full code, full patches, or step-by-step implementation scripts.\n")
+	b.WriteString("- Do not invent file paths, commands, resources, or risks. Use [] when you do not know a useful value.\n")
 	b.WriteString("- Use only agent IDs from Available agents. If no agent fits, set recommended_agent_id to empty string and match_score below 60.\n")
 	b.WriteString("- A score of 90-100 means the agent's description/skills strongly match; 60-89 means acceptable; below 60 means缺乏合适智能体.\n")
 	b.WriteString("- Use depends_on_positions for execution order. Values are 1-based item positions that must finish before this item starts. Only reference earlier items; use [] when there is no prerequisite. Example: integration testing should usually depend on implementation and QA setup items.\n")
 	b.WriteString("- Never invent agents or capabilities. Put missing role/tooling in missing_capability.\n")
 	return b.String()
+}
+
+func buildIssuePlanSpecPrompt(task Task) string {
+	var b strings.Builder
+	b.WriteString("You are running as an issue-planning assistant for a Multica workspace.\n\n")
+	b.WriteString("A user wants a goal evaluated before issue generation. Do not create issues, do not call `multica issue create`, and do not modify workspace data. Your only job is to return one JSON object for human review.\n\n")
+	if task.IssuePlanID != "" {
+		fmt.Fprintf(&b, "Plan ID: %s\n\n", task.IssuePlanID)
+	}
+	fmt.Fprintf(&b, "User goal:\n> %s\n\n", task.IssuePlanPrompt)
+	if task.ProjectTitle != "" {
+		fmt.Fprintf(&b, "Project: %s (%s)\n\n", task.ProjectTitle, task.ProjectID)
+	}
+	b.WriteString("Language rules:\n")
+	b.WriteString("- Keep JSON property names exactly as requested in English.\n")
+	b.WriteString("- Write every user-facing natural-language value in the same primary language as the user goal.\n")
+	b.WriteString("- If the user goal is primarily Chinese, write summary, goal, criteria, scope, approach, assumptions, and open questions in Chinese.\n")
+	b.WriteString("- Keep code identifiers, commands, file paths, API names, and proper nouns unchanged.\n\n")
+	writeIssuePlanSpecQualityRules(&b)
+	b.WriteString("Available pipelines you may consider:\n")
+	if len(task.AvailablePipelines) == 0 {
+		b.WriteString("- none\n")
+	} else {
+		for _, p := range task.AvailablePipelines {
+			fmt.Fprintf(&b, "- name=%q description=%q", p.Name, p.Description)
+			if p.IsSystem {
+				fmt.Fprintf(&b, " system_key=%q readonly=true methodology=true", p.SystemKey)
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString("Available agents you may consider:\n")
+	if len(task.AvailableAgents) == 0 {
+		b.WriteString("- none\n")
+	} else {
+		for _, a := range task.AvailableAgents {
+			fmt.Fprintf(&b, "- name=%q description=%q", a.Name, a.Description)
+			if len(a.Skills) > 0 {
+				fmt.Fprintf(&b, " skills=%q", strings.Join(a.Skills, ", "))
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\nOutput JSON schema:\n")
+	b.WriteString(`{
+  "summary": "One-paragraph summary of the proposed plan",
+  "goal": "Concrete goal the plan should accomplish",
+  "success_criteria": ["Observable outcome that must be true"],
+  "in_scope": ["Work that belongs in this plan"],
+  "out_of_scope": ["Work intentionally excluded from this plan"],
+  "approach": "Recommended implementation approach and important tradeoffs",
+  "assumptions": ["Assumption to confirm or carry into execution"],
+  "open_questions": ["Question that should be answered before execution, or []"]
+}`)
+	b.WriteString("\n\nRules:\n")
+	b.WriteString("- Return JSON only. No markdown fences, prose, comments, or trailing text.\n")
+	b.WriteString("- This is the human-reviewable spec, not the executable issue list. Do not include items, pipeline nodes, direct_issue, or issue creation commands.\n")
+	b.WriteString("- Keep scope focused and practical. If a goal is too large, describe a safe first slice in in_scope and move the rest to out_of_scope.\n")
+	b.WriteString("- Use built-in methodology pipelines as planning references when relevant: systematic-debugging for bugfix/build/integration failures, test-driven-development for TDD work, and review-gated-feature-development for high-risk feature work.\n")
+	b.WriteString("- Mention relevant agent or pipeline capability gaps in assumptions or open_questions instead of inventing capabilities.\n")
+	b.WriteString("- summary and goal are required and must be non-empty.\n")
+	return b.String()
+}
+
+func writeIssuePlanSpecQualityRules(b *strings.Builder) {
+	b.WriteString("Planning quality rules:\n")
+	b.WriteString("- Treat the user goal as the source of truth. Preserve named systems, repos, files, commands, product constraints, and explicit exclusions instead of flattening them into a generic plan.\n")
+	b.WriteString("- Produce a reviewable spec, not a task list. The spec should let a human answer: what will be built, what will not be built, what evidence proves success, what risks exist, and what still needs a decision.\n")
+	b.WriteString("- Success criteria must be observable. Prefer user-visible behavior, API/database state, generated artifacts, exact commands that should pass, or review evidence over vague goals like \"works well\".\n")
+	b.WriteString("- Separate assumptions from open questions. Put unresolved product, access, data, deployment, legal/content, destructive-change, or security decisions in open_questions instead of silently deciding them.\n")
+	b.WriteString("- Keep in_scope as the smallest coherent delivery slice. Move follow-up work, optional polish, broad refactors, and unrelated cleanup to out_of_scope unless the user explicitly requested them.\n")
+	b.WriteString("- In approach, call out the likely implementation surfaces, validation strategy, dependency or migration risk, rollback/backout needs, and whether review-gated-feature-development should be used for high-risk work.\n")
+	b.WriteString("- If the available agents or pipelines do not cover a required capability, record that gap in assumptions or open_questions; do not invent agents, skills, repos, files, or commands.\n\n")
+}
+
+func writeIssuePlanItemsQualityRules(b *strings.Builder) {
+	b.WriteString("Executable planning rules:\n")
+	b.WriteString("- The approved spec is binding. Do not add new product scope, omit accepted success criteria, or turn open questions into hidden implementation decisions.\n")
+	b.WriteString("- Every selected item must be independently assignable to one agent, have a concrete deliverable, and include enough context for the assignee to start without rereading the whole plan.\n")
+	b.WriteString("- Split by deliverable and dependency boundary, not by job title. Avoid both giant catch-all tasks and tiny command-only chores; target work that can be completed and reviewed as a meaningful unit.\n")
+	b.WriteString("- No hidden work: include setup, data/schema changes, migrations/backfills, UI/server integration, documentation, verification, release/deploy handoff, and cleanup only when they are required by the approved spec.\n")
+	b.WriteString("- Use review-gated-feature-development for high-risk feature work, cross-module changes, migrations, auth/security, data-loss risk, public API changes, release/deploy risk, or work that needs explicit spec and code review gates.\n")
+	b.WriteString("- Review gates must depend on the implementation or repair work they review. Use spec_review for checking the delivered behavior against the approved spec; use code_review for correctness, regression, maintainability, security, and test-risk review.\n")
+	b.WriteString("- Create explicit dependencies for true blocking order: implementation before verification, data/schema before consumers, setup before integration, review before human handoff, and human_confirmation before work that needs that decision.\n")
+	b.WriteString("- Leave independent work dependency-free so it can run in parallel. Never add decorative dependencies, forward dependencies, cycles, or dependencies on items that are merely related but not blocking.\n")
+	b.WriteString("- Acceptance criteria should be 2-5 concrete checks per executable item when possible. Suggested test commands must be exact runnable commands when known; use [] instead of inventing commands.\n")
+	b.WriteString("- Recommend agents only from Available agents, and base match_score on the visible description, instructions, and skills. If no agent fits, leave the ID empty and state the missing capability.\n")
+	b.WriteString("- Branch names must describe the module and change, not the agent. Use requires_git_commit=false only for pure human decisions, external coordination, or non-repository work.\n\n")
+}
+
+func writePlanSpec(b *strings.Builder, spec PlanSpecData) {
+	fmt.Fprintf(b, "- Summary: %s\n", trimForPrompt(spec.Summary, 1000))
+	fmt.Fprintf(b, "- Goal: %s\n", trimForPrompt(spec.Goal, 1000))
+	writeSpecList(b, "Success criteria", spec.SuccessCriteria)
+	writeSpecList(b, "In scope", spec.InScope)
+	writeSpecList(b, "Out of scope", spec.OutOfScope)
+	fmt.Fprintf(b, "- Approach: %s\n", trimForPrompt(spec.Approach, 1200))
+	writeSpecList(b, "Assumptions", spec.Assumptions)
+	writeSpecList(b, "Open questions", spec.OpenQuestions)
+}
+
+func writeSpecList(b *strings.Builder, label string, items []string) {
+	if len(items) == 0 {
+		fmt.Fprintf(b, "- %s: none\n", label)
+		return
+	}
+	fmt.Fprintf(b, "- %s:\n", label)
+	for _, item := range items {
+		if strings.TrimSpace(item) != "" {
+			fmt.Fprintf(b, "  - %s\n", trimForPrompt(item, 500))
+		}
+	}
 }
 
 func trimForPrompt(s string, max int) string {

@@ -21,6 +21,9 @@ func TestValidateAgentPublishBranch(t *testing.T) {
 	if err := validateAgentPublishBranch("agent/backend-engineer/LOC-18-b4fa2df8"); err != nil {
 		t.Fatalf("expected agent branch to be allowed, got %v", err)
 	}
+	if err := validateAgentPublishBranch("feature/plan-branch-contract"); err != nil {
+		t.Fatalf("expected feature branch to be allowed, got %v", err)
+	}
 
 	for _, branch := range []string{"main", "master"} {
 		t.Run(branch, func(t *testing.T) {
@@ -28,7 +31,7 @@ func TestValidateAgentPublishBranch(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected protected branch to be rejected")
 			}
-			if !strings.Contains(err.Error(), "Agents must push to agent/* branches") {
+			if !strings.Contains(err.Error(), "generated work branches") {
 				t.Fatalf("expected readable branch-only error, got %v", err)
 			}
 			if !strings.Contains(err.Error(), "protected") {
@@ -37,9 +40,9 @@ func TestValidateAgentPublishBranch(t *testing.T) {
 		})
 	}
 
-	err := validateAgentPublishBranch("feature/demo")
+	err := validateAgentPublishBranch("mainline/demo")
 	if err == nil {
-		t.Fatal("expected non-agent branch to be rejected")
+		t.Fatal("expected non-work branch to be rejected")
 	}
 	if !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("expected non-agent wording, got %v", err)

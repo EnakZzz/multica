@@ -33,6 +33,9 @@ export function canEditAgent(agent: Agent, ctx: PermissionContext): Decision {
   if (ctx.userId === null) {
     return deny("not_authenticated", "Sign in to edit this agent.");
   }
+  if (agent.is_internal) {
+    return deny("internal_resource", "Built-in agents are managed by Multica.");
+  }
   if (isAdminLike(ctx.role)) return ALLOW;
   if (agent.owner_id !== null && agent.owner_id === ctx.userId) return ALLOW;
   return deny(

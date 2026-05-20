@@ -51,6 +51,34 @@ type TaskWakeupNotifier interface {
 // recognisable preview of a one-paragraph comment.
 const triggerSummaryMaxLen = 200
 
+const (
+	PipelineNodeTypeIssue      = "issue"
+	PipelineNodeTypeManual     = "manual"
+	PipelineNodeTypeCheck      = "check"
+	PipelineNodeTypeSpecReview = "spec_review"
+	PipelineNodeTypeCodeReview = "code_review"
+	reviewGateStatusPass       = "pass"
+	reviewGateStatusFail       = "fail"
+	reviewGateRepairOriginType = "review_gate_repair"
+)
+
+type reviewGateOutput struct {
+	ReviewGate reviewGateResult `json:"review_gate"`
+}
+
+type reviewGateResult struct {
+	Status         string              `json:"status"`
+	Summary        string              `json:"summary"`
+	Findings       []reviewGateFinding `json:"findings"`
+	CheckedAgainst []string            `json:"checked_against"`
+}
+
+type reviewGateFinding struct {
+	Severity string `json:"severity"`
+	Title    string `json:"title"`
+	Details  string `json:"details"`
+}
+
 // truncateForSummary returns s shortened to maxRunes, with a trailing
 // `…` when truncated. Operates on runes (not bytes) so multibyte characters
 // — Chinese / emoji — count as one each. Strips surrounding whitespace
@@ -509,20 +537,46 @@ const QuickCreateContextType = "quick_create"
 // no issue link: it produces a structured plan that the server validates and
 // writes into plan / plan_item rows.
 type IssuePlanContext struct {
-	Type        string `json:"type"`
-	PlanID      string `json:"plan_id"`
-	Prompt      string `json:"prompt"`
-	RequesterID string `json:"requester_id"`
-	WorkspaceID string `json:"workspace_id"`
-	ProjectID   string `json:"project_id,omitempty"`
+	Type          string   `json:"type"`
+	PlanID        string   `json:"plan_id,omitempty"`
+	SourceIssueID string   `json:"source_issue_id,omitempty"`
+	Phase         string   `json:"phase,omitempty"`
+	Prompt        string   `json:"prompt"`
+	RequesterID   string   `json:"requester_id"`
+	WorkspaceID   string   `json:"workspace_id"`
+	ProjectID     string   `json:"project_id,omitempty"`
+	Spec          PlanSpec `json:"spec,omitempty"`
 }
 
 const IssuePlanContextType = "issue_plan"
+const IssuePlanPhaseSpec = "spec"
+const IssuePlanPhaseItems = "items"
+
+const PlanItemExecutionKindAgentTask = "agent_task"
+const PlanItemExecutionKindHumanConfirmation = "human_confirmation"
+
+type PlanSpec struct {
+	Summary         string   `json:"summary"`
+	Goal            string   `json:"goal"`
+	SuccessCriteria []string `json:"success_criteria"`
+	InScope         []string `json:"in_scope"`
+	OutOfScope      []string `json:"out_of_scope"`
+	Approach        string   `json:"approach"`
+	Assumptions     []string `json:"assumptions"`
+	OpenQuestions   []string `json:"open_questions"`
+}
 
 type issuePlanResult struct {
-	Title       string                `json:"title"`
-	ParentIssue issuePlanParent       `json:"parent_issue"`
-	Items       []issuePlanResultItem `json:"items"`
+	NeedsPlan    *bool                 `json:"needs_plan"`
+	Reason       string                `json:"reason"`
+	Spec         PlanSpec              `json:"spec"`
+	DirectIssue  issuePlanResultItem   `json:"direct_issue"`
+	Title        string                `json:"title"`
+	ParentIssue  issuePlanParent       `json:"parent_issue"`
+	Items        []issuePlanResultItem `json:"items"`
+	PipelineID   string                `json:"pipeline_id"`
+	PipelineName string                `json:"pipeline_name"`
+	Pipeline     issuePlanPipeline     `json:"pipeline"`
 }
 
 type issuePlanParent struct {
@@ -531,14 +585,136 @@ type issuePlanParent struct {
 }
 
 type issuePlanResultItem struct {
-	Title              string  `json:"title"`
-	Description        string  `json:"description"`
-	RecommendedAgentID string  `json:"recommended_agent_id"`
-	MatchScore         int32   `json:"match_score"`
-	MatchReason        string  `json:"match_reason"`
-	MissingCapability  string  `json:"missing_capability"`
-	DependsOnPositions []int32 `json:"depends_on_positions"`
-	Selected           *bool   `json:"selected"`
+	Title                 string   `json:"title"`
+	Description           string   `json:"description"`
+	AcceptanceCriteria    []string `json:"acceptance_criteria"`
+	SuggestedTestCommands []string `json:"suggested_test_commands"`
+	ContextResources      []string `json:"context_resources"`
+	RiskNotes             []string `json:"risk_notes"`
+	NodeType              string   `json:"node_type"`
+	ExecutionKind         string   `json:"execution_kind"`
+	ConfirmationQuestion  string   `json:"confirmation_question"`
+	ConfirmationReason    string   `json:"confirmation_reason"`
+	RequiredEvidence      []string `json:"required_evidence"`
+	RequiresGitCommit     *bool    `json:"requires_git_commit"`
+	BranchName            string   `json:"branch_name"`
+	RecommendedAgentID    string   `json:"recommended_agent_id"`
+	MatchScore            int32    `json:"match_score"`
+	MatchReason           string   `json:"match_reason"`
+	MissingCapability     string   `json:"missing_capability"`
+	DependsOnPositions    []int32  `json:"depends_on_positions"`
+	Selected              *bool    `json:"selected"`
+}
+
+type issuePlanPipeline struct {
+	ID          string                  `json:"id"`
+	Name        string                  `json:"name"`
+	ParentIssue issuePlanParent         `json:"parent_issue"`
+	Nodes       []issuePlanPipelineNode `json:"nodes"`
+}
+
+type issuePlanPipelineNode struct {
+	Key                   string   `json:"key"`
+	Type                  string   `json:"type"`
+	NodeType              string   `json:"node_type"`
+	Title                 string   `json:"title"`
+	Description           string   `json:"description"`
+	AcceptanceCriteria    []string `json:"acceptance_criteria"`
+	SuggestedTestCommands []string `json:"suggested_test_commands"`
+	ContextResources      []string `json:"context_resources"`
+	RiskNotes             []string `json:"risk_notes"`
+	ExecutionKind         string   `json:"execution_kind"`
+	ConfirmationQuestion  string   `json:"confirmation_question"`
+	ConfirmationReason    string   `json:"confirmation_reason"`
+	RequiredEvidence      []string `json:"required_evidence"`
+	RequiresGitCommit     *bool    `json:"requires_git_commit"`
+	BranchName            string   `json:"branch_name"`
+	AgentID               string   `json:"agent_id"`
+	RepoKeys              []string `json:"repo_keys"`
+	DependsOnNodeKeys     []string `json:"depends_on_node_keys"`
+	Selected              *bool    `json:"selected"`
+}
+
+func (r issuePlanResult) shouldCreatePlan() bool {
+	return r.NeedsPlan == nil || *r.NeedsPlan
+}
+
+func (r issuePlanResult) directIssue() (issuePlanResultItem, bool) {
+	if strings.TrimSpace(r.DirectIssue.Title) != "" ||
+		strings.TrimSpace(r.DirectIssue.Description) != "" ||
+		strings.TrimSpace(r.DirectIssue.RecommendedAgentID) != "" {
+		return r.DirectIssue, true
+	}
+	if !r.shouldCreatePlan() && len(r.Items) == 1 {
+		item := r.Items[0]
+		if strings.TrimSpace(item.Title) != "" ||
+			strings.TrimSpace(item.Description) != "" ||
+			strings.TrimSpace(item.RecommendedAgentID) != "" {
+			return item, true
+		}
+	}
+	return issuePlanResultItem{}, false
+}
+
+func (r issuePlanResult) hasPipelineSelection() bool {
+	return strings.TrimSpace(r.PipelineID) != "" ||
+		strings.TrimSpace(r.Pipeline.ID) != "" ||
+		strings.TrimSpace(r.PipelineName) != "" ||
+		strings.TrimSpace(r.Pipeline.Name) != ""
+}
+
+func normalizeIssuePlanPhase(phase string) string {
+	phase = strings.TrimSpace(phase)
+	if phase == IssuePlanPhaseSpec || phase == IssuePlanPhaseItems {
+		return phase
+	}
+	return IssuePlanPhaseItems
+}
+
+func normalizePlanSpec(spec PlanSpec) PlanSpec {
+	spec.Summary = strings.TrimSpace(spec.Summary)
+	spec.Goal = strings.TrimSpace(spec.Goal)
+	spec.SuccessCriteria = normalizeSpecStringList(spec.SuccessCriteria)
+	spec.InScope = normalizeSpecStringList(spec.InScope)
+	spec.OutOfScope = normalizeSpecStringList(spec.OutOfScope)
+	spec.Approach = strings.TrimSpace(spec.Approach)
+	spec.Assumptions = normalizeSpecStringList(spec.Assumptions)
+	spec.OpenQuestions = normalizeSpecStringList(spec.OpenQuestions)
+	return spec
+}
+
+func NormalizePlanSpec(spec PlanSpec) PlanSpec {
+	return normalizePlanSpec(spec)
+}
+
+func normalizeSpecStringList(in []string) []string {
+	if len(in) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, item := range in {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out
+}
+
+func marshalPlanSpec(spec PlanSpec) ([]byte, error) {
+	spec = normalizePlanSpec(spec)
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func MarshalPlanSpec(spec PlanSpec) ([]byte, error) {
+	return marshalPlanSpec(spec)
 }
 
 // EnqueueQuickCreateTask creates a queued task that has no issue / chat /
@@ -603,7 +779,7 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	return task, nil
 }
 
-func (s *TaskService) EnqueueIssuePlanTask(ctx context.Context, workspaceID, requesterID, planID pgtype.UUID, agentID pgtype.UUID, prompt string, projectID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueIssuePlanTask(ctx context.Context, workspaceID, requesterID, planID pgtype.UUID, agentID pgtype.UUID, prompt string, projectID pgtype.UUID, phase string, spec PlanSpec) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
@@ -618,12 +794,16 @@ func (s *TaskService) EnqueueIssuePlanTask(ctx context.Context, workspaceID, req
 	payload := IssuePlanContext{
 		Type:        IssuePlanContextType,
 		PlanID:      util.UUIDToString(planID),
+		Phase:       normalizeIssuePlanPhase(phase),
 		Prompt:      prompt,
 		RequesterID: util.UUIDToString(requesterID),
 		WorkspaceID: util.UUIDToString(workspaceID),
 	}
 	if projectID.Valid {
 		payload.ProjectID = util.UUIDToString(projectID)
+	}
+	if payload.Phase == IssuePlanPhaseItems {
+		payload.Spec = normalizePlanSpec(spec)
 	}
 	contextJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -648,9 +828,90 @@ func (s *TaskService) EnqueueIssuePlanTask(ctx context.Context, workspaceID, req
 		"requester_id", util.UUIDToString(requesterID),
 		"workspace_id", util.UUIDToString(workspaceID),
 		"project_id", payload.ProjectID,
+		"phase", payload.Phase,
 	)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
+}
+
+func (s *TaskService) EnqueuePlannerIssueTask(ctx context.Context, issue db.Issue, plannerAgent db.Agent, requesterID pgtype.UUID) (db.AgentTaskQueue, db.Plan, error) {
+	if plannerAgent.ArchivedAt.Valid {
+		return db.AgentTaskQueue{}, db.Plan{}, fmt.Errorf("agent is archived")
+	}
+	if !plannerAgent.RuntimeID.Valid {
+		return db.AgentTaskQueue{}, db.Plan{}, fmt.Errorf("agent has no runtime")
+	}
+	prompt := strings.TrimSpace(issue.Title)
+	if issue.Description.Valid && strings.TrimSpace(issue.Description.String) != "" {
+		prompt = prompt + "\n\n" + strings.TrimSpace(issue.Description.String)
+	}
+	var task db.AgentTaskQueue
+	var plan db.Plan
+	payload := IssuePlanContext{
+		Type:          IssuePlanContextType,
+		SourceIssueID: util.UUIDToString(issue.ID),
+		Phase:         IssuePlanPhaseSpec,
+		Prompt:        prompt,
+		RequesterID:   util.UUIDToString(requesterID),
+		WorkspaceID:   util.UUIDToString(issue.WorkspaceID),
+	}
+	if issue.ProjectID.Valid {
+		payload.ProjectID = util.UUIDToString(issue.ProjectID)
+	}
+	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		parentDescription := pgtype.Text{}
+		if issue.Description.Valid {
+			parentDescription = serviceStrOrNullText(issue.Description.String)
+		}
+		var err error
+		plan, err = qtx.CreatePlanForIssue(ctx, db.CreatePlanForIssueParams{
+			WorkspaceID:       issue.WorkspaceID,
+			Title:             issue.Title,
+			Prompt:            prompt,
+			PlannerAgentID:    plannerAgent.ID,
+			ParentTitle:       pgtype.Text{String: issue.Title, Valid: true},
+			ParentDescription: parentDescription,
+			ParentIssueID:     issue.ID,
+			ProjectID:         issue.ProjectID,
+			CreatedBy:         requesterID,
+		})
+		if err != nil {
+			return fmt.Errorf("create issue plan: %w", err)
+		}
+		payload.PlanID = util.UUIDToString(plan.ID)
+		contextJSON, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal planner issue context: %w", err)
+		}
+		task, err = qtx.CreateContextTask(ctx, db.CreateContextTaskParams{
+			AgentID:           plannerAgent.ID,
+			RuntimeID:         plannerAgent.RuntimeID,
+			Priority:          priorityToInt(issue.Priority),
+			Context:           contextJSON,
+			ForceFreshSession: pgtype.Bool{Bool: true, Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("create planner issue task: %w", err)
+		}
+		plan, err = qtx.SetPlanTask(ctx, db.SetPlanTaskParams{ID: plan.ID, TaskID: task.ID})
+		if err != nil {
+			return fmt.Errorf("link planner issue plan task: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return db.AgentTaskQueue{}, db.Plan{}, err
+	}
+	slog.Info("planner issue task enqueued",
+		"task_id", util.UUIDToString(task.ID),
+		"plan_id", util.UUIDToString(plan.ID),
+		"source_issue_id", payload.SourceIssueID,
+		"agent_id", util.UUIDToString(plannerAgent.ID),
+		"requester_id", payload.RequesterID,
+		"workspace_id", payload.WorkspaceID,
+		"project_id", payload.ProjectID,
+	)
+	s.NotifyTaskEnqueued(ctx, task)
+	return task, plan, nil
 }
 
 // EnqueueChatTask creates a queued task for a chat session.
@@ -989,7 +1250,9 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 }
 
 // CompleteTask marks a task as completed.
-// Issue status is NOT changed here — the agent manages it via the CLI.
+// Issue status is generally managed by the agent via the CLI. Pipeline review
+// gates are the exception: their final JSON decision moves the gate issue to
+// done or blocked so dependency gating can continue.
 //
 // For chat tasks, CompleteAgentTask and the chat_session resume-pointer
 // update run in a single transaction. This closes a race where the next
@@ -1065,6 +1328,16 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 	s.captureTaskCompleted(ctx, task)
 
+	reviewGateHandled := false
+	if task.IssueID.Valid {
+		reviewGateHandled = s.applyReviewGateCompleted(ctx, task, result)
+		if !reviewGateHandled {
+			if !s.applyReviewGateRepairTaskCompleted(ctx, task) {
+				s.applyPlanAgentTaskCompleted(ctx, task)
+			}
+		}
+	}
+
 	// Invariant: every completed issue task must have at least one agent
 	// comment on the issue, so the user always sees something when a run
 	// ends. If the agent posted a comment during execution (result, progress
@@ -1073,7 +1346,7 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	// tasks, TriggerCommentID threads the fallback under the original comment;
 	// for assignment-triggered tasks it is NULL and the fallback is top-level.
 	// Chat tasks have no IssueID and are handled separately below.
-	if task.IssueID.Valid {
+	if task.IssueID.Valid && !reviewGateHandled {
 		agentCommented, _ := s.Queries.HasAgentCommentedSince(ctx, db.HasAgentCommentedSinceParams{
 			IssueID:  task.IssueID,
 			AuthorID: task.AgentID,
@@ -1280,6 +1553,9 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 		if qc, ok := s.parseQuickCreateContext(task); ok {
 			s.notifyQuickCreateFailed(ctx, task, qc, errMsg)
 		}
+		if planID, _, ok := s.issuePlanIDFromTask(task); ok {
+			s.markIssuePlanFailed(ctx, planID, issuePlanTaskFailureMessage(task))
+		}
 	}
 	// Reconcile agent status
 	s.ReconcileAgentStatus(ctx, task.AgentID)
@@ -1345,12 +1621,25 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 		// Autopilot has its own retry semantics; do not double-trigger.
 		return nil, nil
 	}
-	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid {
+	planID, _, isIssuePlan := s.issuePlanIDFromTask(parent)
+	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid && !isIssuePlan {
 		return nil, nil
 	}
 
-	child, err := s.Queries.CreateRetryTask(ctx, parent.ID)
-	if err != nil {
+	var child db.AgentTaskQueue
+	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		var err error
+		child, err = qtx.CreateRetryTask(ctx, parent.ID)
+		if err != nil {
+			return err
+		}
+		if isIssuePlan {
+			if _, err := qtx.SetPlanTask(ctx, db.SetPlanTaskParams{ID: planID, TaskID: child.ID}); err != nil {
+				return fmt.Errorf("relink issue plan retry task: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
 		slog.Warn("task auto-retry failed",
 			"parent_task_id", util.UUIDToString(parent.ID),
 			"reason", reason,
@@ -1499,6 +1788,7 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 	affectedAgents := make(map[string]pgtype.UUID)
 	processedIssues := make(map[string]bool)
 	retriedIssues := make(map[string]bool)
+	retriedPlans := make(map[string]bool)
 	retried := 0
 
 	for _, t := range tasks {
@@ -1508,6 +1798,9 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 			retried++
 			if t.IssueID.Valid {
 				retriedIssues[util.UUIDToString(t.IssueID)] = true
+			}
+			if planID, _, ok := s.issuePlanIDFromTask(t); ok {
+				retriedPlans[util.UUIDToString(planID)] = true
 			}
 		}
 
@@ -1545,6 +1838,9 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 					}
 				}
 			}
+		}
+		if planID, _, ok := s.issuePlanIDFromTask(t); ok && !retriedPlans[util.UUIDToString(planID)] {
+			s.markIssuePlanFailed(ctx, planID, issuePlanTaskFailureMessage(t))
 		}
 		if workspaceID == "" {
 			workspaceID = s.ResolveTaskWorkspaceID(ctx, t)
@@ -2060,7 +2356,33 @@ func (s *TaskService) parseIssuePlanContext(task db.AgentTaskQueue) (IssuePlanCo
 	return ip, true
 }
 
+func (s *TaskService) issuePlanIDFromTask(task db.AgentTaskQueue) (pgtype.UUID, IssuePlanContext, bool) {
+	ip, ok := s.parseIssuePlanContext(task)
+	if !ok {
+		return pgtype.UUID{}, IssuePlanContext{}, false
+	}
+	planID, err := util.ParseUUID(ip.PlanID)
+	if err != nil {
+		return pgtype.UUID{}, ip, false
+	}
+	return planID, ip, true
+}
+
+func issuePlanTaskFailureMessage(task db.AgentTaskQueue) string {
+	if task.Error.Valid && strings.TrimSpace(task.Error.String) != "" {
+		return strings.TrimSpace(task.Error.String)
+	}
+	if task.FailureReason.Valid && strings.TrimSpace(task.FailureReason.String) != "" {
+		return "planner task failed: " + strings.TrimSpace(task.FailureReason.String)
+	}
+	return "planner task failed"
+}
+
 func (s *TaskService) applyIssuePlanCompleted(ctx context.Context, task db.AgentTaskQueue, ip IssuePlanContext, result []byte) {
+	if ip.SourceIssueID != "" {
+		s.applyPlannerIssueCompleted(ctx, task, ip, result)
+		return
+	}
 	planID, err := util.ParseUUID(ip.PlanID)
 	if err != nil {
 		slog.Warn("issue-plan completion: invalid plan id", "task_id", util.UUIDToString(task.ID), "plan_id", ip.PlanID, "error", err)
@@ -2071,10 +2393,30 @@ func (s *TaskService) applyIssuePlanCompleted(ctx context.Context, task db.Agent
 		s.markIssuePlanFailed(ctx, planID, fmt.Sprintf("invalid task result: %v", err))
 		return
 	}
-	output := strings.TrimSpace(util.UnescapeBackslashEscapes(payload.Output))
+	output := strings.TrimSpace(payload.Output)
+	if normalizeIssuePlanPhase(ip.Phase) == IssuePlanPhaseSpec {
+		spec, err := parseIssuePlanSpecOutput(output)
+		if err != nil {
+			s.markIssuePlanFailed(ctx, planID, err.Error())
+			return
+		}
+		if err := s.writeIssuePlanSpec(ctx, planID, spec); err != nil {
+			slog.Warn("issue-plan completion: failed to write spec", "task_id", util.UUIDToString(task.ID), "plan_id", ip.PlanID, "error", err)
+			s.markIssuePlanFailed(ctx, planID, "failed to save planner spec")
+		}
+		return
+	}
 	parsed, err := parseIssuePlanOutput(output)
 	if err != nil {
 		s.markIssuePlanFailed(ctx, planID, err.Error())
+		return
+	}
+	if parsed.hasPipelineSelection() {
+		err = s.writePipelinePlanDraft(ctx, task, ip, planID, parsed)
+		if err != nil {
+			slog.Warn("issue-plan completion: failed to save pipeline plan", "task_id", util.UUIDToString(task.ID), "plan_id", ip.PlanID, "error", err)
+			s.markIssuePlanFailed(ctx, planID, err.Error())
+		}
 		return
 	}
 	if err := s.writeIssuePlanResult(ctx, planID, parsed); err != nil {
@@ -2082,6 +2424,117 @@ func (s *TaskService) applyIssuePlanCompleted(ctx context.Context, task db.Agent
 		s.markIssuePlanFailed(ctx, planID, "failed to save planner result")
 		return
 	}
+}
+
+func (s *TaskService) applyPlannerIssueCompleted(ctx context.Context, task db.AgentTaskQueue, ip IssuePlanContext, result []byte) {
+	sourceIssueID, err := util.ParseUUID(ip.SourceIssueID)
+	if err != nil {
+		slog.Warn("planner issue completion: invalid source issue id", "task_id", util.UUIDToString(task.ID), "source_issue_id", ip.SourceIssueID, "error", err)
+		return
+	}
+	planID, err := s.ensurePlannerIssuePlan(ctx, task, ip, sourceIssueID)
+	if err != nil {
+		slog.Warn("planner issue completion: failed to prepare plan", "task_id", util.UUIDToString(task.ID), "source_issue_id", ip.SourceIssueID, "error", err)
+		s.writePlannerIssueComment(ctx, sourceIssueID, task.AgentID, "规划Agent 准备 plan 草稿失败: "+err.Error())
+		return
+	}
+	var payload protocol.TaskCompletedPayload
+	if err := json.Unmarshal(result, &payload); err != nil {
+		s.markIssuePlanFailed(ctx, planID, fmt.Sprintf("invalid task result: %v", err))
+		return
+	}
+	output := strings.TrimSpace(payload.Output)
+	if normalizeIssuePlanPhase(ip.Phase) == IssuePlanPhaseSpec {
+		spec, err := parseIssuePlanSpecOutput(output)
+		if err != nil {
+			s.markIssuePlanFailed(ctx, planID, err.Error())
+			return
+		}
+		if err := s.writeIssuePlanSpec(ctx, planID, spec); err != nil {
+			slog.Warn("planner issue completion: failed to save plan spec", "task_id", util.UUIDToString(task.ID), "source_issue_id", ip.SourceIssueID, "error", err)
+			s.markIssuePlanFailed(ctx, planID, "failed to save planner spec")
+		}
+		return
+	}
+	parsed, err := parseIssuePlanOutput(output)
+	if err != nil {
+		s.markIssuePlanFailed(ctx, planID, err.Error())
+		return
+	}
+	if parsed.hasPipelineSelection() {
+		err = s.writePipelinePlanDraftFromPlannerIssue(ctx, task, ip, sourceIssueID, planID, parsed)
+		if err != nil {
+			slog.Warn("planner issue completion: failed to save pipeline plan", "task_id", util.UUIDToString(task.ID), "source_issue_id", ip.SourceIssueID, "error", err)
+			s.markIssuePlanFailed(ctx, planID, err.Error())
+		}
+		return
+	}
+	if err := s.writeIssuePlanResult(ctx, planID, parsed); err != nil {
+		slog.Warn("planner issue completion: failed to save plan result", "task_id", util.UUIDToString(task.ID), "source_issue_id", ip.SourceIssueID, "error", err)
+		s.markIssuePlanFailed(ctx, planID, "failed to save planner result")
+		return
+	}
+}
+
+func (s *TaskService) ensurePlannerIssuePlan(ctx context.Context, task db.AgentTaskQueue, ip IssuePlanContext, sourceIssueID pgtype.UUID) (pgtype.UUID, error) {
+	if strings.TrimSpace(ip.PlanID) != "" {
+		planID, err := util.ParseUUID(ip.PlanID)
+		if err != nil {
+			return pgtype.UUID{}, fmt.Errorf("invalid plan id")
+		}
+		return planID, nil
+	}
+	requesterID, err := util.ParseUUID(ip.RequesterID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("invalid requester id")
+	}
+	sourceIssue, err := s.Queries.GetIssue(ctx, sourceIssueID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("source issue not found")
+	}
+	if sourceIssue.WorkspaceID != taskWorkspaceUUID(ip.WorkspaceID) {
+		return pgtype.UUID{}, fmt.Errorf("source issue workspace mismatch")
+	}
+	prompt := strings.TrimSpace(ip.Prompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(sourceIssue.Title)
+	}
+	projectID := sourceIssue.ProjectID
+	if ip.ProjectID != "" {
+		if parsedProjectID, err := util.ParseUUID(ip.ProjectID); err == nil {
+			projectID = parsedProjectID
+		}
+	}
+	parentDescription := pgtype.Text{}
+	if sourceIssue.Description.Valid {
+		parentDescription = serviceStrOrNullText(sourceIssue.Description.String)
+	}
+	var plan db.Plan
+	err = s.runInTx(ctx, func(qtx *db.Queries) error {
+		var err error
+		plan, err = qtx.CreatePlanForIssue(ctx, db.CreatePlanForIssueParams{
+			WorkspaceID:       sourceIssue.WorkspaceID,
+			Title:             sourceIssue.Title,
+			Prompt:            prompt,
+			PlannerAgentID:    task.AgentID,
+			ParentTitle:       pgtype.Text{String: sourceIssue.Title, Valid: true},
+			ParentDescription: parentDescription,
+			ParentIssueID:     sourceIssue.ID,
+			ProjectID:         projectID,
+			CreatedBy:         requesterID,
+		})
+		if err != nil {
+			return fmt.Errorf("create issue plan: %w", err)
+		}
+		if _, err := qtx.SetPlanTask(ctx, db.SetPlanTaskParams{ID: plan.ID, TaskID: task.ID}); err != nil {
+			return fmt.Errorf("link planner issue plan task: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	return plan.ID, nil
 }
 
 func parseIssuePlanOutput(output string) (issuePlanResult, error) {
@@ -2098,13 +2551,80 @@ func parseIssuePlanOutput(output string) (issuePlanResult, error) {
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return out, fmt.Errorf("planner output JSON is invalid: %v", err)
 	}
+	if !out.shouldCreatePlan() {
+		return out, nil
+	}
+	if strings.TrimSpace(out.Pipeline.ID) != "" && strings.TrimSpace(out.PipelineID) == "" {
+		out.PipelineID = out.Pipeline.ID
+	}
+	if strings.TrimSpace(out.Pipeline.Name) != "" && strings.TrimSpace(out.PipelineName) == "" {
+		out.PipelineName = out.Pipeline.Name
+	}
+	if strings.TrimSpace(out.Pipeline.ParentIssue.Title) != "" && strings.TrimSpace(out.ParentIssue.Title) == "" {
+		out.ParentIssue = out.Pipeline.ParentIssue
+	}
+	if len(out.Pipeline.Nodes) > 0 {
+		seenKeys := map[string]bool{}
+		for i, node := range out.Pipeline.Nodes {
+			key := strings.TrimSpace(node.Key)
+			if key == "" {
+				return out, fmt.Errorf("planner output pipeline node %d missing key", i+1)
+			}
+			if seenKeys[key] {
+				return out, fmt.Errorf("planner output pipeline node %q is duplicated", key)
+			}
+			seenKeys[key] = true
+			out.Pipeline.Nodes[i].Key = key
+		}
+		if len(out.Items) == 0 {
+			nodePositions := make(map[string]int32, len(out.Pipeline.Nodes))
+			for i, node := range out.Pipeline.Nodes {
+				nodePositions[node.Key] = int32(i + 1)
+			}
+			for i, node := range out.Pipeline.Nodes {
+				selected := true
+				if node.Selected != nil {
+					selected = *node.Selected
+				}
+				dependsOnPositions := make([]int32, 0, len(node.DependsOnNodeKeys))
+				for _, depKey := range normalizeStringSlice(node.DependsOnNodeKeys) {
+					depPosition, ok := nodePositions[depKey]
+					if !ok {
+						return out, fmt.Errorf("planner output pipeline node %q depends on unknown node %q", node.Key, depKey)
+					}
+					if depPosition >= int32(i+1) {
+						return out, fmt.Errorf("planner output pipeline node %q depends_on_node_keys must reference earlier nodes", node.Key)
+					}
+					dependsOnPositions = append(dependsOnPositions, depPosition)
+				}
+				out.Items = append(out.Items, issuePlanResultItem{
+					Title:                 strings.TrimSpace(node.Title),
+					Description:           strings.TrimSpace(node.Description),
+					AcceptanceCriteria:    normalizeStringSlice(node.AcceptanceCriteria),
+					SuggestedTestCommands: normalizeStringSlice(node.SuggestedTestCommands),
+					ContextResources:      normalizeStringSlice(node.ContextResources),
+					RiskNotes:             normalizeStringSlice(node.RiskNotes),
+					NodeType:              NormalizePlanItemNodeType(firstNonEmpty(node.NodeType, node.Type)),
+					ExecutionKind:         normalizePlanItemExecutionKind(node.ExecutionKind),
+					ConfirmationQuestion:  strings.TrimSpace(node.ConfirmationQuestion),
+					ConfirmationReason:    strings.TrimSpace(node.ConfirmationReason),
+					RequiredEvidence:      normalizeStringSlice(node.RequiredEvidence),
+					RecommendedAgentID:    strings.TrimSpace(node.AgentID),
+					MatchScore:            100,
+					MatchReason:           "Selected by pipeline node assignment.",
+					DependsOnPositions:    dependsOnPositions,
+					Selected:              &selected,
+				})
+			}
+		}
+	}
 	if strings.TrimSpace(out.ParentIssue.Title) == "" {
 		out.ParentIssue.Title = strings.TrimSpace(out.Title)
 	}
-	if strings.TrimSpace(out.ParentIssue.Title) == "" {
+	if strings.TrimSpace(out.ParentIssue.Title) == "" && len(out.Pipeline.Nodes) == 0 {
 		return out, fmt.Errorf("planner output missing parent_issue.title")
 	}
-	if len(out.Items) == 0 {
+	if len(out.Items) == 0 && len(out.Pipeline.Nodes) == 0 {
 		return out, fmt.Errorf("planner output missing items")
 	}
 	for i, item := range out.Items {
@@ -2127,21 +2647,644 @@ func parseIssuePlanOutput(output string) (issuePlanResult, error) {
 			normalizedDeps = append(normalizedDeps, dep)
 		}
 		out.Items[i].DependsOnPositions = normalizedDeps
+		out.Items[i].AcceptanceCriteria = normalizeStringSlice(item.AcceptanceCriteria)
+		out.Items[i].SuggestedTestCommands = normalizeStringSlice(item.SuggestedTestCommands)
+		out.Items[i].ContextResources = normalizeStringSlice(item.ContextResources)
+		out.Items[i].RiskNotes = normalizeStringSlice(item.RiskNotes)
+		out.Items[i] = normalizeIssuePlanResultItemContract(out.Items[i])
 	}
 	return out, nil
 }
 
-func (s *TaskService) writeIssuePlanResult(ctx context.Context, planID pgtype.UUID, result issuePlanResult) error {
+func parseIssuePlanSpecOutput(output string) (PlanSpec, error) {
+	var wrapper struct {
+		Spec PlanSpec `json:"spec"`
+	}
+	var spec PlanSpec
+	if output == "" {
+		return spec, fmt.Errorf("planner returned empty output")
+	}
+	start := strings.Index(output, "{")
+	end := strings.LastIndex(output, "}")
+	if start < 0 || end < start {
+		return spec, fmt.Errorf("planner output did not contain a JSON object; update or restart the planner daemon so it supports Plans")
+	}
+	raw := output[start : end+1]
+	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
+		return spec, fmt.Errorf("planner output JSON is invalid: %v", err)
+	}
+	spec = normalizePlanSpec(wrapper.Spec)
+	if spec.Summary == "" && spec.Goal == "" {
+		if err := json.Unmarshal([]byte(raw), &spec); err != nil {
+			return spec, fmt.Errorf("planner output JSON is invalid: %v", err)
+		}
+		spec = normalizePlanSpec(spec)
+	}
+	if spec.Summary == "" {
+		return spec, fmt.Errorf("planner spec missing summary")
+	}
+	if spec.Goal == "" {
+		return spec, fmt.Errorf("planner spec missing goal")
+	}
+	return spec, nil
+}
+
+func (s *TaskService) applyReviewGateCompleted(ctx context.Context, task db.AgentTaskQueue, result []byte) bool {
+	nodeType, ok := s.reviewGateNodeTypeForIssue(ctx, task.IssueID)
+	if !ok {
+		return false
+	}
+
+	issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+	if err != nil {
+		slog.Warn("review gate issue lookup failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		return true
+	}
+
+	review, parseErr := s.parseReviewGateResultForTask(ctx, task, issue, result)
+	nextStatus := "blocked"
+	commentType := "comment"
+	comment := ""
+	if parseErr != nil {
+		commentType = "system"
+		comment = formatInvalidReviewGateComment(nodeType, parseErr)
+	} else {
+		comment = formatReviewGateComment(nodeType, review)
+		if review.Status == reviewGateStatusPass {
+			nextStatus = "done"
+		}
+	}
+
+	agentCommented, _ := s.Queries.HasAgentCommentedSince(ctx, db.HasAgentCommentedSinceParams{
+		IssueID:  task.IssueID,
+		AuthorID: task.AgentID,
+		Since:    task.StartedAt,
+	})
+	if !agentCommented {
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(comment), commentType, task.TriggerCommentID)
+	}
+
+	issue, err = s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+		ID:     task.IssueID,
+		Status: nextStatus,
+	})
+	if err != nil {
+		slog.Warn("review gate status update failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "status", nextStatus, "error", err)
+		return true
+	}
+	s.broadcastIssueUpdated(issue)
+	if nextStatus == "done" {
+		s.enqueueUnblockedIssueTasks(ctx, task.IssueID)
+	} else if parseErr == nil && review.Status == reviewGateStatusFail {
+		s.ensureReviewGateRepairIssue(ctx, task, issue, nodeType, review)
+	}
+	return true
+}
+
+func (s *TaskService) parseReviewGateResultForTask(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, result []byte) (reviewGateResult, error) {
+	output := taskCompletedOutput(result)
+	review, outputErr := parseReviewGateOutput(output)
+	if outputErr == nil {
+		return review, nil
+	}
+	review, commentErr := s.parseReviewGateResultFromAgentComment(ctx, task, issue)
+	if commentErr == nil {
+		return review, nil
+	}
+	return reviewGateResult{}, outputErr
+}
+
+func (s *TaskService) parseReviewGateResultFromAgentComment(ctx context.Context, task db.AgentTaskQueue, issue db.Issue) (reviewGateResult, error) {
+	since := task.StartedAt
+	if !since.Valid {
+		since = task.CreatedAt
+	}
+	comments, err := s.Queries.ListCommentsSinceForIssue(ctx, db.ListCommentsSinceForIssueParams{
+		IssueID:     task.IssueID,
+		WorkspaceID: issue.WorkspaceID,
+		CreatedAt:   since,
+		Limit:       50,
+	})
+	if err != nil {
+		return reviewGateResult{}, err
+	}
+
+	var parseErr error
+	for i := len(comments) - 1; i >= 0; i-- {
+		comment := comments[i]
+		if comment.AuthorType != "agent" || util.UUIDToString(comment.AuthorID) != util.UUIDToString(task.AgentID) {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(comment.Content), "review_gate") {
+			continue
+		}
+		review, err := parseReviewGateOutput(comment.Content)
+		if err == nil {
+			return review, nil
+		}
+		parseErr = err
+	}
+	if parseErr != nil {
+		return reviewGateResult{}, parseErr
+	}
+	return reviewGateResult{}, fmt.Errorf("no agent comment contained review_gate JSON")
+}
+
+func (s *TaskService) reviewGateNodeTypeForIssue(ctx context.Context, issueID pgtype.UUID) (string, bool) {
+	stage, err := s.Queries.GetPipelineRunStageForIssue(ctx, issueID)
+	if err == nil {
+		nodeType := NormalizePlanItemNodeType(stage.NodeType)
+		return nodeType, IsReviewGateNodeType(nodeType)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		slog.Warn("review gate pipeline lookup failed", "issue_id", util.UUIDToString(issueID), "error", err)
+		return "", false
+	}
+	item, err := s.Queries.GetPlanItemByGeneratedIssue(ctx, issueID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("review gate plan item lookup failed", "issue_id", util.UUIDToString(issueID), "error", err)
+		}
+		return "", false
+	}
+	nodeType := NormalizePlanItemNodeType(item.NodeType)
+	return nodeType, IsReviewGateNodeType(nodeType)
+}
+
+func (s *TaskService) applyReviewGateRepairTaskCompleted(ctx context.Context, task db.AgentTaskQueue) bool {
+	if !task.IssueID.Valid || task.TriggerCommentID.Valid {
+		return false
+	}
+	issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+	if err != nil {
+		return false
+	}
+	if !issue.OriginType.Valid || issue.OriginType.String != reviewGateRepairOriginType || !issue.OriginID.Valid {
+		return false
+	}
+	switch issue.Status {
+	case "done", "blocked", "cancelled":
+		return false
+	}
+	updated, err := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+		ID:     task.IssueID,
+		Status: "done",
+	})
+	if err != nil {
+		slog.Warn("review gate repair status update failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		return false
+	}
+	s.broadcastIssueUpdated(updated)
+	s.enqueueUnblockedIssueTasks(ctx, task.IssueID)
+	return true
+}
+
+func (s *TaskService) ensureReviewGateRepairIssue(ctx context.Context, task db.AgentTaskQueue, reviewIssue db.Issue, nodeType string, review reviewGateResult) {
+	openRepairs, err := s.Queries.ListOpenReviewGateRepairIssues(ctx, reviewIssue.ID)
+	if err == nil && len(openRepairs) > 0 {
+		s.createAgentComment(ctx, reviewIssue.ID, task.AgentID, redact.Text(formatExistingReviewGateRepairComment(openRepairs[0])), "system", pgtype.UUID{})
+		return
+	}
+	if err != nil {
+		slog.Warn("review gate repair lookup failed", "issue_id", util.UUIDToString(reviewIssue.ID), "task_id", util.UUIDToString(task.ID), "error", err)
+	}
+
+	targetIssue, ok := s.findReviewGateRepairTargetIssue(ctx, reviewIssue.ID)
+	if !ok {
+		s.createAgentComment(ctx, reviewIssue.ID, task.AgentID, redact.Text("Review gate failed, but no upstream agent-assigned implementation issue was found for automatic repair assignment."), "system", pgtype.UUID{})
+		return
+	}
+
+	var repairIssue db.Issue
+	err = s.runInTx(ctx, func(qtx *db.Queries) error {
+		existing, err := qtx.ListOpenReviewGateRepairIssues(ctx, reviewIssue.ID)
+		if err != nil {
+			return fmt.Errorf("list open review gate repairs: %w", err)
+		}
+		if len(existing) > 0 {
+			repairIssue = existing[0]
+			return nil
+		}
+		number, err := qtx.IncrementIssueCounter(ctx, reviewIssue.WorkspaceID)
+		if err != nil {
+			return fmt.Errorf("allocate repair issue number: %w", err)
+		}
+		created, err := qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
+			WorkspaceID:   reviewIssue.WorkspaceID,
+			Title:         reviewGateRepairTitle(reviewIssue),
+			Description:   serviceStrOrNullText(formatReviewGateRepairDescription(nodeType, reviewIssue, targetIssue, review)),
+			Status:        "todo",
+			Priority:      reviewIssue.Priority,
+			AssigneeType:  pgtype.Text{String: "agent", Valid: true},
+			AssigneeID:    targetIssue.AssigneeID,
+			CreatorType:   "agent",
+			CreatorID:     task.AgentID,
+			ParentIssueID: reviewIssue.ParentIssueID,
+			Number:        number,
+			ProjectID:     reviewIssue.ProjectID,
+			OriginType:    pgtype.Text{String: reviewGateRepairOriginType, Valid: true},
+			OriginID:      reviewIssue.ID,
+		})
+		if err != nil {
+			return fmt.Errorf("create repair issue: %w", err)
+		}
+		repairIssue = created
+		if _, err := qtx.CreateIssueDependency(ctx, db.CreateIssueDependencyParams{
+			IssueID:          reviewIssue.ID,
+			DependsOnIssueID: repairIssue.ID,
+			Type:             "blocked_by",
+		}); err != nil {
+			return fmt.Errorf("link repair dependency: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Warn("review gate repair creation failed", "issue_id", util.UUIDToString(reviewIssue.ID), "task_id", util.UUIDToString(task.ID), "error", err)
+		return
+	}
+	s.broadcastIssueUpdated(reviewIssue)
+	if repairIssue.ID.Valid {
+		_, _ = s.EnqueueTaskForIssue(ctx, repairIssue)
+		s.createAgentComment(ctx, reviewIssue.ID, task.AgentID, redact.Text(formatCreatedReviewGateRepairComment(repairIssue)), "system", pgtype.UUID{})
+	}
+}
+
+func (s *TaskService) findReviewGateRepairTargetIssue(ctx context.Context, reviewIssueID pgtype.UUID) (db.Issue, bool) {
+	visited := map[string]bool{}
+	queue := []pgtype.UUID{reviewIssueID}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		key := util.UUIDToString(current)
+		if visited[key] {
+			continue
+		}
+		visited[key] = true
+		deps, err := s.Queries.ListIssueBlockingDependencies(ctx, current)
+		if err != nil {
+			return db.Issue{}, false
+		}
+		for _, dep := range deps {
+			if s.isRepairTargetCandidate(ctx, dep) {
+				return dep, true
+			}
+		}
+		for _, dep := range deps {
+			if _, isReviewGate := s.reviewGateNodeTypeForIssue(ctx, dep.ID); isReviewGate {
+				queue = append(queue, dep.ID)
+			}
+		}
+	}
+	return db.Issue{}, false
+}
+
+func (s *TaskService) isRepairTargetCandidate(ctx context.Context, issue db.Issue) bool {
+	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
+		return false
+	}
+	if issue.OriginType.Valid && issue.OriginType.String == reviewGateRepairOriginType {
+		return false
+	}
+	if _, isReviewGate := s.reviewGateNodeTypeForIssue(ctx, issue.ID); isReviewGate {
+		return false
+	}
+	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
+	if err != nil || agent.ArchivedAt.Valid || !agent.RuntimeID.Valid || agent.IsInternal {
+		return false
+	}
+	return true
+}
+
+func reviewGateRepairTitle(reviewIssue db.Issue) string {
+	title := strings.TrimSpace(reviewIssue.Title)
+	if title == "" {
+		return "Fix review gate findings"
+	}
+	return "Fix review findings: " + title
+}
+
+func formatReviewGateRepairDescription(nodeType string, reviewIssue, targetIssue db.Issue, review reviewGateResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s failed and requires a repair before downstream work can continue.", reviewGateLabel(nodeType))
+	if review.Summary != "" {
+		fmt.Fprintf(&b, "\n\nSummary:\n%s", review.Summary)
+	}
+	if len(review.Findings) > 0 {
+		b.WriteString("\n\nBlocking findings:")
+		for _, finding := range review.Findings {
+			title := finding.Title
+			if title == "" {
+				title = finding.Details
+			}
+			fmt.Fprintf(&b, "\n- [%s] %s", finding.Severity, title)
+			if finding.Details != "" && finding.Details != title {
+				fmt.Fprintf(&b, ": %s", finding.Details)
+			}
+		}
+	}
+	fmt.Fprintf(&b, "\n\nReview issue: #%d %s", reviewIssue.Number, strings.TrimSpace(reviewIssue.Title))
+	fmt.Fprintf(&b, "\nTarget implementation issue: #%d %s", targetIssue.Number, strings.TrimSpace(targetIssue.Title))
+	if len(review.CheckedAgainst) > 0 {
+		b.WriteString("\n\nChecked against:")
+		for _, item := range review.CheckedAgainst {
+			fmt.Fprintf(&b, "\n- %s", item)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func formatCreatedReviewGateRepairComment(repairIssue db.Issue) string {
+	return fmt.Sprintf("Created repair issue #%d and assigned it to the upstream implementation agent. This review gate remains blocked until that repair issue is done.", repairIssue.Number)
+}
+
+func formatExistingReviewGateRepairComment(repairIssue db.Issue) string {
+	return fmt.Sprintf("Review gate remains blocked. Existing repair issue #%d is still open, so no duplicate repair issue was created.", repairIssue.Number)
+}
+
+func (s *TaskService) applyPlanAgentTaskCompleted(ctx context.Context, task db.AgentTaskQueue) bool {
+	if !task.IssueID.Valid || task.TriggerCommentID.Valid {
+		return false
+	}
+	item, err := s.Queries.GetPlanItemByGeneratedIssue(ctx, task.IssueID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("plan item execution contract lookup failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		}
+		return false
+	}
+	if normalizePlanItemExecutionKind(item.ExecutionKind) != PlanItemExecutionKindAgentTask {
+		return false
+	}
+	issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+	if err != nil {
+		slog.Warn("plan agent task issue lookup failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		return false
+	}
+	switch issue.Status {
+	case "done", "blocked", "cancelled":
+		return false
+	}
+	updated, err := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+		ID:     task.IssueID,
+		Status: "done",
+	})
+	if err != nil {
+		slog.Warn("plan agent task status update failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		return false
+	}
+	s.broadcastIssueUpdated(updated)
+	s.enqueueUnblockedIssueTasks(ctx, task.IssueID)
+	return true
+}
+
+func taskCompletedOutput(result []byte) string {
+	var payload protocol.TaskCompletedPayload
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(util.UnescapeBackslashEscapes(payload.Output))
+}
+
+func parseReviewGateOutput(output string) (reviewGateResult, error) {
+	var empty reviewGateResult
+	if strings.TrimSpace(output) == "" {
+		return empty, fmt.Errorf("review gate returned empty output")
+	}
+	for start := strings.Index(output, "{"); start >= 0; {
+		var raw map[string]json.RawMessage
+		decoder := json.NewDecoder(strings.NewReader(output[start:]))
+		if err := decoder.Decode(&raw); err == nil {
+			reviewRaw, ok := raw["review_gate"]
+			if ok {
+				var review reviewGateResult
+				if err := json.Unmarshal(reviewRaw, &review); err != nil {
+					return empty, fmt.Errorf("review_gate JSON is invalid: %v", err)
+				}
+				review = normalizeReviewGateResult(review)
+				switch review.Status {
+				case reviewGateStatusPass, reviewGateStatusFail:
+					return review, nil
+				default:
+					return empty, fmt.Errorf("review_gate.status must be pass or fail")
+				}
+			}
+		}
+		next := strings.Index(output[start+1:], "{")
+		if next < 0 {
+			break
+		}
+		start += next + 1
+	}
+	return empty, fmt.Errorf("review gate output did not contain a JSON object with review_gate")
+}
+
+func normalizeReviewGateResult(review reviewGateResult) reviewGateResult {
+	review.Status = strings.ToLower(strings.TrimSpace(review.Status))
+	review.Summary = strings.TrimSpace(review.Summary)
+	review.CheckedAgainst = normalizeStringSlice(review.CheckedAgainst)
+	findings := make([]reviewGateFinding, 0, len(review.Findings))
+	for _, finding := range review.Findings {
+		severity := strings.ToLower(strings.TrimSpace(finding.Severity))
+		if severity != "blocker" && severity != "major" && severity != "minor" {
+			severity = "major"
+		}
+		title := strings.TrimSpace(finding.Title)
+		details := strings.TrimSpace(finding.Details)
+		if title == "" && details == "" {
+			continue
+		}
+		findings = append(findings, reviewGateFinding{
+			Severity: severity,
+			Title:    title,
+			Details:  details,
+		})
+	}
+	review.Findings = findings
+	return review
+}
+
+func formatReviewGateComment(nodeType string, review reviewGateResult) string {
+	label := reviewGateLabel(nodeType)
+	status := "failed"
+	if review.Status == reviewGateStatusPass {
+		status = "passed"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s.", label, status)
+	if review.Summary != "" {
+		fmt.Fprintf(&b, "\n\n%s", review.Summary)
+	}
+	if len(review.Findings) > 0 {
+		b.WriteString("\n\nFindings:")
+		for _, finding := range review.Findings {
+			title := finding.Title
+			if title == "" {
+				title = finding.Details
+			}
+			fmt.Fprintf(&b, "\n- [%s] %s", finding.Severity, title)
+			if finding.Details != "" && finding.Details != title {
+				fmt.Fprintf(&b, ": %s", finding.Details)
+			}
+		}
+	}
+	if len(review.CheckedAgainst) > 0 {
+		b.WriteString("\n\nChecked against:")
+		for _, item := range review.CheckedAgainst {
+			fmt.Fprintf(&b, "\n- %s", item)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func formatInvalidReviewGateComment(nodeType string, err error) string {
+	return fmt.Sprintf("%s blocked because the agent did not return a valid review_gate JSON result: %v", reviewGateLabel(nodeType), err)
+}
+
+func reviewGateLabel(nodeType string) string {
+	switch nodeType {
+	case PipelineNodeTypeSpecReview:
+		return "Spec review gate"
+	case PipelineNodeTypeCodeReview:
+		return "Code review gate"
+	default:
+		return "Review gate"
+	}
+}
+
+func (s *TaskService) enqueueUnblockedIssueTasks(ctx context.Context, completedIssueID pgtype.UUID) {
+	issues, err := s.Queries.ListIssuesUnblockedByIssue(ctx, completedIssueID)
+	if err != nil {
+		return
+	}
+	for _, issue := range issues {
+		if !s.shouldEnqueueAgentTask(ctx, issue) {
+			continue
+		}
+		hasPending, err := s.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
+			IssueID: issue.ID,
+			AgentID: issue.AssigneeID,
+		})
+		if err != nil || hasPending {
+			continue
+		}
+		_, _ = s.EnqueueTaskForIssue(ctx, issue)
+	}
+}
+
+func (s *TaskService) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue) bool {
+	if issue.Status == "backlog" || issue.Status == "done" || issue.Status == "cancelled" {
+		return false
+	}
+	count, err := s.Queries.CountOpenDependenciesForIssue(ctx, issue.ID)
+	if err != nil || count > 0 {
+		return false
+	}
+	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
+		return false
+	}
+	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
+	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid || agent.IsInternal {
+		return false
+	}
+	return true
+}
+
+func (s *TaskService) writeIssuePlanSpec(ctx context.Context, planID pgtype.UUID, spec PlanSpec) error {
+	spec = normalizePlanSpec(spec)
+	specJSON, err := marshalPlanSpec(spec)
+	if err != nil {
+		return fmt.Errorf("marshal plan spec: %w", err)
+	}
 	return s.runInTx(ctx, func(qtx *db.Queries) error {
+		existing, err := qtx.GetPlan(ctx, planID)
+		if err != nil {
+			return fmt.Errorf("load plan: %w", err)
+		}
+		title := strings.TrimSpace(existing.Title)
+		if title == "" {
+			title = firstNonEmptyLine(spec.Summary)
+		}
+		if title == "" {
+			title = firstNonEmptyLine(spec.Goal)
+		}
+		if _, err := qtx.MarkPlanSpecReview(ctx, db.MarkPlanSpecReviewParams{
+			ID:    planID,
+			Title: title,
+			Spec:  specJSON,
+		}); err != nil {
+			return fmt.Errorf("mark plan spec review: %w", err)
+		}
+		if err := qtx.DeletePlanItems(ctx, planID); err != nil {
+			return fmt.Errorf("delete old plan items: %w", err)
+		}
+		return nil
+	})
+}
+
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			if len(line) > 120 {
+				return line[:120]
+			}
+			return line
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (s *TaskService) writeIssuePlanResult(ctx context.Context, planID pgtype.UUID, result issuePlanResult) error {
+	if !result.shouldCreatePlan() {
+		direct, ok := result.directIssue()
+		if !ok {
+			return fmt.Errorf("planner output missing direct_issue")
+		}
+		selected := true
+		direct.Selected = &selected
+		result.Items = []issuePlanResultItem{direct}
+		if strings.TrimSpace(result.Title) == "" {
+			result.Title = strings.TrimSpace(direct.Title)
+		}
+	}
+	return s.runInTx(ctx, func(qtx *db.Queries) error {
+		existing, err := qtx.GetPlan(ctx, planID)
+		if err != nil {
+			return fmt.Errorf("load plan: %w", err)
+		}
 		title := strings.TrimSpace(result.Title)
 		if title == "" {
 			title = strings.TrimSpace(result.ParentIssue.Title)
 		}
+		if title == "" {
+			title = existing.Title
+		}
+		parentTitle := strings.TrimSpace(result.ParentIssue.Title)
+		if parentTitle == "" {
+			parentTitle = strings.TrimSpace(existing.ParentTitle.String)
+		}
+		if parentTitle == "" {
+			parentTitle = title
+		}
+		parentDescription := strings.TrimSpace(result.ParentIssue.Description)
+		if parentDescription == "" {
+			parentDescription = strings.TrimSpace(existing.ParentDescription.String)
+		}
 		plan, err := qtx.MarkPlanReady(ctx, db.MarkPlanReadyParams{
 			ID:                planID,
 			Title:             title,
-			ParentTitle:       pgtype.Text{String: strings.TrimSpace(result.ParentIssue.Title), Valid: true},
-			ParentDescription: pgtype.Text{String: strings.TrimSpace(result.ParentIssue.Description), Valid: true},
+			ParentTitle:       pgtype.Text{String: parentTitle, Valid: true},
+			ParentDescription: pgtype.Text{String: parentDescription, Valid: parentDescription != ""},
 		})
 		if err != nil {
 			return fmt.Errorf("mark plan ready: %w", err)
@@ -2149,53 +3292,974 @@ func (s *TaskService) writeIssuePlanResult(ctx context.Context, planID pgtype.UU
 		if err := qtx.DeletePlanItems(ctx, plan.ID); err != nil {
 			return fmt.Errorf("delete old plan items: %w", err)
 		}
-		for i, item := range result.Items {
-			selected := true
-			if item.Selected != nil {
-				selected = *item.Selected
-			}
-			score := item.MatchScore
-			var recommended pgtype.UUID
-			if strings.TrimSpace(item.RecommendedAgentID) != "" && score >= 60 {
-				agentID, err := util.ParseUUID(strings.TrimSpace(item.RecommendedAgentID))
-				if err == nil {
-					if agent, loadErr := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
-						ID:          agentID,
-						WorkspaceID: plan.WorkspaceID,
-					}); loadErr == nil && !agent.ArchivedAt.Valid {
-						recommended = agentID
-					}
+		return s.createPlanItemsFromResult(ctx, qtx, plan, result.Items)
+	})
+}
+
+func (s *TaskService) createPlanItemsFromResult(ctx context.Context, qtx *db.Queries, plan db.Plan, items []issuePlanResultItem) error {
+	for i, item := range items {
+		selected := true
+		if item.Selected != nil {
+			selected = *item.Selected
+		}
+		score := item.MatchScore
+		var recommended pgtype.UUID
+		if strings.TrimSpace(item.RecommendedAgentID) != "" && score >= 60 {
+			agentID, err := util.ParseUUID(strings.TrimSpace(item.RecommendedAgentID))
+			if err == nil {
+				if agent, loadErr := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+					ID:          agentID,
+					WorkspaceID: plan.WorkspaceID,
+				}); loadErr == nil && !agent.ArchivedAt.Valid && agent.RuntimeID.Valid {
+					recommended = agentID
 				}
 			}
-			if !recommended.Valid && score >= 60 {
-				score = 0
-			}
-			if !recommended.Valid {
-				selected = true
-			}
-			if _, err := qtx.CreatePlanItem(ctx, db.CreatePlanItemParams{
-				PlanID:             plan.ID,
-				Position:           int32(i + 1),
-				Title:              strings.TrimSpace(item.Title),
-				Description:        strings.TrimSpace(item.Description),
-				RecommendedAgentID: recommended,
-				MatchScore:         score,
-				MatchReason:        strings.TrimSpace(item.MatchReason),
-				MissingCapability:  strings.TrimSpace(item.MissingCapability),
-				DependsOnPositions: item.DependsOnPositions,
-				Selected:           selected,
-			}); err != nil {
-				return fmt.Errorf("create plan item: %w", err)
-			}
 		}
-		return nil
-	})
+		if !recommended.Valid && score >= 60 {
+			score = 0
+		}
+		if !recommended.Valid {
+			selected = true
+		}
+		item = normalizeIssuePlanResultItemContract(item)
+		if item.ExecutionKind == PlanItemExecutionKindHumanConfirmation {
+			recommended = pgtype.UUID{}
+			score = 0
+		}
+		requiresGitCommit := itemRequiresGitCommit(item)
+		branchName := normalizeIssuePlanBranchName(item.BranchName, item.Title)
+		if !requiresGitCommit {
+			branchName = ""
+		}
+		dependsOnPositions := item.DependsOnPositions
+		if dependsOnPositions == nil {
+			dependsOnPositions = []int32{}
+		}
+		if _, err := qtx.CreatePlanItem(ctx, db.CreatePlanItemParams{
+			PlanID:                plan.ID,
+			Position:              int32(i + 1),
+			Title:                 strings.TrimSpace(item.Title),
+			Description:           strings.TrimSpace(item.Description),
+			AcceptanceCriteria:    normalizeStringSlice(item.AcceptanceCriteria),
+			SuggestedTestCommands: normalizeStringSlice(item.SuggestedTestCommands),
+			ContextResources:      normalizeStringSlice(item.ContextResources),
+			RiskNotes:             normalizeStringSlice(item.RiskNotes),
+			NodeType:              item.NodeType,
+			ExecutionKind:         item.ExecutionKind,
+			ConfirmationQuestion:  strings.TrimSpace(item.ConfirmationQuestion),
+			ConfirmationReason:    strings.TrimSpace(item.ConfirmationReason),
+			RequiredEvidence:      normalizeStringSlice(item.RequiredEvidence),
+			RequiresGitCommit:     requiresGitCommit,
+			BranchName:            branchName,
+			RecommendedAgentID:    recommended,
+			MatchScore:            score,
+			MatchReason:           strings.TrimSpace(item.MatchReason),
+			MissingCapability:     strings.TrimSpace(item.MissingCapability),
+			DependsOnPositions:    dependsOnPositions,
+			Selected:              selected,
+		}); err != nil {
+			return fmt.Errorf("create plan item: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *TaskService) markIssuePlanFailed(ctx context.Context, planID pgtype.UUID, msg string) {
 	if _, err := s.Queries.MarkPlanFailed(ctx, db.MarkPlanFailedParams{ID: planID, Error: pgtype.Text{String: msg, Valid: true}}); err != nil {
 		slog.Warn("issue-plan completion: failed to mark plan failed", "plan_id", util.UUIDToString(planID), "error", err)
 	}
+}
+
+func (s *TaskService) writePipelinePlanDraftFromPlannerIssue(ctx context.Context, task db.AgentTaskQueue, ip IssuePlanContext, sourceIssueID, planID pgtype.UUID, result issuePlanResult) error {
+	sourceIssue, err := s.Queries.GetIssue(ctx, sourceIssueID)
+	if err != nil {
+		return fmt.Errorf("source issue not found")
+	}
+	if sourceIssue.WorkspaceID != taskWorkspaceUUID(ip.WorkspaceID) {
+		return fmt.Errorf("source issue workspace mismatch")
+	}
+	projectID := sourceIssue.ProjectID
+	if ip.ProjectID != "" {
+		if parsedProjectID, err := util.ParseUUID(ip.ProjectID); err == nil {
+			projectID = parsedProjectID
+		}
+	}
+
+	return s.runInTx(ctx, func(qtx *db.Queries) error {
+		pipeline, stages, err := s.resolvePlannerPipeline(ctx, qtx, sourceIssue.WorkspaceID, result)
+		if err != nil {
+			return err
+		}
+		overrides, err := s.normalizePlannerPipelineOverrides(ctx, qtx, sourceIssue.WorkspaceID, result.Pipeline.Nodes)
+		if err != nil {
+			return err
+		}
+		if err := validatePlannerPipelineOverrides(stages, overrides); err != nil {
+			return err
+		}
+		repoTargetsByStage, err := s.plannerPipelineRepoTargets(ctx, qtx, projectID, stages)
+		if err != nil {
+			return err
+		}
+		existing, err := qtx.GetPlan(ctx, planID)
+		if err != nil {
+			return fmt.Errorf("load plan: %w", err)
+		}
+		title := strings.TrimSpace(result.Title)
+		if title == "" {
+			title = strings.TrimSpace(result.ParentIssue.Title)
+		}
+		if title == "" {
+			title = strings.TrimSpace(pipeline.Name)
+		}
+		if title == "" {
+			title = existing.Title
+		}
+		parentTitle := strings.TrimSpace(result.ParentIssue.Title)
+		if parentTitle == "" {
+			parentTitle = strings.TrimSpace(existing.ParentTitle.String)
+		}
+		if parentTitle == "" {
+			parentTitle = sourceIssue.Title
+		}
+		parentDescription := strings.TrimSpace(result.ParentIssue.Description)
+		if parentDescription == "" {
+			parentDescription = strings.TrimSpace(existing.ParentDescription.String)
+		}
+		plan, err := qtx.MarkPlanReady(ctx, db.MarkPlanReadyParams{
+			ID:                planID,
+			Title:             title,
+			ParentTitle:       pgtype.Text{String: parentTitle, Valid: true},
+			ParentDescription: pgtype.Text{String: parentDescription, Valid: parentDescription != ""},
+		})
+		if err != nil {
+			return fmt.Errorf("mark plan ready: %w", err)
+		}
+		if err := qtx.DeletePlanItems(ctx, plan.ID); err != nil {
+			return fmt.Errorf("delete old plan items: %w", err)
+		}
+		items := pipelinePlanItemsFromStages(stages, overrides, repoTargetsByStage)
+		return s.createPlanItemsFromResult(ctx, qtx, plan, items)
+	})
+}
+
+func (s *TaskService) writePipelinePlanDraft(ctx context.Context, task db.AgentTaskQueue, ip IssuePlanContext, planID pgtype.UUID, result issuePlanResult) error {
+	return s.runInTx(ctx, func(qtx *db.Queries) error {
+		existing, err := qtx.GetPlan(ctx, planID)
+		if err != nil {
+			return fmt.Errorf("load plan: %w", err)
+		}
+		projectID := existing.ProjectID
+		if ip.ProjectID != "" {
+			if parsedProjectID, err := util.ParseUUID(ip.ProjectID); err == nil {
+				projectID = parsedProjectID
+			}
+		}
+		pipeline, stages, err := s.resolvePlannerPipeline(ctx, qtx, existing.WorkspaceID, result)
+		if err != nil {
+			return err
+		}
+		overrides, err := s.normalizePlannerPipelineOverrides(ctx, qtx, existing.WorkspaceID, result.Pipeline.Nodes)
+		if err != nil {
+			return err
+		}
+		if err := validatePlannerPipelineOverrides(stages, overrides); err != nil {
+			return err
+		}
+		repoTargetsByStage, err := s.plannerPipelineRepoTargets(ctx, qtx, projectID, stages)
+		if err != nil {
+			return err
+		}
+		title := strings.TrimSpace(result.Title)
+		if title == "" {
+			title = strings.TrimSpace(result.ParentIssue.Title)
+		}
+		if title == "" {
+			title = strings.TrimSpace(pipeline.Name)
+		}
+		if title == "" {
+			title = existing.Title
+		}
+		parentTitle := strings.TrimSpace(result.ParentIssue.Title)
+		if parentTitle == "" {
+			parentTitle = strings.TrimSpace(existing.ParentTitle.String)
+		}
+		parentDescription := strings.TrimSpace(result.ParentIssue.Description)
+		if parentDescription == "" {
+			parentDescription = strings.TrimSpace(existing.ParentDescription.String)
+		}
+		plan, err := qtx.MarkPlanReady(ctx, db.MarkPlanReadyParams{
+			ID:                planID,
+			Title:             title,
+			ParentTitle:       pgtype.Text{String: parentTitle, Valid: parentTitle != ""},
+			ParentDescription: pgtype.Text{String: parentDescription, Valid: parentDescription != ""},
+		})
+		if err != nil {
+			return fmt.Errorf("mark plan ready: %w", err)
+		}
+		if err := qtx.DeletePlanItems(ctx, plan.ID); err != nil {
+			return fmt.Errorf("delete old plan items: %w", err)
+		}
+		items := pipelinePlanItemsFromStages(stages, overrides, repoTargetsByStage)
+		return s.createPlanItemsFromResult(ctx, qtx, plan, items)
+	})
+}
+
+func pipelinePlanItemsFromStages(stages []db.PipelineStage, overrides map[string]plannerPipelineOverride, repoTargetsByStage map[string][]plannerPipelineRepoTarget) []issuePlanResultItem {
+	items := make([]issuePlanResultItem, 0, len(stages))
+	for i, stage := range stages {
+		override := overrides[stage.Key]
+		title := strings.TrimSpace(override.title)
+		if title == "" {
+			title = stage.Title
+		}
+		description := strings.TrimSpace(override.description)
+		if description == "" {
+			description = stage.Description
+		}
+		nodeType := NormalizePlanItemNodeType(stage.NodeType)
+		description = plannerPipelineIssueDescription(description, nodeType, repoTargetsByStage[stage.Key])
+		agentID := stage.AgentID
+		if override.agentID.Valid {
+			agentID = override.agentID
+		}
+		agentIDString := ""
+		if agentID.Valid {
+			agentIDString = util.UUIDToString(agentID)
+		}
+		executionKind := normalizePlanItemExecutionKind(override.executionKind)
+		if stage.NodeType == "manual" {
+			executionKind = PlanItemExecutionKindHumanConfirmation
+			agentID = pgtype.UUID{}
+			agentIDString = ""
+		}
+		selected := !override.skip
+		items = append(items, issuePlanResultItem{
+			Title:                 title,
+			Description:           description,
+			AcceptanceCriteria:    override.acceptanceCriteria,
+			SuggestedTestCommands: override.suggestedTestCommands,
+			ContextResources:      override.contextResources,
+			RiskNotes:             override.riskNotes,
+			NodeType:              nodeType,
+			ExecutionKind:         executionKind,
+			ConfirmationQuestion:  override.confirmationQuestion,
+			ConfirmationReason:    override.confirmationReason,
+			RequiredEvidence:      override.requiredEvidence,
+			RequiresGitCommit:     override.requiresGitCommit,
+			BranchName:            override.branchName,
+			RecommendedAgentID:    agentIDString,
+			MatchScore:            plannerMatchScore(agentID),
+			MatchReason:           "Selected by pipeline node assignment.",
+			MissingCapability:     "",
+			DependsOnPositions:    plannerDependencyPositions(stages, i, overrides),
+			Selected:              &selected,
+		})
+	}
+	return items
+}
+
+func (s *TaskService) createPipelinePlanFromPlannerIssue(ctx context.Context, task db.AgentTaskQueue, ip IssuePlanContext, sourceIssueID pgtype.UUID, result issuePlanResult) (pgtype.UUID, []db.Issue, error) {
+	requesterID, err := util.ParseUUID(ip.RequesterID)
+	if err != nil {
+		return pgtype.UUID{}, nil, fmt.Errorf("invalid requester id")
+	}
+	sourceIssue, err := s.Queries.GetIssue(ctx, sourceIssueID)
+	if err != nil {
+		return pgtype.UUID{}, nil, fmt.Errorf("source issue not found")
+	}
+	if sourceIssue.WorkspaceID != taskWorkspaceUUID(ip.WorkspaceID) {
+		return pgtype.UUID{}, nil, fmt.Errorf("source issue workspace mismatch")
+	}
+	projectID := sourceIssue.ProjectID
+	if ip.ProjectID != "" {
+		if parsedProjectID, err := util.ParseUUID(ip.ProjectID); err == nil {
+			projectID = parsedProjectID
+		}
+	}
+
+	var createdChildren []db.Issue
+	var createdPlanID pgtype.UUID
+	err = s.runInTx(ctx, func(qtx *db.Queries) error {
+		pipeline, stages, err := s.resolvePlannerPipeline(ctx, qtx, sourceIssue.WorkspaceID, result)
+		if err != nil {
+			return err
+		}
+		overrides, err := s.normalizePlannerPipelineOverrides(ctx, qtx, sourceIssue.WorkspaceID, result.Pipeline.Nodes)
+		if err != nil {
+			return err
+		}
+		if err := validatePlannerPipelineOverrides(stages, overrides); err != nil {
+			return err
+		}
+		repoTargetsByStage, err := s.plannerPipelineRepoTargets(ctx, qtx, projectID, stages)
+		if err != nil {
+			return err
+		}
+		title := strings.TrimSpace(result.Title)
+		if title == "" {
+			title = "Plan: " + sourceIssue.Title
+		}
+		plan, err := qtx.CreatePlan(ctx, db.CreatePlanParams{
+			WorkspaceID:    sourceIssue.WorkspaceID,
+			Title:          title,
+			Prompt:         ip.Prompt,
+			PlannerAgentID: task.AgentID,
+			CreatedBy:      requesterID,
+			ProjectID:      projectID,
+		})
+		if err != nil {
+			return fmt.Errorf("create plan: %w", err)
+		}
+		createdPlanID = plan.ID
+		if _, err := qtx.SetPlanTask(ctx, db.SetPlanTaskParams{ID: plan.ID, TaskID: task.ID}); err != nil {
+			return fmt.Errorf("link plan task: %w", err)
+		}
+
+		run, err := qtx.CreatePipelineRun(ctx, db.CreatePipelineRunParams{
+			PipelineID:    pipeline.ID,
+			WorkspaceID:   sourceIssue.WorkspaceID,
+			ProjectID:     projectID,
+			ParentIssueID: sourceIssue.ID,
+			Status:        "completed",
+			CreatedBy:     requesterID,
+		})
+		if err != nil {
+			return fmt.Errorf("create pipeline run: %w", err)
+		}
+
+		issuesByStageKey := make(map[string]db.Issue, len(stages))
+		for i, stage := range stages {
+			override := overrides[stage.Key]
+			if override.skip {
+				continue
+			}
+			title := strings.TrimSpace(override.title)
+			if title == "" {
+				title = stage.Title
+			}
+			description := strings.TrimSpace(override.description)
+			if description == "" {
+				description = stage.Description
+			}
+			nodeType := NormalizePlanItemNodeType(stage.NodeType)
+			description = plannerPipelineIssueDescription(description, nodeType, repoTargetsByStage[stage.Key])
+			agentID := stage.AgentID
+			if override.agentID.Valid {
+				agentID = override.agentID
+			}
+			executionKind := normalizePlanItemExecutionKind(override.executionKind)
+			if stage.NodeType == "manual" {
+				executionKind = PlanItemExecutionKindHumanConfirmation
+				agentID = pgtype.UUID{}
+			}
+			depPositions := plannerDependencyPositions(stages, i, overrides)
+			itemContract := normalizeIssuePlanResultItemContract(issuePlanResultItem{
+				Title:                title,
+				Description:          description,
+				NodeType:             nodeType,
+				ExecutionKind:        executionKind,
+				ConfirmationQuestion: override.confirmationQuestion,
+				ConfirmationReason:   override.confirmationReason,
+				RequiredEvidence:     override.requiredEvidence,
+				RequiresGitCommit:    override.requiresGitCommit,
+				BranchName:           override.branchName,
+				RecommendedAgentID:   util.UUIDToString(agentID),
+				MatchScore:           plannerMatchScore(agentID),
+				MatchReason:          "Selected by pipeline node assignment.",
+			})
+			requiresGitCommit := itemRequiresGitCommit(itemContract)
+			branchName := ""
+			if requiresGitCommit {
+				branchName = normalizeIssuePlanBranchName(itemContract.BranchName, itemContract.Title)
+			}
+			item, err := qtx.CreatePlanItem(ctx, db.CreatePlanItemParams{
+				PlanID:                plan.ID,
+				Position:              int32(i + 1),
+				Title:                 title,
+				Description:           description,
+				AcceptanceCriteria:    override.acceptanceCriteria,
+				SuggestedTestCommands: override.suggestedTestCommands,
+				ContextResources:      override.contextResources,
+				RiskNotes:             override.riskNotes,
+				NodeType:              itemContract.NodeType,
+				ExecutionKind:         itemContract.ExecutionKind,
+				ConfirmationQuestion:  itemContract.ConfirmationQuestion,
+				ConfirmationReason:    itemContract.ConfirmationReason,
+				RequiredEvidence:      itemContract.RequiredEvidence,
+				RequiresGitCommit:     requiresGitCommit,
+				BranchName:            branchName,
+				RecommendedAgentID:    agentID,
+				MatchScore:            itemContract.MatchScore,
+				MatchReason:           itemContract.MatchReason,
+				MissingCapability:     "",
+				DependsOnPositions:    depPositions,
+				Selected:              true,
+			})
+			if err != nil {
+				return fmt.Errorf("create plan item: %w", err)
+			}
+			number, err := qtx.IncrementIssueCounter(ctx, sourceIssue.WorkspaceID)
+			if err != nil {
+				return fmt.Errorf("allocate issue number: %w", err)
+			}
+			assigneeType := pgtype.Text{}
+			if agentID.Valid {
+				assigneeType = pgtype.Text{String: "agent", Valid: true}
+			}
+			child, err := qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
+				WorkspaceID:   sourceIssue.WorkspaceID,
+				Title:         title,
+				Description:   serviceStrOrNullText(description),
+				Status:        "todo",
+				Priority:      "none",
+				AssigneeType:  assigneeType,
+				AssigneeID:    agentID,
+				CreatorType:   "member",
+				CreatorID:     requesterID,
+				ParentIssueID: sourceIssue.ID,
+				Number:        number,
+				ProjectID:     projectID,
+				OriginType:    pgtype.Text{String: "plan_item", Valid: true},
+				OriginID:      item.ID,
+			})
+			if err != nil {
+				return fmt.Errorf("create pipeline child issue: %w", err)
+			}
+			issuesByStageKey[stage.Key] = child
+			createdChildren = append(createdChildren, child)
+			if _, err := qtx.UpdatePlanItemGeneratedIssue(ctx, db.UpdatePlanItemGeneratedIssueParams{
+				ID:               item.ID,
+				GeneratedIssueID: child.ID,
+			}); err != nil {
+				return fmt.Errorf("link plan item issue: %w", err)
+			}
+			if _, err := qtx.CreatePipelineRunStage(ctx, db.CreatePipelineRunStageParams{
+				PipelineRunID:   run.ID,
+				PipelineStageID: stage.ID,
+				StageKey:        stage.Key,
+				IssueID:         child.ID,
+			}); err != nil {
+				return fmt.Errorf("record pipeline run node: %w", err)
+			}
+		}
+		for _, stage := range stages {
+			child, ok := issuesByStageKey[stage.Key]
+			if !ok {
+				continue
+			}
+			depKeys := stage.DependsOnStageKeys
+			if override, ok := overrides[stage.Key]; ok && len(override.dependsOnKeys) > 0 {
+				depKeys = override.dependsOnKeys
+			}
+			for _, depKey := range depKeys {
+				dep, ok := issuesByStageKey[depKey]
+				if !ok {
+					continue
+				}
+				if _, err := qtx.CreateIssueDependency(ctx, db.CreateIssueDependencyParams{
+					IssueID:          child.ID,
+					DependsOnIssueID: dep.ID,
+					Type:             "blocked_by",
+				}); err != nil {
+					return fmt.Errorf("create issue dependency: %w", err)
+				}
+			}
+		}
+		if _, err := qtx.MarkPlanCommitted(ctx, db.MarkPlanCommittedParams{
+			ID:            plan.ID,
+			ParentIssueID: sourceIssue.ID,
+		}); err != nil {
+			return fmt.Errorf("mark plan committed: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return pgtype.UUID{}, nil, err
+	}
+	return createdPlanID, createdChildren, nil
+}
+
+type plannerPipelineOverride struct {
+	title                 string
+	description           string
+	acceptanceCriteria    []string
+	suggestedTestCommands []string
+	contextResources      []string
+	riskNotes             []string
+	executionKind         string
+	confirmationQuestion  string
+	confirmationReason    string
+	requiredEvidence      []string
+	requiresGitCommit     *bool
+	branchName            string
+	agentID               pgtype.UUID
+	dependsOnKeys         []string
+	skip                  bool
+}
+
+type plannerPipelineRepoTarget struct {
+	Key string
+	URL string
+}
+
+func (s *TaskService) resolvePlannerPipeline(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID, result issuePlanResult) (db.Pipeline, []db.PipelineStage, error) {
+	pipelineIDRaw := strings.TrimSpace(result.PipelineID)
+	if pipelineIDRaw == "" {
+		pipelineIDRaw = strings.TrimSpace(result.Pipeline.ID)
+	}
+	var pipeline db.Pipeline
+	var err error
+	if pipelineIDRaw != "" {
+		pipelineID, parseErr := util.ParseUUID(pipelineIDRaw)
+		if parseErr != nil {
+			return db.Pipeline{}, nil, fmt.Errorf("pipeline_id is invalid")
+		}
+		pipeline, err = qtx.GetPipelineInWorkspace(ctx, db.GetPipelineInWorkspaceParams{ID: pipelineID, WorkspaceID: workspaceID})
+		if err != nil {
+			return db.Pipeline{}, nil, fmt.Errorf("pipeline not found")
+		}
+	} else {
+		name := strings.TrimSpace(result.PipelineName)
+		if name == "" {
+			name = strings.TrimSpace(result.Pipeline.Name)
+		}
+		if name == "" {
+			return db.Pipeline{}, nil, fmt.Errorf("planner output missing pipeline_id or pipeline_name")
+		}
+		pipelines, err := qtx.ListPipelines(ctx, workspaceID)
+		if err != nil {
+			return db.Pipeline{}, nil, fmt.Errorf("list pipelines: %w", err)
+		}
+		for _, p := range pipelines {
+			if strings.EqualFold(strings.TrimSpace(p.Name), name) {
+				pipeline = p
+				break
+			}
+		}
+		if !pipeline.ID.Valid {
+			return db.Pipeline{}, nil, fmt.Errorf("pipeline %q not found", name)
+		}
+	}
+	if pipeline.ArchivedAt.Valid {
+		return db.Pipeline{}, nil, fmt.Errorf("pipeline is archived")
+	}
+	stages, err := qtx.ListPipelineStages(ctx, pipeline.ID)
+	if err != nil {
+		return db.Pipeline{}, nil, fmt.Errorf("list pipeline nodes: %w", err)
+	}
+	if len(stages) == 0 {
+		return db.Pipeline{}, nil, fmt.Errorf("pipeline has no nodes")
+	}
+	return pipeline, stages, nil
+}
+
+func (s *TaskService) normalizePlannerPipelineOverrides(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID, nodes []issuePlanPipelineNode) (map[string]plannerPipelineOverride, error) {
+	out := make(map[string]plannerPipelineOverride, len(nodes))
+	for _, node := range nodes {
+		key := strings.TrimSpace(node.Key)
+		if key == "" {
+			continue
+		}
+		override := plannerPipelineOverride{
+			title:                 strings.TrimSpace(node.Title),
+			description:           strings.TrimSpace(node.Description),
+			acceptanceCriteria:    normalizeStringSlice(node.AcceptanceCriteria),
+			suggestedTestCommands: normalizeStringSlice(node.SuggestedTestCommands),
+			contextResources:      normalizeStringSlice(node.ContextResources),
+			riskNotes:             normalizeStringSlice(node.RiskNotes),
+			executionKind:         normalizePlanItemExecutionKind(node.ExecutionKind),
+			confirmationQuestion:  strings.TrimSpace(node.ConfirmationQuestion),
+			confirmationReason:    strings.TrimSpace(node.ConfirmationReason),
+			requiredEvidence:      normalizeStringSlice(node.RequiredEvidence),
+			requiresGitCommit:     node.RequiresGitCommit,
+			branchName:            normalizeIssuePlanBranchName(node.BranchName, node.Title),
+			dependsOnKeys:         normalizeStringSlice(node.DependsOnNodeKeys),
+		}
+		if node.Selected != nil && !*node.Selected {
+			override.skip = true
+		}
+		if strings.TrimSpace(node.AgentID) != "" {
+			agentID, err := util.ParseUUID(strings.TrimSpace(node.AgentID))
+			if err != nil {
+				return nil, fmt.Errorf("node %s agent_id is invalid", key)
+			}
+			agent, err := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
+			if err != nil || agent.ArchivedAt.Valid {
+				return nil, fmt.Errorf("node %s agent is not active", key)
+			}
+			override.agentID = agentID
+		}
+		out[key] = override
+	}
+	return out, nil
+}
+
+func validatePlannerPipelineOverrides(stages []db.PipelineStage, overrides map[string]plannerPipelineOverride) error {
+	stageIndex := make(map[string]int, len(stages))
+	for i, stage := range stages {
+		stageIndex[stage.Key] = i
+	}
+	for key, override := range overrides {
+		index, ok := stageIndex[key]
+		if !ok {
+			return fmt.Errorf("planner output references unknown pipeline node %q", key)
+		}
+		for _, depKey := range override.dependsOnKeys {
+			depIndex, ok := stageIndex[depKey]
+			if !ok {
+				return fmt.Errorf("planner output node %s references unknown dependency %q", key, depKey)
+			}
+			if depIndex >= index {
+				return fmt.Errorf("planner output node %s dependency %q must be an earlier pipeline node", key, depKey)
+			}
+		}
+	}
+	return nil
+}
+
+func plannerDependencyPositions(stages []db.PipelineStage, index int, overrides map[string]plannerPipelineOverride) []int32 {
+	keys := stages[index].DependsOnStageKeys
+	if override, ok := overrides[stages[index].Key]; ok && len(override.dependsOnKeys) > 0 {
+		keys = override.dependsOnKeys
+	}
+	if len(keys) == 0 {
+		return []int32{}
+	}
+	positionByKey := make(map[string]int32, len(stages))
+	for i, stage := range stages {
+		positionByKey[stage.Key] = int32(i + 1)
+	}
+	out := make([]int32, 0, len(keys))
+	for _, key := range keys {
+		if pos, ok := positionByKey[key]; ok && pos < int32(index+1) {
+			out = append(out, pos)
+		}
+	}
+	return out
+}
+
+func plannerMatchScore(agentID pgtype.UUID) int32 {
+	if agentID.Valid {
+		return 100
+	}
+	return 0
+}
+
+func normalizePlanItemExecutionKind(kind string) string {
+	if strings.TrimSpace(kind) == PlanItemExecutionKindHumanConfirmation {
+		return PlanItemExecutionKindHumanConfirmation
+	}
+	return PlanItemExecutionKindAgentTask
+}
+
+func NormalizePlanItemNodeType(nodeType string) string {
+	switch strings.TrimSpace(nodeType) {
+	case PipelineNodeTypeManual:
+		return PipelineNodeTypeManual
+	case PipelineNodeTypeCheck:
+		return PipelineNodeTypeCheck
+	case PipelineNodeTypeSpecReview:
+		return PipelineNodeTypeSpecReview
+	case PipelineNodeTypeCodeReview:
+		return PipelineNodeTypeCodeReview
+	default:
+		return PipelineNodeTypeIssue
+	}
+}
+
+func IsReviewGateNodeType(nodeType string) bool {
+	nodeType = NormalizePlanItemNodeType(nodeType)
+	return nodeType == PipelineNodeTypeSpecReview || nodeType == PipelineNodeTypeCodeReview
+}
+
+func ReviewGateContract(nodeType string) string {
+	switch NormalizePlanItemNodeType(nodeType) {
+	case PipelineNodeTypeSpecReview:
+		return `Review gate output contract:
+Return a final JSON object with this exact shape:
+{
+  "review_gate": {
+    "status": "pass" | "fail",
+    "summary": "Brief spec compliance review summary.",
+    "findings": [
+      { "severity": "blocker" | "major" | "minor", "title": "Finding title", "details": "Finding details" }
+    ],
+    "checked_against": ["Spec, issue, plan, or requirement checked"]
+  }
+}
+
+Use "pass" only when the implementation satisfies the requested spec. Use "fail" when downstream work must stay blocked.`
+	case PipelineNodeTypeCodeReview:
+		return `Review gate output contract:
+Return a final JSON object with this exact shape:
+{
+  "review_gate": {
+    "status": "pass" | "fail",
+    "summary": "Brief code quality review summary.",
+    "findings": [
+      { "severity": "blocker" | "major" | "minor", "title": "Finding title", "details": "Finding details" }
+    ],
+    "checked_against": ["Diff, tests, architecture, or risk area checked"]
+  }
+}
+
+Use "pass" only when the code quality review has no blocking findings. Use "fail" when downstream work must stay blocked.`
+	default:
+		return ""
+	}
+}
+
+func normalizeIssuePlanResultItemContract(item issuePlanResultItem) issuePlanResultItem {
+	item.NodeType = NormalizePlanItemNodeType(item.NodeType)
+	item.ExecutionKind = normalizePlanItemExecutionKind(item.ExecutionKind)
+	item.ConfirmationQuestion = strings.TrimSpace(item.ConfirmationQuestion)
+	item.ConfirmationReason = strings.TrimSpace(item.ConfirmationReason)
+	item.RequiredEvidence = normalizeStringSlice(item.RequiredEvidence)
+	item.BranchName = normalizeIssuePlanBranchName(item.BranchName, item.Title)
+	if item.ExecutionKind != PlanItemExecutionKindHumanConfirmation {
+		if item.RequiresGitCommit == nil {
+			v := true
+			item.RequiresGitCommit = &v
+		}
+		if item.RequiresGitCommit != nil && !*item.RequiresGitCommit {
+			item.BranchName = ""
+		}
+		item.ConfirmationQuestion = ""
+		item.ConfirmationReason = ""
+		item.RequiredEvidence = []string{}
+		return item
+	}
+	item.NodeType = PipelineNodeTypeManual
+	if item.ConfirmationQuestion == "" {
+		item.ConfirmationQuestion = strings.TrimSpace(item.Title)
+	}
+	if item.ConfirmationReason == "" {
+		item.ConfirmationReason = strings.TrimSpace(item.Description)
+	}
+	if item.ConfirmationReason == "" {
+		item.ConfirmationReason = "Human confirmation is required before downstream work can proceed."
+	}
+	item.RecommendedAgentID = ""
+	item.MatchScore = 0
+	item.MatchReason = "Waiting for human confirmation."
+	v := false
+	item.RequiresGitCommit = &v
+	item.BranchName = ""
+	return item
+}
+
+func itemRequiresGitCommit(item issuePlanResultItem) bool {
+	if normalizePlanItemExecutionKind(item.ExecutionKind) == PlanItemExecutionKindHumanConfirmation {
+		return false
+	}
+	if item.RequiresGitCommit == nil {
+		return true
+	}
+	return *item.RequiresGitCommit
+}
+
+func normalizeIssuePlanBranchName(raw, title string) string {
+	branch := strings.ToLower(strings.TrimSpace(raw))
+	branch = strings.ReplaceAll(branch, "\\", "/")
+	parts := strings.Split(branch, "/")
+	cleanParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = SlugifyPlanBranchSegment(part)
+		if part != "" {
+			cleanParts = append(cleanParts, part)
+		}
+	}
+	branch = strings.Join(cleanParts, "/")
+	if branch == "" {
+		titleSlug := SlugifyPlanBranchSegment(title)
+		if titleSlug == "" {
+			titleSlug = "plan-item"
+		}
+		branch = "feature/" + titleSlug
+	}
+	if !strings.Contains(branch, "/") {
+		branch = "feature/" + branch
+	} else {
+		prefix := strings.SplitN(branch, "/", 2)[0]
+		if !isAllowedPlanBranchPrefix(prefix) {
+			branch = "feature/" + strings.ReplaceAll(branch, "/", "-")
+		}
+	}
+	return strings.Trim(branch, "/")
+}
+
+func isAllowedPlanBranchPrefix(prefix string) bool {
+	switch prefix {
+	case "feature", "fix", "chore", "docs", "refactor", "test", "ci":
+		return true
+	default:
+		return false
+	}
+}
+
+func SlugifyPlanBranchSegment(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 48 {
+		out = strings.TrimRight(out[:48], "-")
+	}
+	return out
+}
+
+func normalizeStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func (s *TaskService) plannerPipelineRepoTargets(ctx context.Context, qtx *db.Queries, projectID pgtype.UUID, stages []db.PipelineStage) (map[string][]plannerPipelineRepoTarget, error) {
+	targets := map[string][]plannerPipelineRepoTarget{}
+	needsRepos := false
+	for _, stage := range stages {
+		if len(normalizeStringSlice(stage.RepoKeys)) > 0 {
+			needsRepos = true
+			break
+		}
+	}
+	if !needsRepos {
+		return targets, nil
+	}
+	if !projectID.Valid {
+		return nil, fmt.Errorf("pipeline nodes reference repos but source issue has no project")
+	}
+	resources, err := qtx.ListProjectResources(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list project resources: %w", err)
+	}
+	reposByKey := map[string]plannerPipelineRepoTarget{}
+	for _, resource := range resources {
+		if resource.ResourceType != "git_repo" && resource.ResourceType != "github_repo" {
+			continue
+		}
+		key := strings.TrimSpace(resource.Label.String)
+		if key == "" {
+			continue
+		}
+		var ref struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(resource.ResourceRef, &ref); err != nil {
+			continue
+		}
+		url := strings.TrimSpace(ref.URL)
+		if url == "" {
+			continue
+		}
+		reposByKey[key] = plannerPipelineRepoTarget{Key: key, URL: url}
+	}
+	for _, stage := range stages {
+		for _, key := range normalizeStringSlice(stage.RepoKeys) {
+			target, ok := reposByKey[key]
+			if !ok {
+				return nil, fmt.Errorf("node %s references unknown repo %q", stage.Key, key)
+			}
+			targets[stage.Key] = append(targets[stage.Key], target)
+		}
+	}
+	return targets, nil
+}
+
+func plannerPipelineIssueDescription(description, nodeType string, repos []plannerPipelineRepoTarget) string {
+	description = strings.TrimSpace(description)
+	reviewContract := ReviewGateContract(nodeType)
+	if strings.Contains(strings.ToLower(description), "review_gate") {
+		reviewContract = ""
+	}
+	if len(repos) == 0 && reviewContract == "" {
+		return description
+	}
+	var b strings.Builder
+	if description != "" {
+		b.WriteString(description)
+		b.WriteString("\n\n")
+	}
+	if len(repos) > 0 {
+		b.WriteString("Target repositories:\n")
+		for _, repo := range repos {
+			fmt.Fprintf(&b, "- %s: %s\n", repo.Key, repo.URL)
+		}
+	}
+	if reviewContract != "" {
+		if len(repos) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(reviewContract)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func serviceStrOrNullText(s string) pgtype.Text {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
+}
+
+func taskWorkspaceUUID(workspaceID string) pgtype.UUID {
+	u, _ := util.ParseUUID(workspaceID)
+	return u
+}
+
+func (s *TaskService) writePlannerIssueComment(ctx context.Context, issueID, agentID pgtype.UUID, content string) {
+	issue, err := s.Queries.GetIssue(ctx, issueID)
+	if err != nil {
+		return
+	}
+	comment, err := s.Queries.CreateComment(ctx, db.CreateCommentParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+		AuthorType:  "agent",
+		AuthorID:    agentID,
+		Content:     content,
+		Type:        "comment",
+		ParentID:    pgtype.UUID{},
+	})
+	if err != nil {
+		slog.Warn("planner issue comment: failed to create comment", "issue_id", util.UUIDToString(issueID), "error", err)
+		return
+	}
+	if s.Bus == nil {
+		return
+	}
+	s.Bus.Publish(events.Event{
+		Type:        protocol.EventCommentCreated,
+		WorkspaceID: util.UUIDToString(issue.WorkspaceID),
+		ActorType:   "agent",
+		ActorID:     util.UUIDToString(agentID),
+		Payload: map[string]any{
+			"comment_id": util.UUIDToString(comment.ID),
+			"issue_id":   util.UUIDToString(issue.ID),
+			"content":    comment.Content,
+		},
+	})
 }
 
 // notifyQuickCreateCompleted writes a success inbox notification to the
@@ -2401,6 +4465,7 @@ func agentToMap(a db.Agent) map[string]any {
 		"visibility":           a.Visibility,
 		"status":               a.Status,
 		"max_concurrent_tasks": a.MaxConcurrentTasks,
+		"is_internal":          a.IsInternal,
 		"owner_id":             util.UUIDToPtr(a.OwnerID),
 		"skills":               []any{},
 		"created_at":           util.TimestampToString(a.CreatedAt),

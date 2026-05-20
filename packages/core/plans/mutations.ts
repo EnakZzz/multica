@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { issueKeys } from "../issues/queries";
-import type { CreatePlanRequest, UpdatePlanRequest } from "../types";
+import type { ApprovePlanSpecRequest, CommitPlanRequest, CreatePlanRequest, UpdatePlanRequest } from "../types";
 import { planKeys } from "./queries";
 
 export function useCreatePlan(wsId: string) {
@@ -37,10 +37,21 @@ export function useRerunPlan(wsId: string, planId: string) {
   });
 }
 
+export function useApprovePlanSpec(wsId: string, planId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: ApprovePlanSpecRequest = {}) => api.approvePlanSpec(planId, data),
+    onSuccess: (plan) => {
+      qc.setQueryData(planKeys.detail(wsId, plan.id), plan);
+      qc.invalidateQueries({ queryKey: planKeys.list(wsId) });
+    },
+  });
+}
+
 export function useCommitPlan(wsId: string, planId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.commitPlan(planId),
+    mutationFn: (data: CommitPlanRequest = {}) => api.commitPlan(planId, data),
     onSuccess: (plan) => {
       qc.setQueryData(planKeys.detail(wsId, plan.id), plan);
       qc.invalidateQueries({ queryKey: planKeys.list(wsId) });

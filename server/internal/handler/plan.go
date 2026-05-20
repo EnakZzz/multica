@@ -2,12 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -27,6 +29,9 @@ type PlanResponse struct {
 	ParentTitle       string             `json:"parent_title"`
 	ParentDescription string             `json:"parent_description"`
 	ParentIssueID     *string            `json:"parent_issue_id"`
+	Spec              service.PlanSpec   `json:"spec"`
+	SpecApprovedAt    *string            `json:"spec_approved_at"`
+	SpecApprovedBy    *string            `json:"spec_approved_by"`
 	Error             *string            `json:"error"`
 	CreatedBy         string             `json:"created_by"`
 	CreatedAt         *string            `json:"created_at"`
@@ -35,20 +40,31 @@ type PlanResponse struct {
 }
 
 type PlanItemResponse struct {
-	ID                 string  `json:"id"`
-	PlanID             string  `json:"plan_id"`
-	Position           int32   `json:"position"`
-	Title              string  `json:"title"`
-	Description        string  `json:"description"`
-	RecommendedAgentID *string `json:"recommended_agent_id"`
-	MatchScore         int32   `json:"match_score"`
-	MatchReason        string  `json:"match_reason"`
-	MissingCapability  string  `json:"missing_capability"`
-	DependsOnPositions []int32 `json:"depends_on_positions"`
-	Selected           bool    `json:"selected"`
-	GeneratedIssueID   *string `json:"generated_issue_id"`
-	CreatedAt          *string `json:"created_at"`
-	UpdatedAt          *string `json:"updated_at"`
+	ID                    string   `json:"id"`
+	PlanID                string   `json:"plan_id"`
+	Position              int32    `json:"position"`
+	Title                 string   `json:"title"`
+	Description           string   `json:"description"`
+	AcceptanceCriteria    []string `json:"acceptance_criteria"`
+	SuggestedTestCommands []string `json:"suggested_test_commands"`
+	ContextResources      []string `json:"context_resources"`
+	RiskNotes             []string `json:"risk_notes"`
+	NodeType              string   `json:"node_type"`
+	ExecutionKind         string   `json:"execution_kind"`
+	ConfirmationQuestion  string   `json:"confirmation_question"`
+	ConfirmationReason    string   `json:"confirmation_reason"`
+	RequiredEvidence      []string `json:"required_evidence"`
+	RequiresGitCommit     bool     `json:"requires_git_commit"`
+	BranchName            string   `json:"branch_name"`
+	RecommendedAgentID    *string  `json:"recommended_agent_id"`
+	MatchScore            int32    `json:"match_score"`
+	MatchReason           string   `json:"match_reason"`
+	MissingCapability     string   `json:"missing_capability"`
+	DependsOnPositions    []int32  `json:"depends_on_positions"`
+	Selected              bool     `json:"selected"`
+	GeneratedIssueID      *string  `json:"generated_issue_id"`
+	CreatedAt             *string  `json:"created_at"`
+	UpdatedAt             *string  `json:"updated_at"`
 }
 
 type createPlanRequest struct {
@@ -56,24 +72,45 @@ type createPlanRequest struct {
 	Prompt         string `json:"prompt"`
 	PlannerAgentID string `json:"planner_agent_id"`
 	ProjectID      string `json:"project_id"`
+	SourceIssueID  string `json:"source_issue_id"`
 }
 
 type updatePlanRequest struct {
 	Title             string                  `json:"title"`
 	ParentTitle       string                  `json:"parent_title"`
 	ParentDescription string                  `json:"parent_description"`
+	Spec              *service.PlanSpec       `json:"spec"`
 	Items             []updatePlanItemRequest `json:"items"`
 }
 
+type approvePlanSpecRequest struct {
+	Spec *service.PlanSpec `json:"spec"`
+}
+
+type commitPlanRequest struct {
+	AcknowledgedHumanConfirmationItemIDs []string `json:"acknowledged_human_confirmation_item_ids"`
+}
+
 type updatePlanItemRequest struct {
-	Title              string  `json:"title"`
-	Description        string  `json:"description"`
-	RecommendedAgentID string  `json:"recommended_agent_id"`
-	MatchScore         int32   `json:"match_score"`
-	MatchReason        string  `json:"match_reason"`
-	MissingCapability  string  `json:"missing_capability"`
-	DependsOnPositions []int32 `json:"depends_on_positions"`
-	Selected           bool    `json:"selected"`
+	Title                 string   `json:"title"`
+	Description           string   `json:"description"`
+	AcceptanceCriteria    []string `json:"acceptance_criteria"`
+	SuggestedTestCommands []string `json:"suggested_test_commands"`
+	ContextResources      []string `json:"context_resources"`
+	RiskNotes             []string `json:"risk_notes"`
+	NodeType              string   `json:"node_type"`
+	ExecutionKind         string   `json:"execution_kind"`
+	ConfirmationQuestion  string   `json:"confirmation_question"`
+	ConfirmationReason    string   `json:"confirmation_reason"`
+	RequiredEvidence      []string `json:"required_evidence"`
+	RequiresGitCommit     *bool    `json:"requires_git_commit"`
+	BranchName            string   `json:"branch_name"`
+	RecommendedAgentID    string   `json:"recommended_agent_id"`
+	MatchScore            int32    `json:"match_score"`
+	MatchReason           string   `json:"match_reason"`
+	MissingCapability     string   `json:"missing_capability"`
+	DependsOnPositions    []int32  `json:"depends_on_positions"`
+	Selected              bool     `json:"selected"`
 }
 
 func (h *Handler) ListPlans(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +159,8 @@ func (h *Handler) CreatePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
-	if req.Prompt == "" {
+	sourceIssueID := strings.TrimSpace(req.SourceIssueID)
+	if req.Prompt == "" && sourceIssueID == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
@@ -136,6 +174,35 @@ func (h *Handler) CreatePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	if status, msg := h.validatePlanAgent(r, plannerAgentID, wsUUID); status != 0 {
 		writeError(w, status, msg)
+		return
+	}
+	if sourceIssueID != "" {
+		issueID, ok := parseUUIDOrBadRequest(w, sourceIssueID, "source_issue_id")
+		if !ok {
+			return
+		}
+		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+			ID:          issueID,
+			WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "source issue not found")
+			return
+		}
+		plannerAgent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+			ID:          plannerAgentID,
+			WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "planner_agent_id does not refer to an agent of this workspace")
+			return
+		}
+		_, plan, err := h.TaskService.EnqueuePlannerIssueTask(r.Context(), issue, plannerAgent, parseUUID(userID))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, planToResponse(plan, nil))
 		return
 	}
 	projectID, ok := h.parseOptionalProjectID(w, r, req.ProjectID, wsUUID)
@@ -155,7 +222,7 @@ func (h *Handler) CreatePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create plan")
 		return
 	}
-	task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), wsUUID, parseUUID(userID), plan.ID, plannerAgentID, req.Prompt, projectID)
+	task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), wsUUID, parseUUID(userID), plan.ID, plannerAgentID, req.Prompt, projectID, service.IssuePlanPhaseSpec, service.PlanSpec{})
 	if err != nil {
 		h.Queries.MarkPlanFailed(r.Context(), db.MarkPlanFailedParams{ID: plan.ID, Error: pgtype.Text{String: err.Error(), Valid: true}})
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -186,7 +253,7 @@ func (h *Handler) RerunPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), plan.WorkspaceID, parseUUID(userID), plan.ID, plan.PlannerAgentID, plan.Prompt, plan.ProjectID)
+	task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), plan.WorkspaceID, parseUUID(userID), plan.ID, plan.PlannerAgentID, plan.Prompt, plan.ProjectID, service.IssuePlanPhaseSpec, service.PlanSpec{})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -213,11 +280,21 @@ func (h *Handler) UpdatePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	specJSON := plan.Spec
+	if req.Spec != nil {
+		data, err := service.MarshalPlanSpec(*req.Spec)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid spec")
+			return
+		}
+		specJSON = data
+	}
 	updated, err := h.Queries.UpdatePlanDraft(r.Context(), db.UpdatePlanDraftParams{
 		ID:                plan.ID,
 		Title:             pgtype.Text{String: strings.TrimSpace(req.Title), Valid: strings.TrimSpace(req.Title) != ""},
 		ParentTitle:       pgtype.Text{String: strings.TrimSpace(req.ParentTitle), Valid: true},
 		ParentDescription: pgtype.Text{String: strings.TrimSpace(req.ParentDescription), Valid: true},
+		Spec:              specJSON,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update plan")
@@ -231,6 +308,65 @@ func (h *Handler) UpdatePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	items, _ := h.Queries.ListPlanItems(r.Context(), updated.ID)
 	writeJSON(w, http.StatusOK, planToResponse(updated, items))
+}
+
+func (h *Handler) ApprovePlanSpec(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	plan, ok := h.loadPlan(w, r)
+	if !ok {
+		return
+	}
+	if plan.Status != "spec_review" {
+		writeError(w, http.StatusBadRequest, "plan spec is not ready for review")
+		return
+	}
+	if status, msg := h.validatePlanAgent(r, plan.PlannerAgentID, plan.WorkspaceID); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	spec := planSpecFromJSON(plan.Spec)
+	var req approvePlanSpecRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	if req.Spec != nil {
+		spec = service.NormalizePlanSpec(*req.Spec)
+	}
+	if strings.TrimSpace(spec.Summary) == "" {
+		writeError(w, http.StatusBadRequest, "spec.summary is required")
+		return
+	}
+	if strings.TrimSpace(spec.Goal) == "" {
+		writeError(w, http.StatusBadRequest, "spec.goal is required")
+		return
+	}
+	specJSON, err := service.MarshalPlanSpec(spec)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid spec")
+		return
+	}
+	task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), plan.WorkspaceID, parseUUID(userID), plan.ID, plan.PlannerAgentID, plan.Prompt, plan.ProjectID, service.IssuePlanPhaseItems, spec)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	approved, err := h.Queries.ApprovePlanSpec(r.Context(), db.ApprovePlanSpecParams{
+		ID:             plan.ID,
+		TaskID:         task.ID,
+		Spec:           specJSON,
+		SpecApprovedBy: parseUUID(userID),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to approve plan spec")
+		return
+	}
+	writeJSON(w, http.StatusOK, planToResponse(approved, nil))
 }
 
 func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
@@ -251,6 +387,28 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list plan items")
 		return
 	}
+	var req commitPlanRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	acknowledged := make(map[string]bool, len(req.AcknowledgedHumanConfirmationItemIDs))
+	for _, id := range req.AcknowledgedHumanConfirmationItemIDs {
+		acknowledged[strings.TrimSpace(id)] = true
+	}
+	if plan.Status == "ready" {
+		for _, item := range items {
+			if !item.Selected || item.GeneratedIssueID.Valid || normalizePlanItemExecutionKind(item.ExecutionKind) != service.PlanItemExecutionKindHumanConfirmation {
+				continue
+			}
+			if !acknowledged[uuidToString(item.ID)] {
+				writeError(w, http.StatusBadRequest, "human confirmation items must be acknowledged before creating issues")
+				return
+			}
+		}
+	}
 
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
@@ -259,7 +417,6 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
-	var tasksToEnqueue []db.Issue
 	issuesByPosition := make(map[int32]db.Issue)
 	var createdChildren []db.Issue
 
@@ -307,18 +464,19 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to allocate issue number")
 			return
 		}
+		executionKind := normalizePlanItemExecutionKind(item.ExecutionKind)
 		var assigneeType pgtype.Text
 		var assigneeID pgtype.UUID
-		if item.RecommendedAgentID.Valid && item.MatchScore >= planMatchThreshold {
+		if executionKind != service.PlanItemExecutionKindHumanConfirmation && item.RecommendedAgentID.Valid && item.MatchScore >= planMatchThreshold {
 			if agent, err := qtx.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: item.RecommendedAgentID, WorkspaceID: plan.WorkspaceID}); err == nil && !agent.ArchivedAt.Valid {
 				assigneeType = pgtype.Text{String: "agent", Valid: true}
 				assigneeID = item.RecommendedAgentID
 			}
 		}
-		child, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
+		child, err := qtx.CreateIssueWithOrigin(r.Context(), db.CreateIssueWithOriginParams{
 			WorkspaceID:   plan.WorkspaceID,
 			Title:         item.Title,
-			Description:   strOrNullText(item.Description),
+			Description:   strOrNullText(planItemIssueDescription(item)),
 			Status:        "todo",
 			Priority:      "none",
 			AssigneeType:  assigneeType,
@@ -328,6 +486,8 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 			ParentIssueID: parentID,
 			Number:        number,
 			ProjectID:     plan.ProjectID,
+			OriginType:    pgtype.Text{String: "plan_item", Valid: true},
+			OriginID:      item.ID,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create child issue")
@@ -363,11 +523,6 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	for _, child := range createdChildren {
-		if h.shouldEnqueueAgentTask(r.Context(), child) {
-			tasksToEnqueue = append(tasksToEnqueue, child)
-		}
-	}
 	plan, err = qtx.MarkPlanCommitted(r.Context(), db.MarkPlanCommittedParams{ID: plan.ID, ParentIssueID: parentID})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark plan committed")
@@ -377,8 +532,10 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to commit plan")
 		return
 	}
-	for _, child := range tasksToEnqueue {
-		h.TaskService.EnqueueTaskForIssue(r.Context(), child)
+	for _, child := range createdChildren {
+		if h.shouldEnqueueAgentTask(r.Context(), child) {
+			h.TaskService.EnqueueTaskForIssue(r.Context(), child)
+		}
 	}
 	items, _ = h.Queries.ListPlanItems(r.Context(), plan.ID)
 	writeJSON(w, http.StatusOK, planToResponse(plan, items))
@@ -497,17 +654,63 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 		if err != nil {
 			return err
 		}
+		executionKind := normalizePlanItemExecutionKind(item.ExecutionKind)
+		nodeType := service.NormalizePlanItemNodeType(item.NodeType)
+		confirmationQuestion := strings.TrimSpace(item.ConfirmationQuestion)
+		confirmationReason := strings.TrimSpace(item.ConfirmationReason)
+		requiredEvidence := normalizePlanItemStringList(item.RequiredEvidence)
+		requiresGitCommit := true
+		if item.RequiresGitCommit != nil {
+			requiresGitCommit = *item.RequiresGitCommit
+		}
+		branchName := normalizePlanBranchName(item.BranchName, strings.TrimSpace(item.Title))
+		if executionKind == service.PlanItemExecutionKindHumanConfirmation {
+			nodeType = service.PipelineNodeTypeManual
+			if confirmationQuestion == "" {
+				confirmationQuestion = strings.TrimSpace(item.Title)
+			}
+			if confirmationReason == "" {
+				confirmationReason = strings.TrimSpace(item.Description)
+			}
+			if confirmationReason == "" {
+				return &planValidationError{"confirmation_reason is required for human confirmation items"}
+			}
+			agentID = pgtype.UUID{}
+			score = 0
+			requiresGitCommit = false
+			branchName = ""
+		} else {
+			confirmationQuestion = ""
+			confirmationReason = ""
+			requiredEvidence = []string{}
+			if !requiresGitCommit {
+				branchName = ""
+			} else if branchName == "" {
+				branchName = normalizePlanBranchName("", strings.TrimSpace(item.Title))
+			}
+		}
 		if _, err := qtx.CreatePlanItem(r.Context(), db.CreatePlanItemParams{
-			PlanID:             plan.ID,
-			Position:           int32(i + 1),
-			Title:              strings.TrimSpace(item.Title),
-			Description:        strings.TrimSpace(item.Description),
-			RecommendedAgentID: agentID,
-			MatchScore:         score,
-			MatchReason:        strings.TrimSpace(item.MatchReason),
-			MissingCapability:  strings.TrimSpace(item.MissingCapability),
-			DependsOnPositions: dependsOnPositions,
-			Selected:           item.Selected,
+			PlanID:                plan.ID,
+			Position:              int32(i + 1),
+			Title:                 strings.TrimSpace(item.Title),
+			Description:           strings.TrimSpace(item.Description),
+			AcceptanceCriteria:    normalizePlanItemStringList(item.AcceptanceCriteria),
+			SuggestedTestCommands: normalizePlanItemStringList(item.SuggestedTestCommands),
+			ContextResources:      normalizePlanItemStringList(item.ContextResources),
+			RiskNotes:             normalizePlanItemStringList(item.RiskNotes),
+			NodeType:              nodeType,
+			ExecutionKind:         executionKind,
+			ConfirmationQuestion:  confirmationQuestion,
+			ConfirmationReason:    confirmationReason,
+			RequiredEvidence:      requiredEvidence,
+			RequiresGitCommit:     requiresGitCommit,
+			BranchName:            branchName,
+			RecommendedAgentID:    agentID,
+			MatchScore:            score,
+			MatchReason:           strings.TrimSpace(item.MatchReason),
+			MissingCapability:     strings.TrimSpace(item.MissingCapability),
+			DependsOnPositions:    dependsOnPositions,
+			Selected:              item.Selected,
 		}); err != nil {
 			return err
 		}
@@ -540,6 +743,72 @@ func normalizePlanDependsOnPositions(raw []int32, position int32) ([]int32, erro
 	return out, nil
 }
 
+func normalizePlanItemStringList(raw []string) []string {
+	if len(raw) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out
+}
+
+func normalizePlanItemExecutionKind(kind string) string {
+	if strings.TrimSpace(kind) == service.PlanItemExecutionKindHumanConfirmation {
+		return service.PlanItemExecutionKindHumanConfirmation
+	}
+	return service.PlanItemExecutionKindAgentTask
+}
+
+func normalizePlanBranchName(raw, fallbackTitle string) string {
+	branch := strings.ToLower(strings.TrimSpace(raw))
+	branch = strings.ReplaceAll(branch, "\\", "/")
+	parts := strings.Split(branch, "/")
+	cleanParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = service.SlugifyPlanBranchSegment(part)
+		if part != "" {
+			cleanParts = append(cleanParts, part)
+		}
+	}
+	branch = strings.Join(cleanParts, "/")
+	if branch == "" && strings.TrimSpace(fallbackTitle) != "" {
+		titleSlug := service.SlugifyPlanBranchSegment(fallbackTitle)
+		if titleSlug == "" {
+			titleSlug = "plan-item"
+		}
+		branch = "feature/" + titleSlug
+	}
+	if branch == "" {
+		return ""
+	}
+	if !strings.Contains(branch, "/") {
+		branch = "feature/" + branch
+	} else {
+		prefix := strings.SplitN(branch, "/", 2)[0]
+		if !isAllowedPlanBranchPrefix(prefix) {
+			branch = "feature/" + strings.ReplaceAll(branch, "/", "-")
+		}
+	}
+	return strings.Trim(branch, "/")
+}
+
+func isAllowedPlanBranchPrefix(prefix string) bool {
+	switch prefix {
+	case "feature", "fix", "chore", "docs", "refactor", "test", "ci":
+		return true
+	default:
+		return false
+	}
+}
+
 func planToResponse(p db.Plan, items []db.PlanItem) PlanResponse {
 	var projectID *string
 	if p.ProjectID.Valid {
@@ -550,6 +819,11 @@ func planToResponse(p db.Plan, items []db.PlanItem) PlanResponse {
 	if p.ParentIssueID.Valid {
 		v := uuidToString(p.ParentIssueID)
 		parentIssueID = &v
+	}
+	var specApprovedBy *string
+	if p.SpecApprovedBy.Valid {
+		v := uuidToString(p.SpecApprovedBy)
+		specApprovedBy = &v
 	}
 	itemResp := make([]PlanItemResponse, len(items))
 	for i, item := range items {
@@ -567,12 +841,26 @@ func planToResponse(p db.Plan, items []db.PlanItem) PlanResponse {
 		ParentTitle:       p.ParentTitle.String,
 		ParentDescription: p.ParentDescription.String,
 		ParentIssueID:     parentIssueID,
+		Spec:              planSpecFromJSON(p.Spec),
+		SpecApprovedAt:    timestampToPtr(p.SpecApprovedAt),
+		SpecApprovedBy:    specApprovedBy,
 		Error:             textToPtr(p.Error),
 		CreatedBy:         uuidToString(p.CreatedBy),
 		CreatedAt:         timestampToPtr(p.CreatedAt),
 		UpdatedAt:         timestampToPtr(p.UpdatedAt),
 		Items:             itemResp,
 	}
+}
+
+func planSpecFromJSON(data []byte) service.PlanSpec {
+	var spec service.PlanSpec
+	if len(data) == 0 {
+		return service.NormalizePlanSpec(spec)
+	}
+	if err := json.Unmarshal(data, &spec); err != nil {
+		return service.NormalizePlanSpec(service.PlanSpec{})
+	}
+	return service.NormalizePlanSpec(spec)
 }
 
 func planItemToResponse(item db.PlanItem) PlanItemResponse {
@@ -587,21 +875,92 @@ func planItemToResponse(item db.PlanItem) PlanItemResponse {
 		issueID = &v
 	}
 	return PlanItemResponse{
-		ID:                 uuidToString(item.ID),
-		PlanID:             uuidToString(item.PlanID),
-		Position:           item.Position,
-		Title:              item.Title,
-		Description:        item.Description,
-		RecommendedAgentID: agentID,
-		MatchScore:         item.MatchScore,
-		MatchReason:        item.MatchReason,
-		MissingCapability:  item.MissingCapability,
-		DependsOnPositions: item.DependsOnPositions,
-		Selected:           item.Selected,
-		GeneratedIssueID:   issueID,
-		CreatedAt:          timestampToPtr(item.CreatedAt),
-		UpdatedAt:          timestampToPtr(item.UpdatedAt),
+		ID:                    uuidToString(item.ID),
+		PlanID:                uuidToString(item.PlanID),
+		Position:              item.Position,
+		Title:                 item.Title,
+		Description:           item.Description,
+		AcceptanceCriteria:    normalizePlanItemStringList(item.AcceptanceCriteria),
+		SuggestedTestCommands: normalizePlanItemStringList(item.SuggestedTestCommands),
+		ContextResources:      normalizePlanItemStringList(item.ContextResources),
+		RiskNotes:             normalizePlanItemStringList(item.RiskNotes),
+		NodeType:              service.NormalizePlanItemNodeType(item.NodeType),
+		ExecutionKind:         normalizePlanItemExecutionKind(item.ExecutionKind),
+		ConfirmationQuestion:  strings.TrimSpace(item.ConfirmationQuestion),
+		ConfirmationReason:    strings.TrimSpace(item.ConfirmationReason),
+		RequiredEvidence:      normalizePlanItemStringList(item.RequiredEvidence),
+		RequiresGitCommit:     item.RequiresGitCommit,
+		BranchName:            strings.TrimSpace(item.BranchName),
+		RecommendedAgentID:    agentID,
+		MatchScore:            item.MatchScore,
+		MatchReason:           item.MatchReason,
+		MissingCapability:     item.MissingCapability,
+		DependsOnPositions:    item.DependsOnPositions,
+		Selected:              item.Selected,
+		GeneratedIssueID:      issueID,
+		CreatedAt:             timestampToPtr(item.CreatedAt),
+		UpdatedAt:             timestampToPtr(item.UpdatedAt),
 	}
+}
+
+func planItemIssueDescription(item db.PlanItem) string {
+	var b strings.Builder
+	description := strings.TrimSpace(item.Description)
+	if description != "" {
+		b.WriteString(description)
+	}
+	if normalizePlanItemExecutionKind(item.ExecutionKind) == service.PlanItemExecutionKindHumanConfirmation {
+		appendPlanItemTextSection(&b, "Human confirmation question", item.ConfirmationQuestion)
+		appendPlanItemTextSection(&b, "Why human confirmation is required", item.ConfirmationReason)
+		appendPlanItemSection(&b, "Required evidence", item.RequiredEvidence)
+	}
+	if reviewContract := service.ReviewGateContract(item.NodeType); reviewContract != "" && !strings.Contains(strings.ToLower(b.String()), "review_gate") {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(reviewContract)
+	}
+	if item.RequiresGitCommit {
+		appendPlanItemTextSection(&b, "Planned branch", item.BranchName)
+	} else {
+		appendPlanItemTextSection(&b, "Git commit expected", "No")
+	}
+	appendPlanItemSection(&b, "Acceptance criteria", item.AcceptanceCriteria)
+	appendPlanItemSection(&b, "Suggested test commands", item.SuggestedTestCommands)
+	appendPlanItemSection(&b, "Context resources", item.ContextResources)
+	appendPlanItemSection(&b, "Risks and notes", item.RiskNotes)
+	return strings.TrimSpace(b.String())
+}
+
+func appendPlanItemSection(b *strings.Builder, title string, items []string) {
+	items = normalizePlanItemStringList(items)
+	if len(items) == 0 {
+		return
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString(title)
+	b.WriteString(":\n")
+	for _, item := range items {
+		b.WriteString("- ")
+		b.WriteString(item)
+		b.WriteString("\n")
+	}
+}
+
+func appendPlanItemTextSection(b *strings.Builder, title string, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString(title)
+	b.WriteString(":\n")
+	b.WriteString(value)
+	b.WriteString("\n")
 }
 
 func firstLine(s string) string {

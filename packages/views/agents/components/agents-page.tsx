@@ -130,7 +130,7 @@ export function AgentsPage() {
 
   // Workspace role of the current user, used to gate row-level "manage"
   // operations (archive / cancel-tasks). Mirrors the back-end's
-  // canManageAgent rule: workspace owner/admin OR the agent's owner.
+  // canManageAgent rule: not internal, and workspace owner/admin OR the agent's owner.
   const myRole = useMemo(() => {
     if (!currentUser) return null;
     return members.find((m) => m.user_id === currentUser.id)?.role ?? null;
@@ -168,7 +168,7 @@ export function AgentsPage() {
     let mine = 0;
     if (currentUser) {
       for (const a of visibleInView) {
-        if (a.owner_id === currentUser.id) mine += 1;
+        if (a.owner_id === currentUser.id || a.is_internal) mine += 1;
       }
     }
     return { all: visibleInView.length, mine };
@@ -180,7 +180,9 @@ export function AgentsPage() {
     // people's archived agents without any UI to explain why.
     if (view === "archived") return visibleInView;
     if (scope === "all" || !currentUser) return visibleInView;
-    return visibleInView.filter((a) => a.owner_id === currentUser.id);
+    return visibleInView.filter(
+      (a) => a.owner_id === currentUser.id || a.is_internal,
+    );
   }, [visibleInView, scope, currentUser, view]);
 
   // Final cut — availability chip + search.
@@ -312,7 +314,7 @@ export function AgentsPage() {
     return sortedAgents.map((agent) => {
       const isOwner =
         !!currentUser?.id && agent.owner_id === currentUser.id;
-      const canManage = isWorkspaceAdmin || isOwner;
+      const canManage = !agent.is_internal && (isWorkspaceAdmin || isOwner);
       const ownerIdToShow =
         scope === "all" &&
         agent.owner_id &&
