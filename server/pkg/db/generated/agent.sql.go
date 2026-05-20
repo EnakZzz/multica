@@ -844,13 +844,15 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
     status, priority, trigger_comment_id, trigger_summary, context,
     session_id, work_dir,
-    attempt, max_attempts, parent_task_id
+    attempt, max_attempts, parent_task_id, force_fresh_session
 )
 SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
     'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
-    p.session_id, p.work_dir,
-    p.attempt + 1, p.max_attempts, p.id
+    CASE WHEN p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity' THEN NULL ELSE p.session_id END,
+    CASE WHEN p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity' THEN NULL ELSE p.work_dir END,
+    p.attempt + 1, p.max_attempts, p.id,
+    p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity'
 FROM agent_task_queue p
 WHERE p.id = $1
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session
@@ -858,8 +860,11 @@ RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, c
 
 // Clones a parent task into a fresh queued attempt. Carries forward the
 // agent's resume context (session_id/work_dir) so the child can continue
-// the conversation when the backend supports it. attempt is incremented;
-// max_attempts and trigger_comment_id are inherited.
+// the conversation when the backend supports it. Resume-unsafe failures are
+// retried as fresh sessions so the child does not inherit a stuck agent
+// conversation. Keep the CASE WHEN predicates in sync with
+// resumeUnsafeFailureReason and the resume lookup blacklists. attempt is
+// incremented; max_attempts and trigger_comment_id are inherited.
 func (q *Queries) CreateRetryTask(ctx context.Context, id pgtype.UUID) (AgentTaskQueue, error) {
 	row := q.db.QueryRow(ctx, createRetryTask, id)
 	var i AgentTaskQueue
@@ -1234,7 +1239,7 @@ WHERE agent_id = $1 AND issue_id = $2
     status = 'completed'
     OR (
       status = 'failed'
-      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request')
+      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity')
       AND NOT (COALESCE(error, '') ILIKE '%400%' AND COALESCE(error, '') ILIKE '%invalid_request_error%')
     )
   )
@@ -1272,9 +1277,11 @@ type GetLastTaskSessionRow struct {
 // Tasks that ended in a known "poisoned" terminal state are also excluded
 // here so even auto-retry does not inherit the bad session. The daemon
 // classifies these failures (iteration_limit, agent_fallback_message,
-// api_invalid_request) when it detects either an agent fallback marker in
-// the output or an upstream API 400 that means the conversation history
-// itself is unprocessable (oversized image, malformed base64, etc.).
+// api_invalid_request, codex_semantic_inactivity) when it detects either an
+// agent fallback marker in the output, an upstream API 400 that means the
+// conversation history itself is unprocessable (oversized image, malformed
+// base64, etc.), or a Codex semantic inactivity timeout whose recorded
+// session may replay the same stuck state.
 //
 // The error-text ILIKE clause is defense-in-depth for the api_invalid_request
 // shape: a legacy row tagged 'agent_error' (pre-MUL-1921), a deploy-window
