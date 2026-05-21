@@ -4,6 +4,27 @@ import { TestApiClient } from "./fixtures";
 const DEFAULT_E2E_NAME = "E2E User";
 const DEFAULT_E2E_EMAIL = "e2e@multica.ai";
 const DEFAULT_E2E_WORKSPACE = "e2e-workspace";
+const USE_DEV_VERIFICATION_CODE = process.env.MULTICA_E2E_USE_DEV_CODE === "true";
+
+let defaultSessionPromise: Promise<{ token: string; workspaceSlug: string }> | null = null;
+
+async function createDefaultSession() {
+  const api = new TestApiClient();
+  await api.login(DEFAULT_E2E_EMAIL, DEFAULT_E2E_NAME);
+  const workspace = await api.ensureWorkspace(
+    "E2E Workspace",
+    DEFAULT_E2E_WORKSPACE,
+  );
+  const token = api.getToken();
+  if (!token) throw new Error("Default E2E login did not return a token");
+  return { token, workspaceSlug: workspace.slug };
+}
+
+function getDefaultSession() {
+  if (!USE_DEV_VERIFICATION_CODE) return createDefaultSession();
+  defaultSessionPromise ??= createDefaultSession();
+  return defaultSessionPromise;
+}
 
 /**
  * Log in as the default E2E user and ensure the workspace exists first.
@@ -13,21 +34,14 @@ const DEFAULT_E2E_WORKSPACE = "e2e-workspace";
  * Returns the E2E workspace slug so callers can build workspace-scoped URLs.
  */
 export async function loginAsDefault(page: Page): Promise<string> {
-  const api = new TestApiClient();
-  await api.login(DEFAULT_E2E_EMAIL, DEFAULT_E2E_NAME);
-  const workspace = await api.ensureWorkspace(
-    "E2E Workspace",
-    DEFAULT_E2E_WORKSPACE,
-  );
-
-  const token = api.getToken();
+  const { token, workspaceSlug } = await getDefaultSession();
   await page.goto("/login");
   await page.evaluate((t) => {
     localStorage.setItem("multica_token", t);
   }, token);
-  await page.goto(`/${workspace.slug}/issues`);
+  await page.goto(`/${workspaceSlug}/issues`);
   await page.waitForURL("**/issues", { timeout: 10000 });
-  return workspace.slug;
+  return workspaceSlug;
 }
 
 /**
@@ -35,6 +49,14 @@ export async function loginAsDefault(page: Page): Promise<string> {
  * Call api.cleanup() in afterEach to remove test data created during the test.
  */
 export async function createTestApi(): Promise<TestApiClient> {
+  if (USE_DEV_VERIFICATION_CODE) {
+    const { token, workspaceSlug } = await getDefaultSession();
+    const api = new TestApiClient();
+    api.setToken(token);
+    api.setWorkspaceSlug(workspaceSlug);
+    return api;
+  }
+
   const api = new TestApiClient();
   await api.login(DEFAULT_E2E_EMAIL, DEFAULT_E2E_NAME);
   await api.ensureWorkspace("E2E Workspace", DEFAULT_E2E_WORKSPACE);
@@ -42,8 +64,6 @@ export async function createTestApi(): Promise<TestApiClient> {
 }
 
 export async function openWorkspaceMenu(page: Page) {
-  // Click the workspace switcher button (has ChevronDown icon)
-  await page.locator("aside button").first().click();
-  // Wait for dropdown to appear
-  await page.locator('[class*="popover"]').waitFor({ state: "visible" });
+  await page.getByRole("button", { name: /E2E Workspace/ }).first().click();
+  await page.getByText("Log out").waitFor({ state: "visible" });
 }
