@@ -1245,6 +1245,120 @@ func newIssueCommentListTestCmd() *cobra.Command {
 	return cmd
 }
 
+func newIssueCommentAddTestCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "add"}
+	cmd.Flags().String("content", "", "")
+	cmd.Flags().Bool("content-stdin", false, "")
+	cmd.Flags().String("content-file", "", "")
+	cmd.Flags().String("parent", "", "")
+	cmd.Flags().StringSlice("attachment", nil, "")
+	cmd.Flags().String("output", "json", "")
+	return cmd
+}
+
+func TestRunIssueCommentAddUploadsMultipleAttachments(t *testing.T) {
+	dir := t.TempDir()
+	replyPath := dir + string(os.PathSeparator) + "reply.md"
+	beforePath := dir + string(os.PathSeparator) + "before.png"
+	afterPath := dir + string(os.PathSeparator) + "after.png"
+	diffPath := dir + string(os.PathSeparator) + "diff.png"
+	for path, body := range map[string][]byte{
+		replyPath:  []byte("Looks good.\n"),
+		beforePath: []byte("before"),
+		afterPath:  []byte("after"),
+		diffPath:   []byte("diff"),
+	} {
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	attachmentIDs := []string{
+		"00000000-0000-0000-0000-000000000001",
+		"00000000-0000-0000-0000-000000000002",
+		"00000000-0000-0000-0000-000000000003",
+	}
+	var uploaded []string
+	var uploadIssueIDs []string
+	var commentBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/MUL-1":
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":         "issue-1",
+				"identifier": "MUL-1",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/upload-file":
+			if err := r.ParseMultipartForm(10 << 20); err != nil {
+				t.Errorf("parse multipart upload: %v", err)
+				http.Error(w, "bad multipart", http.StatusBadRequest)
+				return
+			}
+			files := r.MultipartForm.File["file"]
+			if len(files) != 1 {
+				t.Errorf("upload file count = %d, want 1", len(files))
+				http.Error(w, "bad file count", http.StatusBadRequest)
+				return
+			}
+			uploaded = append(uploaded, files[0].Filename)
+			uploadIssueIDs = append(uploadIssueIDs, r.FormValue("issue_id"))
+			idx := len(uploaded) - 1
+			json.NewEncoder(w).Encode(map[string]any{
+				"id": attachmentIDs[idx],
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/issues/issue-1/comments":
+			if err := json.NewDecoder(r.Body).Decode(&commentBody); err != nil {
+				t.Errorf("decode comment body: %v", err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "comment-1",
+				"content":        "Looks good.\n",
+				"attachment_ids": attachmentIDs,
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := newIssueCommentAddTestCmd()
+	_ = cmd.Flags().Set("content-file", replyPath)
+	_ = cmd.Flags().Set("attachment", beforePath)
+	_ = cmd.Flags().Set("attachment", afterPath)
+	_ = cmd.Flags().Set("attachment", diffPath)
+
+	if err := runIssueCommentAdd(cmd, []string{"MUL-1"}); err != nil {
+		t.Fatalf("runIssueCommentAdd: %v", err)
+	}
+
+	if got, want := strings.Join(uploaded, ","), "before.png,after.png,diff.png"; got != want {
+		t.Fatalf("uploaded filenames = %s, want %s", got, want)
+	}
+	for i, got := range uploadIssueIDs {
+		if got != "issue-1" {
+			t.Fatalf("upload %d issue_id = %q, want issue-1", i, got)
+		}
+	}
+	gotIDs, ok := commentBody["attachment_ids"].([]any)
+	if !ok {
+		t.Fatalf("comment attachment_ids = %#v, want array", commentBody["attachment_ids"])
+	}
+	if len(gotIDs) != len(attachmentIDs) {
+		t.Fatalf("comment attachment_ids length = %d, want %d", len(gotIDs), len(attachmentIDs))
+	}
+	for i, want := range attachmentIDs {
+		if gotIDs[i] != want {
+			t.Fatalf("comment attachment_ids[%d] = %#v, want %s", i, gotIDs[i], want)
+		}
+	}
+}
+
 // TestRunIssueCommentListFlagGuards locks the CLI-side flag combination
 // matrix. Two behaviours matter here:
 //
