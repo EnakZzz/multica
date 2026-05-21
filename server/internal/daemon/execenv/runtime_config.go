@@ -425,6 +425,12 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("## Attachments\n\n")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
 	b.WriteString("When a task includes attachment IDs and you need the files, inspect `multica attachment --help` and use the authenticated CLI path. Do not open Multica resource URLs directly.\n\n")
+	b.WriteString("### Screenshot comparison evidence\n\n")
+	b.WriteString("If you generate screenshot comparison evidence during an issue task, attach the screenshot triplet to your final issue comment so the human reviewer can inspect it in the timeline:\n\n")
+	b.WriteString("- Attach only the review screenshots: `before`, `current`/`after`, and `diff` images. Do not upload logs, build outputs, cache directories, or other bulky artifacts by default.\n")
+	b.WriteString("- Post the final comment with repeated local-file attachments, for example: `multica issue comment add <issue-id> --content-file ./reply.md --attachment ./before.png --attachment ./after.png --attachment ./diff.png`.\n")
+	b.WriteString("- The final comment body must include a concise conclusion, a short note naming what each screenshot shows, and the verification command/result. If one of the three screenshots is missing, say which one is missing and why.\n")
+	b.WriteString("- Do not use local absolute paths as the review handoff. The files must be uploaded through `--attachment <path>` so Multica stores them on the issue/comment.\n\n")
 
 	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
 	b.WriteString("All interactions with Multica platform resources — including issues, comments, attachments, images, files, and any other platform data — **must** go through the `multica` CLI. ")

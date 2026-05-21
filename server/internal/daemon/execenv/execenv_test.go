@@ -651,6 +651,33 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 	}
 }
 
+func TestInjectRuntimeConfigScreenshotComparisonAttachmentInstructions(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	if _, err := InjectRuntimeConfig(dir, "codex", TaskContextForEnv{IssueID: "issue-1"}); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("failed to read AGENTS.md: %v", err)
+	}
+
+	s := string(content)
+	for _, want := range []string{
+		"### Screenshot comparison evidence",
+		"Attach only the review screenshots: `before`, `current`/`after`, and `diff` images.",
+		"--attachment ./before.png --attachment ./after.png --attachment ./diff.png",
+		"The final comment body must include a concise conclusion",
+		"`--attachment <path>`",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("AGENTS.md missing screenshot attachment instruction %q\n---\n%s", want, s)
+		}
+	}
+}
+
 func TestInjectRuntimeConfigGemini(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
