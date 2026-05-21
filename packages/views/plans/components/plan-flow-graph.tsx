@@ -68,7 +68,7 @@ export function PlanItemsFlowGraph({
   const { nodes: _, edges: latestEdges } = planItemsToFlow(items, agentsById, issuesById);
 
   return (
-    <div className="h-[360px] overflow-hidden rounded-lg border bg-muted/10">
+    <div className="h-[360px] overflow-hidden rounded-lg border bg-muted/10 xl:h-[440px] 2xl:h-[480px]">
       <ReactFlow
         nodes={rfNodes}
         edges={latestEdges}

@@ -325,7 +325,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex-1 overflow-auto">
           {status === "planning" ? (
-            <div className="mx-auto max-w-3xl space-y-4 px-6 py-8">
+            <div className="w-full space-y-4 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
               <PlanningFlowSkeleton />
               <div className="flex items-center justify-center gap-2.5 py-1">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary/60" style={{ animationDuration: "1.6s" }} />
@@ -335,7 +335,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
               </div>
             </div>
           ) : (
-            <div className="mx-auto max-w-3xl space-y-10 px-6 py-8">
+            <div className="w-full space-y-8 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
               {plan.error && (
                 <div className="rounded-md border border-destructive/25 bg-destructive/5 px-4 py-3">
                   <p className="font-mono text-[9px] font-bold uppercase tracking-widest text-destructive/60 mb-1">Error</p>
@@ -343,48 +343,58 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
                 </div>
               )}
 
-              {/* Spec document */}
-              <SpecDocument
-                spec={spec}
-                editable={specEditable}
-                isCommitted={status === "committed"}
-                onChange={setSpecDraft}
-              />
-
-              {status === "spec_review" && (
-                <SpecConversation
-                  spec={spec}
-                  answers={clarificationAnswers}
-                  pending={clarifyPlanSpec.isPending}
-                  onAnswerChange={(question, answer) => setClarificationAnswers((current) => ({ ...current, [question]: answer }))}
-                  onSubmit={answerOpenQuestions}
-                />
-              )}
-
-              {/* Pipeline graph */}
-              {itemsVisible && (
-                <div>
-                  <SectionRule label="Pipeline" meta={`${items.filter((i) => i.selected).length} active`} />
-                  <div className="mt-5">
-                    <PlanItemsFlowGraph items={items} agentsById={agentsById} issuesById={issuesById} />
-                  </div>
+              {status === "spec_review" ? (
+                <div className="space-y-8">
+                  <SpecDocument
+                    spec={spec}
+                    editable={specEditable}
+                    isCommitted={false}
+                    onChange={setSpecDraft}
+                  />
+                  <SpecConversation
+                    spec={spec}
+                    answers={clarificationAnswers}
+                    pending={clarifyPlanSpec.isPending}
+                    onAnswerChange={(question, answer) => setClarificationAnswers((current) => ({ ...current, [question]: answer }))}
+                    onSubmit={answerOpenQuestions}
+                  />
                 </div>
-              )}
+              ) : itemsVisible ? (
+                <div className="space-y-8">
+                  <SpecDocument
+                    spec={spec}
+                    editable={specEditable}
+                    isCommitted={status === "committed"}
+                    onChange={setSpecDraft}
+                  />
 
-              {/* Task items */}
-              {itemsVisible && (
-                <TasksSection
-                  status={status}
-                  items={items}
-                  effectiveParentTitle={effectiveParentTitle}
-                  effectiveParentDescription={effectiveParentDescription}
-                  editable={editable}
-                  agents={agents}
-                  agentsById={agentsById}
-                  issuesById={issuesById}
-                  onParentTitleChange={setParentTitle}
-                  onParentDescriptionChange={setParentDescription}
-                  onChangeItem={changeItem}
+                  <div>
+                    <SectionRule label="Pipeline" meta={`${items.filter((i) => i.selected).length} active`} />
+                    <div className="mt-5">
+                      <PlanItemsFlowGraph items={items} agentsById={agentsById} issuesById={issuesById} />
+                    </div>
+                  </div>
+
+                  <TasksSection
+                    status={status}
+                    items={items}
+                    effectiveParentTitle={effectiveParentTitle}
+                    effectiveParentDescription={effectiveParentDescription}
+                    editable={editable}
+                    agents={agents}
+                    agentsById={agentsById}
+                    issuesById={issuesById}
+                    onParentTitleChange={setParentTitle}
+                    onParentDescriptionChange={setParentDescription}
+                    onChangeItem={changeItem}
+                  />
+                </div>
+              ) : (
+                <SpecDocument
+                  spec={spec}
+                  editable={specEditable}
+                  isCommitted={false}
+                  onChange={setSpecDraft}
                 />
               )}
             </div>
@@ -397,9 +407,9 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
             {/* Fade gradient above the bar */}
             <div className="pointer-events-none absolute -top-10 left-0 right-0 h-10 bg-gradient-to-t from-background to-transparent" />
             <div className="border-t bg-background/98 backdrop-blur-sm">
-              <div className="mx-auto flex max-w-3xl items-center gap-4 px-6 py-4">
+              <div className="flex w-full flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:gap-4 lg:px-8">
                 {/* Status indicator */}
-                <div className="flex shrink-0 items-center gap-2 self-stretch border-r pr-4">
+                <div className="flex shrink-0 items-center gap-2 border-b pb-3 lg:self-stretch lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" style={{ animationDuration: "1.4s" }} />
                   <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-muted-foreground/50">
                     Awaiting approval
@@ -417,7 +427,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
                 </div>
 
                 {/* Actions */}
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
                   <Button variant="ghost" size="sm" disabled={rerunPlan.isPending} onClick={() => rerunPlan.mutate()}>
                     <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", rerunPlan.isPending && "animate-spin")} />
                     Rerun
