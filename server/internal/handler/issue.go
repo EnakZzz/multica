@@ -28,27 +28,31 @@ import (
 
 // IssueResponse is the JSON response for an issue.
 type IssueResponse struct {
-	ID            string                  `json:"id"`
-	WorkspaceID   string                  `json:"workspace_id"`
-	Number        int32                   `json:"number"`
-	Identifier    string                  `json:"identifier"`
-	Title         string                  `json:"title"`
-	Description   *string                 `json:"description"`
-	Status        string                  `json:"status"`
-	Priority      string                  `json:"priority"`
-	AssigneeType  *string                 `json:"assignee_type"`
-	AssigneeID    *string                 `json:"assignee_id"`
-	CreatorType   string                  `json:"creator_type"`
-	CreatorID     string                  `json:"creator_id"`
-	ParentIssueID *string                 `json:"parent_issue_id"`
-	ProjectID     *string                 `json:"project_id"`
-	Position      float64                 `json:"position"`
-	StartDate     *string                 `json:"start_date"`
-	DueDate       *string                 `json:"due_date"`
-	CreatedAt     string                  `json:"created_at"`
-	UpdatedAt     string                  `json:"updated_at"`
-	Reactions     []IssueReactionResponse `json:"reactions,omitempty"`
-	Attachments   []AttachmentResponse    `json:"attachments,omitempty"`
+	ID                     string                  `json:"id"`
+	WorkspaceID            string                  `json:"workspace_id"`
+	Number                 int32                   `json:"number"`
+	Identifier             string                  `json:"identifier"`
+	Title                  string                  `json:"title"`
+	Description            *string                 `json:"description"`
+	Status                 string                  `json:"status"`
+	Priority               string                  `json:"priority"`
+	AssigneeType           *string                 `json:"assignee_type"`
+	AssigneeID             *string                 `json:"assignee_id"`
+	CreatorType            string                  `json:"creator_type"`
+	CreatorID              string                  `json:"creator_id"`
+	ParentIssueID          *string                 `json:"parent_issue_id"`
+	ProjectID              *string                 `json:"project_id"`
+	Position               float64                 `json:"position"`
+	StartDate              *string                 `json:"start_date"`
+	DueDate                *string                 `json:"due_date"`
+	CreatedAt              string                  `json:"created_at"`
+	UpdatedAt              string                  `json:"updated_at"`
+	UnitTestChecklist      []service.UnitTestCheck `json:"unit_test_checklist"`
+	UnitTestStatus         string                  `json:"unit_test_status"`
+	UnitTestIterationCount int32                   `json:"unit_test_iteration_count"`
+	UnitTestMaxIterations  int32                   `json:"unit_test_max_iterations"`
+	Reactions              []IssueReactionResponse `json:"reactions,omitempty"`
+	Attachments            []AttachmentResponse    `json:"attachments,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
 	// chips without an N+1 round-trip per row. Pointer + omitempty so paths that
 	// don't load labels (e.g. UpdateIssue, batch UpdateIssues, the issue:updated
@@ -73,25 +77,29 @@ type IssueDependencySummary struct {
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
 	return IssueResponse{
-		ID:            uuidToString(i.ID),
-		WorkspaceID:   uuidToString(i.WorkspaceID),
-		Number:        i.Number,
-		Identifier:    identifier,
-		Title:         i.Title,
-		Description:   textToPtr(i.Description),
-		Status:        i.Status,
-		Priority:      i.Priority,
-		AssigneeType:  textToPtr(i.AssigneeType),
-		AssigneeID:    uuidToPtr(i.AssigneeID),
-		CreatorType:   i.CreatorType,
-		CreatorID:     uuidToString(i.CreatorID),
-		ParentIssueID: uuidToPtr(i.ParentIssueID),
-		ProjectID:     uuidToPtr(i.ProjectID),
-		Position:      i.Position,
-		StartDate:     timestampToPtr(i.StartDate),
-		DueDate:       timestampToPtr(i.DueDate),
-		CreatedAt:     timestampToString(i.CreatedAt),
-		UpdatedAt:     timestampToString(i.UpdatedAt),
+		ID:                     uuidToString(i.ID),
+		WorkspaceID:            uuidToString(i.WorkspaceID),
+		Number:                 i.Number,
+		Identifier:             identifier,
+		Title:                  i.Title,
+		Description:            textToPtr(i.Description),
+		Status:                 i.Status,
+		Priority:               i.Priority,
+		AssigneeType:           textToPtr(i.AssigneeType),
+		AssigneeID:             uuidToPtr(i.AssigneeID),
+		CreatorType:            i.CreatorType,
+		CreatorID:              uuidToString(i.CreatorID),
+		ParentIssueID:          uuidToPtr(i.ParentIssueID),
+		ProjectID:              uuidToPtr(i.ProjectID),
+		Position:               i.Position,
+		StartDate:              timestampToPtr(i.StartDate),
+		DueDate:                timestampToPtr(i.DueDate),
+		CreatedAt:              timestampToString(i.CreatedAt),
+		UpdatedAt:              timestampToString(i.UpdatedAt),
+		UnitTestChecklist:      []service.UnitTestCheck{},
+		UnitTestStatus:         service.UnitTestStatusNotRequired,
+		UnitTestIterationCount: 0,
+		UnitTestMaxIterations:  service.UnitTestMaxIterations,
 	}
 }
 
@@ -99,25 +107,29 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
 	return IssueResponse{
-		ID:            uuidToString(i.ID),
-		WorkspaceID:   uuidToString(i.WorkspaceID),
-		Number:        i.Number,
-		Identifier:    identifier,
-		Title:         i.Title,
-		Description:   textToPtr(i.Description),
-		Status:        i.Status,
-		Priority:      i.Priority,
-		AssigneeType:  textToPtr(i.AssigneeType),
-		AssigneeID:    uuidToPtr(i.AssigneeID),
-		CreatorType:   i.CreatorType,
-		CreatorID:     uuidToString(i.CreatorID),
-		ParentIssueID: uuidToPtr(i.ParentIssueID),
-		ProjectID:     uuidToPtr(i.ProjectID),
-		Position:      i.Position,
-		StartDate:     timestampToPtr(i.StartDate),
-		DueDate:       timestampToPtr(i.DueDate),
-		CreatedAt:     timestampToString(i.CreatedAt),
-		UpdatedAt:     timestampToString(i.UpdatedAt),
+		ID:                     uuidToString(i.ID),
+		WorkspaceID:            uuidToString(i.WorkspaceID),
+		Number:                 i.Number,
+		Identifier:             identifier,
+		Title:                  i.Title,
+		Description:            textToPtr(i.Description),
+		Status:                 i.Status,
+		Priority:               i.Priority,
+		AssigneeType:           textToPtr(i.AssigneeType),
+		AssigneeID:             uuidToPtr(i.AssigneeID),
+		CreatorType:            i.CreatorType,
+		CreatorID:              uuidToString(i.CreatorID),
+		ParentIssueID:          uuidToPtr(i.ParentIssueID),
+		ProjectID:              uuidToPtr(i.ProjectID),
+		Position:               i.Position,
+		StartDate:              timestampToPtr(i.StartDate),
+		DueDate:                timestampToPtr(i.DueDate),
+		CreatedAt:              timestampToString(i.CreatedAt),
+		UpdatedAt:              timestampToString(i.UpdatedAt),
+		UnitTestChecklist:      []service.UnitTestCheck{},
+		UnitTestStatus:         service.UnitTestStatusNotRequired,
+		UnitTestIterationCount: 0,
+		UnitTestMaxIterations:  service.UnitTestMaxIterations,
 	}
 }
 
@@ -155,25 +167,62 @@ func (h *Handler) labelsByIssue(ctx context.Context, wsUUID pgtype.UUID, issueID
 func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
 	return IssueResponse{
-		ID:            uuidToString(i.ID),
-		WorkspaceID:   uuidToString(i.WorkspaceID),
-		Number:        i.Number,
-		Identifier:    identifier,
-		Title:         i.Title,
-		Description:   textToPtr(i.Description),
-		Status:        i.Status,
-		Priority:      i.Priority,
-		AssigneeType:  textToPtr(i.AssigneeType),
-		AssigneeID:    uuidToPtr(i.AssigneeID),
-		CreatorType:   i.CreatorType,
-		CreatorID:     uuidToString(i.CreatorID),
-		ParentIssueID: uuidToPtr(i.ParentIssueID),
-		ProjectID:     uuidToPtr(i.ProjectID),
-		Position:      i.Position,
-		StartDate:     timestampToPtr(i.StartDate),
-		DueDate:       timestampToPtr(i.DueDate),
-		CreatedAt:     timestampToString(i.CreatedAt),
-		UpdatedAt:     timestampToString(i.UpdatedAt),
+		ID:                     uuidToString(i.ID),
+		WorkspaceID:            uuidToString(i.WorkspaceID),
+		Number:                 i.Number,
+		Identifier:             identifier,
+		Title:                  i.Title,
+		Description:            textToPtr(i.Description),
+		Status:                 i.Status,
+		Priority:               i.Priority,
+		AssigneeType:           textToPtr(i.AssigneeType),
+		AssigneeID:             uuidToPtr(i.AssigneeID),
+		CreatorType:            i.CreatorType,
+		CreatorID:              uuidToString(i.CreatorID),
+		ParentIssueID:          uuidToPtr(i.ParentIssueID),
+		ProjectID:              uuidToPtr(i.ProjectID),
+		Position:               i.Position,
+		StartDate:              timestampToPtr(i.StartDate),
+		DueDate:                timestampToPtr(i.DueDate),
+		CreatedAt:              timestampToString(i.CreatedAt),
+		UpdatedAt:              timestampToString(i.UpdatedAt),
+		UnitTestChecklist:      []service.UnitTestCheck{},
+		UnitTestStatus:         service.UnitTestStatusNotRequired,
+		UnitTestIterationCount: 0,
+		UnitTestMaxIterations:  service.UnitTestMaxIterations,
+	}
+}
+
+func applyIssueUnitTestFields(resp *IssueResponse, fields db.IssueUnitTestFields) {
+	resp.UnitTestChecklist = service.NormalizeUnitTestChecklistJSON(fields.UnitTestChecklist)
+	resp.UnitTestStatus = strings.TrimSpace(fields.UnitTestStatus)
+	if resp.UnitTestStatus == "" {
+		resp.UnitTestStatus = service.UnitTestStatusNotRequired
+	}
+	resp.UnitTestIterationCount = fields.UnitTestIterationCount
+	resp.UnitTestMaxIterations = service.UnitTestMaxIterations
+}
+
+func (h *Handler) attachIssueUnitTests(ctx context.Context, workspaceID pgtype.UUID, ids []pgtype.UUID, responses []IssueResponse) {
+	if len(ids) == 0 || len(responses) == 0 {
+		return
+	}
+	fields, err := h.Queries.ListIssueUnitTestFields(ctx, db.ListIssueUnitTestFieldsParams{
+		IssueIds:    ids,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		slog.Warn("ListIssueUnitTestFields failed", "error", err)
+		return
+	}
+	byID := make(map[string]db.IssueUnitTestFields, len(fields))
+	for _, field := range fields {
+		byID[uuidToString(field.IssueID)] = field
+	}
+	for i := range responses {
+		if field, ok := byID[responses[i].ID]; ok {
+			applyIssueUnitTestFields(&responses[i], field)
+		}
 	}
 }
 
@@ -785,6 +834,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			}
 			resp[i].Labels = &labels
 		}
+		h.attachIssueUnitTests(ctx, wsUUID, ids, resp)
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"issues": resp,
@@ -866,6 +916,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		resp[i].Labels = &labels
 	}
+	h.attachIssueUnitTests(ctx, wsUUID, ids, resp)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issues": resp,
@@ -1210,6 +1261,14 @@ ORDER BY
 		ids[i] = row.ID
 	}
 	labelsMap := h.labelsByIssue(ctx, wsUUID, ids)
+	unitTestFields := map[string]db.IssueUnitTestFields{}
+	if fields, err := h.Queries.ListIssueUnitTestFields(ctx, db.ListIssueUnitTestFieldsParams{IssueIds: ids, WorkspaceID: wsUUID}); err == nil {
+		for _, field := range fields {
+			unitTestFields[uuidToString(field.IssueID)] = field
+		}
+	} else {
+		slog.Warn("ListIssueUnitTestFields failed", "error", err)
+	}
 	prefix := h.getIssuePrefix(ctx, wsUUID)
 
 	groups := []IssueAssigneeGroupResponse{}
@@ -1235,6 +1294,9 @@ ORDER BY
 			labels = []LabelResponse{}
 		}
 		issue.Labels = &labels
+		if field, ok := unitTestFields[issue.ID]; ok {
+			applyIssueUnitTestFields(&issue, field)
+		}
 		groups[idx].Issues = append(groups[idx].Issues, issue)
 	}
 
@@ -1254,6 +1316,9 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 		detailLabels = []LabelResponse{}
 	}
 	resp.Labels = &detailLabels
+	if fields, err := h.Queries.GetIssueUnitTestFields(r.Context(), issue.ID); err == nil {
+		applyIssueUnitTestFields(&resp, fields)
+	}
 
 	// Fetch issue reactions.
 	reactions, err := h.Queries.ListIssueReactions(r.Context(), issue.ID)
@@ -1292,9 +1357,12 @@ func (h *Handler) ListChildIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := make([]IssueResponse, len(children))
+	ids := make([]pgtype.UUID, len(children))
 	for i, child := range children {
+		ids[i] = child.ID
 		resp[i] = issueToResponse(child, prefix)
 	}
+	h.attachIssueUnitTests(r.Context(), issue.WorkspaceID, ids, resp)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issues": resp,
 	})

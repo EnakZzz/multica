@@ -350,6 +350,49 @@ func TestBuildPromptPlanAgentTaskUsesDoneStatus(t *testing.T) {
 	}
 }
 
+func TestBuildPromptPlanAgentTaskWithUnitChecklistUsesServerGate(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildPrompt(Task{
+		IssueID:                   "issue-1",
+		PlanItemExecutionKind:     "agent_task",
+		PlanItemRequiresGitCommit: true,
+		PlanItemBranchName:        "feature/service-tests",
+		UnitTestChecklist: []UnitTestCheckData{
+			{
+				ID:       "service-check",
+				Title:    "Service regression",
+				Command:  "go test ./internal/service -run TestRegression -count=1",
+				Expected: "passes",
+				Required: true,
+			},
+		},
+		Agent: &AgentData{Name: "Test"},
+	}, "claude")
+
+	for _, want := range []string{
+		"server-gated unit test checklist",
+		"Unit test checklist:",
+		"id=service-check required",
+		"go test ./internal/service -run TestRegression -count=1",
+		"unit_test_report",
+		"the server will requeue this same issue for iteration",
+		"feature/service-tests",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+	for _, absent := range []string{
+		"Status: done",
+		"mark the issue `done`",
+	} {
+		if strings.Contains(prompt, absent) {
+			t.Fatalf("server-gated prompt should not contain %q\n---\n%s", absent, prompt)
+		}
+	}
+}
+
 func TestBuildPromptReviewGateUsesJSONContract(t *testing.T) {
 	t.Parallel()
 

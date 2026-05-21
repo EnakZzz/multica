@@ -116,6 +116,8 @@ func TestBuildIssuePlanSpecPromptIncludesBuiltInPlannerQualityRules(t *testing.T
 		"Treat the user goal as the source of truth.",
 		"Success criteria must be observable.",
 		"Separate assumptions from open questions.",
+		"Put reasonable defaults and non-blocking uncertainties in assumptions",
+		"Never ask more than 2 questions in one spec.",
 		"Keep in_scope as the smallest coherent delivery slice.",
 		"whether review-gated-feature-development should be used for high-risk work.",
 		"do not invent agents, skills, repos, files, or commands.",
@@ -123,6 +125,33 @@ func TestBuildIssuePlanSpecPromptIncludesBuiltInPlannerQualityRules(t *testing.T
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {
 			t.Errorf("buildIssuePlanSpecPrompt output missing planner quality rule: %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
+func TestBuildIssuePlanSpecPromptIncludesClarificationContext(t *testing.T) {
+	out := buildIssuePlanSpecPrompt(Task{
+		IssuePlanPrompt: "Build plan mode as an interactive flow",
+		IssuePlanSpec: PlanSpecData{
+			Summary:       "Draft a better plan mode.",
+			Goal:          "Make spec review interactive.",
+			OpenQuestions: []string{"Which interaction model should it use?"},
+			Clarifications: []PlanClarificationData{
+				{Question: "Which interaction model should it use?", Answer: "Question and answer loop like Superpowers."},
+			},
+		},
+	})
+
+	mustContain := []string{
+		"Current draft spec and answered clarifications:",
+		"Revise the spec using the user's clarification answers.",
+		"Remove answered questions from open_questions.",
+		"Question and answer loop like Superpowers.",
+		`"clarifications": [{"question": "Question answered by the user", "answer": "User answer"}]`,
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildIssuePlanSpecPrompt output missing clarification context: %q\n--- output ---\n%s", s, out)
 		}
 	}
 }

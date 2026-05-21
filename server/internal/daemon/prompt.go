@@ -57,6 +57,48 @@ func BuildPrompt(task Task, provider string) string {
 		}
 		fmt.Fprintf(&b, "This issue is a review gate repair. Continue the existing target branch `%s`; do not create a separate repair branch for this work.\n", task.PublishBranchName)
 		fmt.Fprintf(&b, "`multica repo checkout <url>` will default to ref `%s` and `multica repo publish` will push your HEAD back to `%s`. Your final issue comment must include `Branch: %s` and `Status: done` after publish succeeds, then mark the issue `done`.\n", checkoutRef, task.PublishBranchName, task.PublishBranchName)
+	} else if task.PlanItemExecutionKind == "agent_task" && len(task.UnitTestChecklist) > 0 {
+		b.WriteString("This issue was created from a Plan item with a server-gated unit test checklist. Complete the implementation, run the checklist commands below, and do not mark the issue done or blocked yourself; the server will update status from your final JSON report.\n")
+		if task.PlanItemRequiresGitCommit && strings.TrimSpace(task.PlanItemBranchName) != "" {
+			fmt.Fprintf(&b, "For code changes, use `multica repo checkout <url>` and publish the planned branch `%s` with `multica repo publish`. Never push directly to main or master.\n", task.PlanItemBranchName)
+		} else {
+			b.WriteString("This Plan item is not expected to produce a git commit unless the issue body or a human comment explicitly changes that. If code changes become necessary, use `multica repo checkout <url>` and publish with `multica repo publish`; never push directly to main or master.\n")
+		}
+		b.WriteString("Unit test checklist:\n")
+		for _, check := range task.UnitTestChecklist {
+			label := strings.TrimSpace(check.Title)
+			if label == "" {
+				label = strings.TrimSpace(check.ID)
+			}
+			if label == "" {
+				label = "unit test"
+			}
+			required := "required"
+			if !check.Required {
+				required = "optional"
+			}
+			fmt.Fprintf(&b, "- id=%s %s title=%q command=%q expected=%q\n", check.ID, required, label, check.Command, check.Expected)
+		}
+		b.WriteString("Your final task completion output must be one JSON object and must include `unit_test_report`. If any required check fails, report failed rather than hiding it; the server will requeue this same issue for iteration.\n")
+		b.WriteString(`Final JSON shape:
+{
+  "unit_test_report": {
+    "status": "passed|failed",
+    "checks": [
+      {
+        "id": "stable-check-id",
+        "status": "passed|failed|skipped",
+        "command": "go test ./internal/service -run TestName -count=1",
+        "summary": "short result",
+        "output_excerpt": "bounded failure excerpt"
+      }
+    ]
+  },
+  "branch": "published branch when any",
+  "notes": "optional"
+}
+`)
+		b.WriteString("Return JSON only: no markdown fences and no prose before or after it.\n")
 	} else if task.PlanItemExecutionKind == "agent_task" {
 		if task.PlanItemRequiresGitCommit && strings.TrimSpace(task.PlanItemBranchName) != "" {
 			fmt.Fprintf(&b, "This issue was created from a Plan item with `execution_kind=agent_task`; that kind is the execution contract. For code changes, use `multica repo checkout <url>` and publish the planned branch `%s` with `multica repo publish`. Never push directly to main or master. Your final issue comment must include `Branch: %s` and `Status: done` after publish succeeds, then mark the issue `done`.\n", task.PlanItemBranchName, task.PlanItemBranchName)
@@ -163,6 +205,7 @@ func buildIssuePlanPrompt(task Task) string {
           "description": "Issue description with node-specific context",
           "acceptance_criteria": ["Observable condition that proves this node is complete"],
           "suggested_test_commands": ["Exact command to verify this node, or []"],
+          "unit_test_checklist": [{"id":"stable-check-id","title":"Unit test name","command":"Exact runnable unit test command","expected":"Expected passing result","required":true}],
           "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
           "risk_notes": ["Concrete edge case, dependency, or failure mode"],
           "node_type": "issue | manual | check | spec_review | code_review",
@@ -183,6 +226,7 @@ func buildIssuePlanPrompt(task Task) string {
       "description": "Issue description with enough context for the assigned agent",
       "acceptance_criteria": ["Observable condition that proves this issue is complete"],
       "suggested_test_commands": ["Exact command to verify this issue, or []"],
+      "unit_test_checklist": [{"id":"stable-check-id","title":"Unit test name","command":"Exact runnable unit test command","expected":"Expected passing result","required":true}],
       "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
       "risk_notes": ["Concrete edge case, dependency, or failure mode"],
       "node_type": "issue | manual | check | spec_review | code_review",
@@ -203,6 +247,7 @@ func buildIssuePlanPrompt(task Task) string {
         "description": "Child issue description with enough context for the assigned agent",
         "acceptance_criteria": ["Observable condition that proves this item is complete"],
         "suggested_test_commands": ["Exact command to verify this item, or []"],
+        "unit_test_checklist": [{"id":"stable-check-id","title":"Unit test name","command":"Exact runnable unit test command","expected":"Expected passing result","required":true}],
         "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
         "risk_notes": ["Concrete edge case, dependency, or failure mode"],
         "node_type": "issue | manual | check | spec_review | code_review",
@@ -230,7 +275,8 @@ func buildIssuePlanPrompt(task Task) string {
 	b.WriteString("- Built-in methodology pipelines are readonly references. Prefer systematic-debugging for bugfix/build/integration failures, test-driven-development when the goal calls for TDD, and review-gated-feature-development for high-risk feature work that needs spec and code review gates.\n")
 	b.WriteString("- Fill each selected pipeline node with a concrete title, description, optional agent_id override, and dependency keys. Dependency keys should point to prerequisite nodes in the chosen pipeline.\n")
 	b.WriteString("- If no available pipeline fits, fall back to items and split into 2-8 child issues.\n")
-	b.WriteString("- For every direct_issue, item, or selected pipeline node, include a lightweight execution contract: 2-5 acceptance_criteria when possible, suggested_test_commands as exact runnable commands or [], context_resources as known files/repos/docs/issues/APIs/URLs, and risk_notes as concrete edge cases or blockers.\n")
+	b.WriteString("- For every direct_issue, item, or selected pipeline node, include a lightweight execution contract: 2-5 acceptance_criteria when possible, suggested_test_commands as exact runnable commands or [], unit_test_checklist as exact runnable unit-test commands or [], context_resources as known files/repos/docs/issues/APIs/URLs, and risk_notes as concrete edge cases or blockers.\n")
+	b.WriteString("- unit_test_checklist is only for true unit tests that the assigned agent can run locally, such as `go test ./internal/service -run TestName -count=1` or `pnpm vitest packages/core/foo.test.ts`. If you do not know a real runnable unit test command, use []. Do not put broad build, typecheck, lint, e2e, smoke, or manual verification commands there; keep those in suggested_test_commands.\n")
 	b.WriteString("- Preserve review gate semantics in node_type: use spec_review for spec compliance gates, code_review for blocking code quality gates, manual for human confirmation, check for agent-executable verification, and issue for implementation or ordinary work.\n")
 	b.WriteString("- For every direct_issue, item, or selected pipeline node that can produce an actual git commit, set requires_git_commit=true and provide branch_name. Branch names must be module/function based, not agent-role based: prefer `feature/<module>-<capability>` for feature work, `fix/<module>-<bug>` for bug fixes, `refactor/<module>-<change>` for refactors, `test/<module>-<coverage>` for test-only work, `docs/<area>-<topic>` for documentation, `ci/<pipeline>-<change>` for CI, or `chore/<area>-<task>` for maintenance. Do not use `agent/<agent-role>/<issue>` style names.\n")
 	b.WriteString("- Only set requires_git_commit=false and branch_name=\"\" when the issue is purely human confirmation, discussion, investigation/reporting, external coordination, or another task that is not expected to create a repository commit.\n")
@@ -256,6 +302,12 @@ func buildIssuePlanSpecPrompt(task Task) string {
 	fmt.Fprintf(&b, "User goal:\n> %s\n\n", task.IssuePlanPrompt)
 	if task.ProjectTitle != "" {
 		fmt.Fprintf(&b, "Project: %s (%s)\n\n", task.ProjectTitle, task.ProjectID)
+	}
+	if hasPlanSpecDraft(task.IssuePlanSpec) {
+		b.WriteString("Current draft spec and answered clarifications:\n")
+		writePlanSpec(&b, task.IssuePlanSpec)
+		b.WriteString("\n")
+		b.WriteString("Revise the spec using the user's clarification answers. Remove answered questions from open_questions. Keep any still-unresolved decisions in open_questions.\n\n")
 	}
 	b.WriteString("Language rules:\n")
 	b.WriteString("- Keep JSON property names exactly as requested in English.\n")
@@ -297,14 +349,17 @@ func buildIssuePlanSpecPrompt(task Task) string {
   "out_of_scope": ["Work intentionally excluded from this plan"],
   "approach": "Recommended implementation approach and important tradeoffs",
   "assumptions": ["Assumption to confirm or carry into execution"],
-  "open_questions": ["Question that should be answered before execution, or []"]
+  "open_questions": ["Blocking question that materially changes scope or execution, max 2, or []"],
+  "clarifications": [{"question": "Question answered by the user", "answer": "User answer"}]
 }`)
 	b.WriteString("\n\nRules:\n")
 	b.WriteString("- Return JSON only. No markdown fences, prose, comments, or trailing text.\n")
 	b.WriteString("- This is the human-reviewable spec, not the executable issue list. Do not include items, pipeline nodes, direct_issue, or issue creation commands.\n")
 	b.WriteString("- Keep scope focused and practical. If a goal is too large, describe a safe first slice in in_scope and move the rest to out_of_scope.\n")
 	b.WriteString("- Use built-in methodology pipelines as planning references when relevant: systematic-debugging for bugfix/build/integration failures, test-driven-development for TDD work, and review-gated-feature-development for high-risk feature work.\n")
-	b.WriteString("- Mention relevant agent or pipeline capability gaps in assumptions or open_questions instead of inventing capabilities.\n")
+	b.WriteString("- Put non-blocking uncertainty in assumptions. Use open_questions only for decisions that would materially change scope, data access, destructive behavior, or execution safety.\n")
+	b.WriteString("- Ask at most 2 open questions. If you can proceed with a reasonable default, write the default as an assumption instead of asking.\n")
+	b.WriteString("- Preserve existing clarifications exactly unless a new answer supersedes the same question.\n")
 	b.WriteString("- summary and goal are required and must be non-empty.\n")
 	return b.String()
 }
@@ -314,10 +369,11 @@ func writeIssuePlanSpecQualityRules(b *strings.Builder) {
 	b.WriteString("- Treat the user goal as the source of truth. Preserve named systems, repos, files, commands, product constraints, and explicit exclusions instead of flattening them into a generic plan.\n")
 	b.WriteString("- Produce a reviewable spec, not a task list. The spec should let a human answer: what will be built, what will not be built, what evidence proves success, what risks exist, and what still needs a decision.\n")
 	b.WriteString("- Success criteria must be observable. Prefer user-visible behavior, API/database state, generated artifacts, exact commands that should pass, or review evidence over vague goals like \"works well\".\n")
-	b.WriteString("- Separate assumptions from open questions. Put unresolved product, access, data, deployment, legal/content, destructive-change, or security decisions in open_questions instead of silently deciding them.\n")
+	b.WriteString("- Separate assumptions from open questions. Put reasonable defaults and non-blocking uncertainties in assumptions; put only blocking product, access, data, deployment, legal/content, destructive-change, or security decisions in open_questions.\n")
 	b.WriteString("- Keep in_scope as the smallest coherent delivery slice. Move follow-up work, optional polish, broad refactors, and unrelated cleanup to out_of_scope unless the user explicitly requested them.\n")
 	b.WriteString("- In approach, call out the likely implementation surfaces, validation strategy, dependency or migration risk, rollback/backout needs, and whether review-gated-feature-development should be used for high-risk work.\n")
-	b.WriteString("- If the available agents or pipelines do not cover a required capability, record that gap in assumptions or open_questions; do not invent agents, skills, repos, files, or commands.\n\n")
+	b.WriteString("- If the available agents or pipelines do not cover a required capability, record that gap in assumptions unless it blocks execution; do not invent agents, skills, repos, files, or commands.\n")
+	b.WriteString("- Keep open_questions short and high-signal. Never ask more than 2 questions in one spec.\n\n")
 }
 
 func writeIssuePlanItemsQualityRules(b *strings.Builder) {
@@ -344,6 +400,32 @@ func writePlanSpec(b *strings.Builder, spec PlanSpecData) {
 	fmt.Fprintf(b, "- Approach: %s\n", trimForPrompt(spec.Approach, 1200))
 	writeSpecList(b, "Assumptions", spec.Assumptions)
 	writeSpecList(b, "Open questions", spec.OpenQuestions)
+	if len(spec.Clarifications) == 0 {
+		b.WriteString("- Clarifications: none\n")
+		return
+	}
+	b.WriteString("- Clarifications:\n")
+	for _, c := range spec.Clarifications {
+		question := strings.TrimSpace(c.Question)
+		answer := strings.TrimSpace(c.Answer)
+		if question == "" || answer == "" {
+			continue
+		}
+		fmt.Fprintf(b, "  - Q: %s\n", trimForPrompt(question, 500))
+		fmt.Fprintf(b, "    A: %s\n", trimForPrompt(answer, 800))
+	}
+}
+
+func hasPlanSpecDraft(spec PlanSpecData) bool {
+	return strings.TrimSpace(spec.Summary) != "" ||
+		strings.TrimSpace(spec.Goal) != "" ||
+		len(spec.SuccessCriteria) > 0 ||
+		len(spec.InScope) > 0 ||
+		len(spec.OutOfScope) > 0 ||
+		strings.TrimSpace(spec.Approach) != "" ||
+		len(spec.Assumptions) > 0 ||
+		len(spec.OpenQuestions) > 0 ||
+		len(spec.Clarifications) > 0
 }
 
 func writeSpecList(b *strings.Builder, label string, items []string) {

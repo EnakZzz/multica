@@ -174,7 +174,7 @@ func (q *Queries) CreatePlanForIssue(ctx context.Context, arg CreatePlanForIssue
 const createPlanItem = `-- name: CreatePlanItem :one
 INSERT INTO plan_item (
     plan_id, position, title, description,
-    acceptance_criteria, suggested_test_commands, context_resources, risk_notes,
+    acceptance_criteria, suggested_test_commands, unit_test_checklist, context_resources, risk_notes,
     execution_kind, confirmation_question, confirmation_reason, required_evidence,
     requires_git_commit, branch_name,
     node_type,
@@ -182,13 +182,13 @@ INSERT INTO plan_item (
     match_score, match_reason, missing_capability, depends_on_positions, selected
 ) VALUES (
     $1, $2, $3, $4,
-    $5, $6, $7, $8,
+    $5, $6, $22, $7, $8,
     $9, $10, $11, $12,
     $13, $14,
     $20,
     $21,
     $15, $16, $17, $18, $19
-) RETURNING id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type
+) RETURNING id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, unit_test_checklist, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type
 `
 
 type CreatePlanItemParams struct {
@@ -198,6 +198,7 @@ type CreatePlanItemParams struct {
 	Description           string      `json:"description"`
 	AcceptanceCriteria    []string    `json:"acceptance_criteria"`
 	SuggestedTestCommands []string    `json:"suggested_test_commands"`
+	UnitTestChecklist     []byte      `json:"unit_test_checklist"`
 	ContextResources      []string    `json:"context_resources"`
 	RiskNotes             []string    `json:"risk_notes"`
 	ExecutionKind         string      `json:"execution_kind"`
@@ -238,6 +239,7 @@ func (q *Queries) CreatePlanItem(ctx context.Context, arg CreatePlanItemParams) 
 		arg.Selected,
 		arg.NodeType,
 		arg.RecommendedAgentID,
+		arg.UnitTestChecklist,
 	)
 	var i PlanItem
 	err := row.Scan(
@@ -257,6 +259,7 @@ func (q *Queries) CreatePlanItem(ctx context.Context, arg CreatePlanItemParams) 
 		&i.UpdatedAt,
 		&i.AcceptanceCriteria,
 		&i.SuggestedTestCommands,
+		&i.UnitTestChecklist,
 		&i.ContextResources,
 		&i.RiskNotes,
 		&i.ExecutionKind,
@@ -378,7 +381,7 @@ func (q *Queries) GetPlanInWorkspace(ctx context.Context, arg GetPlanInWorkspace
 }
 
 const getPlanItemByGeneratedIssue = `-- name: GetPlanItemByGeneratedIssue :one
-SELECT id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type FROM plan_item
+SELECT id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, unit_test_checklist, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type FROM plan_item
 WHERE generated_issue_id = $1
 LIMIT 1
 `
@@ -403,6 +406,7 @@ func (q *Queries) GetPlanItemByGeneratedIssue(ctx context.Context, generatedIssu
 		&i.UpdatedAt,
 		&i.AcceptanceCriteria,
 		&i.SuggestedTestCommands,
+		&i.UnitTestChecklist,
 		&i.ContextResources,
 		&i.RiskNotes,
 		&i.ExecutionKind,
@@ -417,7 +421,7 @@ func (q *Queries) GetPlanItemByGeneratedIssue(ctx context.Context, generatedIssu
 }
 
 const listPlanItems = `-- name: ListPlanItems :many
-SELECT id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type FROM plan_item
+SELECT id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, unit_test_checklist, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type FROM plan_item
 WHERE plan_id = $1
 ORDER BY position ASC, created_at ASC
 `
@@ -448,6 +452,7 @@ func (q *Queries) ListPlanItems(ctx context.Context, planID pgtype.UUID) ([]Plan
 			&i.UpdatedAt,
 			&i.AcceptanceCriteria,
 			&i.SuggestedTestCommands,
+			&i.UnitTestChecklist,
 			&i.ContextResources,
 			&i.RiskNotes,
 			&i.ExecutionKind,
@@ -831,7 +836,7 @@ const updatePlanItemGeneratedIssue = `-- name: UpdatePlanItemGeneratedIssue :one
 UPDATE plan_item
 SET generated_issue_id = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type
+RETURNING id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, unit_test_checklist, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type
 `
 
 type UpdatePlanItemGeneratedIssueParams struct {
@@ -859,6 +864,7 @@ func (q *Queries) UpdatePlanItemGeneratedIssue(ctx context.Context, arg UpdatePl
 		&i.UpdatedAt,
 		&i.AcceptanceCriteria,
 		&i.SuggestedTestCommands,
+		&i.UnitTestChecklist,
 		&i.ContextResources,
 		&i.RiskNotes,
 		&i.ExecutionKind,

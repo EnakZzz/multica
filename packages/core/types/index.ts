@@ -1,4 +1,4 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueReaction, IssueDependencySummary, IssueDependenciesResponse } from "./issue";
+export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueReaction, IssueDependencySummary, IssueDependenciesResponse, IssueUnitTestStatus, UnitTestCheck } from "./issue";
 export type {
   Agent,
   AgentStatus,
@@ -82,6 +82,7 @@ export type {
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   Plan,
+  PlanClarification,
   PlanItem,
   PlanItemExecutionKind,
   PlanSpec,
@@ -91,6 +92,7 @@ export type {
   UpdatePlanRequest,
   UpdatePlanItemRequest,
   ApprovePlanSpecRequest,
+  ClarifyPlanSpecRequest,
   CommitPlanRequest,
 } from "./plan";
 export type {

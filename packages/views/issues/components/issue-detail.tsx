@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleCheck,
+  ClipboardCheck,
   GitBranch,
   MoreHorizontal,
   PanelRight,
@@ -49,6 +50,7 @@ import type {
   IssueStatus,
   IssuePriority,
   TimelineEntry,
+  UnitTestCheck,
   UpdateIssueRequest,
 } from "@multica/core/types";
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
@@ -202,6 +204,94 @@ function priorityLabel(priority: string, t: ActivityT): string {
     return t(($) => $.priority[priority as IssuePriority]);
   }
   return priority;
+}
+
+function unitTestStatusLabel(status: string, t: ActivityT): string {
+  switch (status) {
+    case "passed":
+      return t(($) => $.detail.unit_tests_status_passed);
+    case "failed":
+      return t(($) => $.detail.unit_tests_status_failed);
+    case "blocked":
+      return t(($) => $.detail.unit_tests_status_blocked);
+    case "pending":
+      return t(($) => $.detail.unit_tests_status_pending);
+    case "skipped":
+      return t(($) => $.detail.unit_tests_status_skipped);
+    default:
+      return status || t(($) => $.detail.unit_tests_status_pending);
+  }
+}
+
+function UnitTestsSection({ issue, t }: { issue: Issue; t: ActivityT }) {
+  const checks = issue.unit_test_checklist ?? [];
+  if (checks.length === 0) return null;
+
+  const required = checks.filter((check) => check.required);
+  const passedRequired = required.filter((check) => check.status === "passed").length;
+  const failedRequired = required.filter((check) => check.status === "failed").length;
+  const statusTone =
+    issue.unit_test_status === "passed"
+      ? "text-emerald-700 bg-emerald-500/10 border-emerald-500/20 dark:text-emerald-300"
+      : issue.unit_test_status === "failed" || issue.unit_test_status === "blocked"
+        ? "text-destructive bg-destructive/10 border-destructive/20"
+        : "text-muted-foreground bg-muted/60 border-border";
+
+  return (
+    <section className="mt-6">
+      <div className="mb-2 flex items-center gap-2">
+        <ClipboardCheck className="h-4 w-4 text-muted-foreground" />
+        <h3 className="text-sm font-medium">{t(($) => $.detail.unit_tests_title)}</h3>
+        <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", statusTone)}>
+          {unitTestStatusLabel(issue.unit_test_status ?? "not_required", t)}
+        </span>
+        <span className="text-[11px] text-muted-foreground tabular-nums">
+          {t(($) => $.detail.unit_tests_progress, {
+            passed: passedRequired,
+            total: required.length,
+            failed: failedRequired,
+          })}
+        </span>
+        {(issue.unit_test_iteration_count ?? 0) > 0 && (
+          <span className="text-[11px] text-muted-foreground tabular-nums">
+            {t(($) => $.detail.unit_tests_iteration, {
+              count: issue.unit_test_iteration_count ?? 0,
+              max: issue.unit_test_max_iterations ?? 2,
+            })}
+          </span>
+        )}
+      </div>
+      <div className="overflow-hidden rounded-lg border bg-card/30 divide-y divide-border/60">
+        {checks.map((check: UnitTestCheck) => (
+          <div key={check.id} className="px-3 py-2.5">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-sm font-medium">{check.title || check.id}</span>
+                  {check.required && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {t(($) => $.detail.unit_tests_required)}
+                    </span>
+                  )}
+                </div>
+                {check.command && (
+                  <code className="mt-1 block truncate text-xs text-muted-foreground">
+                    {check.command}
+                  </code>
+                )}
+                {check.failure_summary && (
+                  <p className="mt-1 text-xs text-destructive">{check.failure_summary}</p>
+                )}
+              </div>
+              <span className="shrink-0 rounded-full border bg-background px-2 py-0.5 text-[11px] text-muted-foreground">
+                {unitTestStatusLabel(check.status, t)}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function formatActivity(
@@ -1811,10 +1901,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 onSelect={(file) => descEditorRef.current?.uploadFile(file)}
               />
             </div>
-            {descDragOver && <FileDropOverlay />}
-          </div>
+              {descDragOver && <FileDropOverlay />}
+            </div>
 
-          {/* Sub-issues — Linear-style */}
+            <UnitTestsSection issue={issue} t={t} />
+
+            {/* Sub-issues — Linear-style */}
           {childIssues.length === 0 && (
             <div className="mt-6">
               <button

@@ -117,7 +117,7 @@ DELETE FROM plan_item WHERE plan_id = $1;
 -- name: CreatePlanItem :one
 INSERT INTO plan_item (
     plan_id, position, title, description,
-    acceptance_criteria, suggested_test_commands, context_resources, risk_notes,
+    acceptance_criteria, suggested_test_commands, unit_test_checklist, context_resources, risk_notes,
     execution_kind, confirmation_question, confirmation_reason, required_evidence,
     requires_git_commit, branch_name,
     node_type,
@@ -125,7 +125,7 @@ INSERT INTO plan_item (
     match_score, match_reason, missing_capability, depends_on_positions, selected
 ) VALUES (
     $1, $2, $3, $4,
-    $5, $6, $7, $8,
+    $5, $6, sqlc.arg('unit_test_checklist')::jsonb, $7, $8,
     $9, $10, $11, $12,
     $13, $14,
     $20,

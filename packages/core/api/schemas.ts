@@ -6,6 +6,7 @@ import type {
   Attachment,
   CreateAgentFromTemplateResponse,
   GroupedIssuesResponse,
+  Issue,
   IssueDependenciesResponse,
   ListIssuesResponse,
   ListPipelinesResponse,
@@ -143,7 +144,20 @@ export const CommentSchema = z.object({
 
 export const CommentsListSchema = z.array(CommentSchema);
 
-const IssueSchema = z.object({
+const UnitTestCheckSchema = z.object({
+  id: z.string().catch("").default(""),
+  title: z.string().catch("").default(""),
+  command: z.string().catch("").default(""),
+  expected: z.string().catch("").default(""),
+  required: z.boolean().catch(true).default(true),
+  status: z.string().catch("pending").default("pending"),
+  last_run_at: z.string().nullable().catch(null).default(null),
+  output_excerpt: z.string().catch("").default(""),
+  failure_summary: z.string().catch("").default(""),
+  task_id: z.string().catch("").default(""),
+}).loose();
+
+export const IssueSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
   number: z.number(),
@@ -159,13 +173,43 @@ const IssueSchema = z.object({
   parent_issue_id: z.string().nullable(),
   project_id: z.string().nullable(),
   position: z.number(),
-  start_date: z.string().nullable(),
-  due_date: z.string().nullable(),
-  reactions: z.array(z.unknown()).optional(),
+    start_date: z.string().nullable(),
+    due_date: z.string().nullable(),
+    unit_test_checklist: z.array(UnitTestCheckSchema).catch([]).default([]),
+    unit_test_status: z.string().catch("not_required").default("not_required"),
+    unit_test_iteration_count: z.number().catch(0).default(0),
+    unit_test_max_iterations: z.number().catch(2).default(2),
+    reactions: z.array(z.unknown()).optional(),
   labels: z.array(z.unknown()).optional(),
   created_at: z.string(),
   updated_at: z.string(),
-}).loose();
+  }).loose();
+
+export const EMPTY_ISSUE: Issue = {
+  id: "",
+  workspace_id: "",
+  number: 0,
+  identifier: "",
+  title: "",
+  description: null,
+  status: "backlog",
+  priority: "none",
+  assignee_type: null,
+  assignee_id: null,
+  creator_type: "member",
+  creator_id: "",
+  parent_issue_id: null,
+  project_id: null,
+  position: 0,
+  start_date: null,
+  due_date: null,
+  unit_test_checklist: [],
+  unit_test_status: "not_required",
+  unit_test_iteration_count: 0,
+  unit_test_max_iterations: 2,
+  created_at: "",
+  updated_at: "",
+};
 
 export const ListIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
@@ -242,6 +286,11 @@ const PlanItemNodeTypeSchema = z.preprocess(
   z.enum(["issue", "manual", "check", "spec_review", "code_review"]),
 );
 
+const PlanClarificationSchema = z.object({
+  question: z.string().default(""),
+  answer: z.string().default(""),
+});
+
 export const PlanSpecSchema = z.object({
   summary: z.string().default(""),
   goal: z.string().default(""),
@@ -251,6 +300,7 @@ export const PlanSpecSchema = z.object({
   approach: z.string().default(""),
   assumptions: StringListSchema,
   open_questions: StringListSchema,
+  clarifications: z.array(PlanClarificationSchema).catch([]).default([]),
 });
 
 export const EMPTY_PLAN_SPEC: PlanSpec = {
@@ -262,6 +312,7 @@ export const EMPTY_PLAN_SPEC: PlanSpec = {
   approach: "",
   assumptions: [],
   open_questions: [],
+  clarifications: [],
 };
 
 const PlanItemSchema = z.object({
@@ -270,9 +321,10 @@ const PlanItemSchema = z.object({
   position: z.number(),
   title: z.string(),
   description: z.string().default(""),
-  acceptance_criteria: StringListSchema,
-  suggested_test_commands: StringListSchema,
-  context_resources: StringListSchema,
+    acceptance_criteria: StringListSchema,
+    suggested_test_commands: StringListSchema,
+    unit_test_checklist: z.array(UnitTestCheckSchema).catch([]).default([]),
+    context_resources: StringListSchema,
   risk_notes: StringListSchema,
   node_type: PlanItemNodeTypeSchema,
   execution_kind: PlanItemExecutionKindSchema,
@@ -304,7 +356,7 @@ export const PlanSchema = z.object({
   parent_title: z.string().default(""),
   parent_description: z.string().default(""),
   parent_issue_id: z.string().nullable().default(null),
-  spec: PlanSpecSchema.catch(EMPTY_PLAN_SPEC).default(EMPTY_PLAN_SPEC),
+  spec: PlanSpecSchema.catch(EMPTY_PLAN_SPEC as z.infer<typeof PlanSpecSchema>).default(EMPTY_PLAN_SPEC as z.infer<typeof PlanSpecSchema>),
   spec_approved_at: z.string().nullable().default(null),
   spec_approved_by: z.string().nullable().default(null),
   error: z.string().nullable().default(null),

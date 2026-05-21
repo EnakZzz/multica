@@ -5,6 +5,7 @@ import { ArrowRight, ClipboardList, Loader2, Plus, RefreshCw } from "lucide-reac
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@multica/ui/components/ui/button";
+import { Badge } from "@multica/ui/components/ui/badge";
 import { Input } from "@multica/ui/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@multica/ui/components/ui/select";
@@ -24,41 +25,36 @@ import { PageHeader } from "../../layout/page-header";
 
 // ─── Status config ─────────────────────────────────────────────────────────────
 
-const STATUS_CONFIG: Record<string, { dot: string; label: string; textClass: string; borderClass: string }> = {
+const STATUS_CONFIG: Record<string, { dot: string; label: string; badgeClass: string }> = {
   planning: {
     dot: "bg-amber-500 animate-pulse",
     label: "Planning",
-    textClass: "text-amber-600/75",
-    borderClass: "border-l-amber-500/60",
+    badgeClass: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
   },
   spec_review: {
     dot: "bg-amber-400",
-    label: "Review",
-    textClass: "text-amber-600/60",
-    borderClass: "border-l-amber-400/50",
+    label: "Spec review",
+    badgeClass: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
   },
   ready: {
-    dot: "bg-primary/80",
+    dot: "bg-primary",
     label: "Ready",
-    textClass: "text-primary/70",
-    borderClass: "border-l-primary/50",
+    badgeClass: "border-primary/30 bg-primary/10 text-primary",
   },
   committed: {
     dot: "bg-emerald-500",
     label: "Done",
-    textClass: "text-emerald-600/80",
-    borderClass: "border-l-emerald-500/60",
+    badgeClass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
   },
   failed: {
     dot: "bg-rose-500",
     label: "Failed",
-    textClass: "text-rose-600/75",
-    borderClass: "border-l-rose-500/55",
+    badgeClass: "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300",
   },
 };
 
 function getStatusConfig(status: string) {
-  return STATUS_CONFIG[status] ?? { dot: "bg-muted-foreground/40", label: status, textClass: "text-muted-foreground/50", borderClass: "border-l-border" };
+  return STATUS_CONFIG[status] ?? { dot: "bg-muted-foreground", label: status, badgeClass: "border-border bg-muted text-muted-foreground" };
 }
 
 // ─── Plans page ────────────────────────────────────────────────────────────────
@@ -75,77 +71,70 @@ export function PlansPage() {
     <div className="flex h-full flex-col bg-background">
       <PageHeader>
         <div className="flex w-full items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <ClipboardList className="h-3.5 w-3.5 text-muted-foreground/50" />
-            <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">
-              Plans
-            </span>
+          <div className="flex items-center gap-2">
+            <ClipboardList className="h-4 w-4" />
+            <h1 className="text-sm font-semibold">Plans</h1>
             {plans.length > 0 && (
-              <span className="font-mono text-[9px] tabular-nums text-muted-foreground/30">
+              <Badge variant="secondary" className="h-5 px-1.5 text-xs tabular-nums">
                 {plans.length}
-              </span>
+              </Badge>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7"
               disabled={isLoading}
               onClick={() => refetch()}
               title="Refresh"
             >
-              <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
+              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
             </Button>
             <Button size="sm" onClick={() => setOpen(true)}>
-              <Plus className="mr-1 h-3.5 w-3.5" />
+              <Plus className="mr-1 h-4 w-4" />
               New Plan
             </Button>
           </div>
         </div>
       </PageHeader>
 
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto p-4">
         {isLoading ? (
           <PlanListSkeleton />
         ) : plans.length === 0 ? (
           <EmptyPlans onNew={() => setOpen(true)} />
         ) : (
-          <div className="divide-y divide-border/40">
+          <div className="divide-y rounded-md border bg-background">
             {plans.map((plan, idx) => {
               const cfg = getStatusConfig(plan.status);
               return (
                 <button
                   key={plan.id}
                   className={cn(
-                    "group relative flex w-full items-center gap-3 border-l-2 px-4 py-3.5 text-left transition-all duration-150 hover:bg-muted/25",
-                    cfg.borderClass,
+                    "group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50",
                   )}
                   onClick={() => nav.push(paths.planDetail(plan.id))}
                 >
-                  {/* Sequence */}
-                  <span className="w-5 shrink-0 font-mono text-[9px] font-bold tabular-nums text-muted-foreground/25">
+                  <span className="w-5 shrink-0 text-xs tabular-nums text-muted-foreground">
                     {String(idx + 1).padStart(2, "0")}
                   </span>
 
-                  {/* Status dot */}
-                  <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", cfg.dot)} />
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-muted/30">
+                    <span className={cn("h-2 w-2 rounded-full", cfg.dot)} />
+                  </div>
 
-                  {/* Title + prompt */}
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold leading-snug">{plan.title}</div>
-                    <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/45">
-                      {plan.prompt}
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="truncate text-sm font-medium text-foreground">{plan.title}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {plan.prompt || "No prompt"}
                     </div>
                   </div>
 
-                  {/* Status label */}
-                  <span className={cn("shrink-0 font-mono text-[9px] font-semibold uppercase tracking-wider", cfg.textClass)}>
+                  <Badge variant="outline" className={cn("shrink-0", cfg.badgeClass)}>
                     {cfg.label}
-                  </span>
+                  </Badge>
 
-                  {/* Arrow — appears on hover */}
-                  <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/25 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                  <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                 </button>
               );
             })}
@@ -162,34 +151,24 @@ export function PlansPage() {
 
 function EmptyPlans({ onNew }: { onNew: () => void }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-5 p-8">
-      {/* Dot-matrix background behind the icon */}
-      <div className="relative flex items-center justify-center">
-        <div
-          className="absolute h-32 w-48 opacity-[0.035]"
-          style={{
-            backgroundImage: "radial-gradient(circle, hsl(var(--foreground)) 1px, transparent 1px)",
-            backgroundSize: "12px 12px",
-          }}
-        />
-        <div className="relative flex h-12 w-12 items-center justify-center rounded-lg border bg-card">
-          <ClipboardList className="h-5 w-5 text-muted-foreground/40" />
+    <div className="flex h-full items-center justify-center">
+      <div className="flex max-w-sm flex-col items-center gap-4 rounded-md border bg-background px-6 py-8 text-center">
+        <div className="flex h-11 w-11 items-center justify-center rounded-md border bg-muted/40">
+          <ClipboardList className="h-5 w-5 text-muted-foreground" />
         </div>
-      </div>
 
-      <div className="text-center">
-        <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">
-          No plans yet
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground/40">
-          Create your first execution plan to get started
-        </p>
-      </div>
+        <div>
+          <p className="text-sm font-medium">No plans yet</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Create an execution plan when a goal needs review before issues are generated.
+          </p>
+        </div>
 
-      <Button size="sm" onClick={onNew}>
-        <Plus className="mr-1.5 h-3.5 w-3.5" />
-        New Plan
-      </Button>
+        <Button size="sm" onClick={onNew}>
+          <Plus className="mr-1.5 h-4 w-4" />
+          New Plan
+        </Button>
+      </div>
     </div>
   );
 }
@@ -198,26 +177,26 @@ function EmptyPlans({ onNew }: { onNew: () => void }) {
 
 function PlanListSkeleton() {
   return (
-    <div className="divide-y divide-border/40">
+    <div className="divide-y rounded-md border">
       {Array.from({ length: 5 }, (_, i) => (
         <div
           key={i}
-          className="flex items-center gap-3 border-l-2 border-l-muted px-4 py-3.5"
+          className="flex items-center gap-3 px-4 py-3"
           style={{ animationDelay: `${i * 0.06}s` }}
         >
-          <span className="h-2.5 w-4 animate-pulse rounded bg-muted-foreground/10" />
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground/15" />
+          <span className="h-3 w-5 animate-pulse rounded bg-muted" />
+          <span className="h-8 w-8 animate-pulse rounded-md bg-muted" />
           <div className="flex-1 space-y-1.5">
             <div
-              className="h-3.5 animate-pulse rounded bg-muted-foreground/12"
+              className="h-4 animate-pulse rounded bg-muted"
               style={{ width: `${48 + ((i * 17) % 34)}%` }}
             />
             <div
-              className="h-2.5 animate-pulse rounded bg-muted-foreground/8"
+              className="h-3 animate-pulse rounded bg-muted/70"
               style={{ width: `${62 + ((i * 11) % 24)}%` }}
             />
           </div>
-          <div className="h-2.5 w-10 animate-pulse rounded bg-muted-foreground/10" />
+          <div className="h-5 w-20 animate-pulse rounded-full bg-muted" />
         </div>
       ))}
     </div>

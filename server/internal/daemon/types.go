@@ -43,6 +43,7 @@ type Task struct {
 	PlanItemExecutionKind     string                `json:"plan_item_execution_kind,omitempty"`
 	PlanItemRequiresGitCommit bool                  `json:"plan_item_requires_git_commit,omitempty"`
 	PlanItemBranchName        string                `json:"plan_item_branch_name,omitempty"`
+	UnitTestChecklist         []UnitTestCheckData   `json:"unit_test_checklist,omitempty"`
 	RepoCheckoutRef           string                `json:"repo_checkout_ref,omitempty"`
 	PublishBranchName         string                `json:"publish_branch_name,omitempty"`
 	ReviewTargetIssueID       string                `json:"review_target_issue_id,omitempty"`
@@ -87,15 +88,34 @@ type Task struct {
 	AvailablePipelines               []PlanPipelineData `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
 }
 
+type UnitTestCheckData struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	Command        string `json:"command"`
+	Expected       string `json:"expected"`
+	Required       bool   `json:"required"`
+	Status         string `json:"status"`
+	LastRunAt      string `json:"last_run_at,omitempty"`
+	OutputExcerpt  string `json:"output_excerpt,omitempty"`
+	FailureSummary string `json:"failure_summary,omitempty"`
+	TaskID         string `json:"task_id,omitempty"`
+}
+
 type PlanSpecData struct {
-	Summary         string   `json:"summary"`
-	Goal            string   `json:"goal"`
-	SuccessCriteria []string `json:"success_criteria"`
-	InScope         []string `json:"in_scope"`
-	OutOfScope      []string `json:"out_of_scope"`
-	Approach        string   `json:"approach"`
-	Assumptions     []string `json:"assumptions"`
-	OpenQuestions   []string `json:"open_questions"`
+	Summary         string                  `json:"summary"`
+	Goal            string                  `json:"goal"`
+	SuccessCriteria []string                `json:"success_criteria"`
+	InScope         []string                `json:"in_scope"`
+	OutOfScope      []string                `json:"out_of_scope"`
+	Approach        string                  `json:"approach"`
+	Assumptions     []string                `json:"assumptions"`
+	OpenQuestions   []string                `json:"open_questions"`
+	Clarifications  []PlanClarificationData `json:"clarifications,omitempty"`
+}
+
+type PlanClarificationData struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
 }
 
 type PlanAgentData struct {

@@ -451,6 +451,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/", h.GetPlan)
 					r.Patch("/", h.UpdatePlan)
 					r.Post("/rerun", h.RerunPlan)
+					r.Post("/clarify-spec", h.ClarifyPlanSpec)
 					r.Post("/approve-spec", h.ApprovePlanSpec)
 					r.Post("/commit", h.CommitPlan)
 				})

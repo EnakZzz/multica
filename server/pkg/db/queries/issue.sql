@@ -1,7 +1,8 @@
 -- name: ListIssues :many
 SELECT id, workspace_id, title, description, status, priority,
        assignee_type, assignee_id, creator_type, creator_id,
-       parent_issue_id, position, start_date, due_date, created_at, updated_at, number, project_id
+       parent_issue_id, position, start_date, due_date, created_at, updated_at, number, project_id,
+       unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 FROM issue
 WHERE workspace_id = $1
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status'))
@@ -57,6 +58,17 @@ UPDATE issue SET
     status = $2,
     updated_at = now()
 WHERE id = $1
+RETURNING *;
+
+-- name: UpdateIssueUnitTests :one
+UPDATE issue
+SET unit_test_checklist = sqlc.arg('unit_test_checklist')::jsonb,
+    unit_test_status = sqlc.arg('unit_test_status')::text,
+    unit_test_iteration_count = sqlc.arg('unit_test_iteration_count')::integer,
+    unit_test_last_task_id = sqlc.narg('unit_test_last_task_id'),
+    unit_test_updated_at = now(),
+    updated_at = now()
+WHERE id = sqlc.arg('id')
 RETURNING *;
 
 -- name: CreateIssueDependency :one
@@ -145,9 +157,21 @@ INSERT INTO issue (
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
     origin_type, origin_id
+  ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+      sqlc.narg('origin_type'), sqlc.narg('origin_id')
+  ) RETURNING *;
+
+-- name: CreateIssueWithOriginAndUnitTests :one
+INSERT INTO issue (
+    workspace_id, title, description, status, priority,
+    assignee_type, assignee_id, creator_type, creator_id,
+    parent_issue_id, position, start_date, due_date, number, project_id,
+    origin_type, origin_id, unit_test_checklist, unit_test_status
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    sqlc.narg('origin_type'), sqlc.narg('origin_id')
+    sqlc.narg('origin_type'), sqlc.narg('origin_id'), sqlc.arg('unit_test_checklist')::jsonb,
+    CASE WHEN jsonb_array_length(sqlc.arg('unit_test_checklist')::jsonb) > 0 THEN 'pending' ELSE 'not_required' END
 ) RETURNING *;
 
 -- name: LockIssueDuplicateKey :exec
@@ -169,7 +193,8 @@ DELETE FROM issue WHERE id = $1;
 -- name: ListOpenIssues :many
 SELECT id, workspace_id, title, description, status, priority,
        assignee_type, assignee_id, creator_type, creator_id,
-       parent_issue_id, position, start_date, due_date, created_at, updated_at, number, project_id
+       parent_issue_id, position, start_date, due_date, created_at, updated_at, number, project_id,
+       unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 FROM issue
 WHERE workspace_id = $1
   AND status NOT IN ('done', 'cancelled')

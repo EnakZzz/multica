@@ -89,6 +89,85 @@ describe("ApiClient schema fallback", () => {
       const res = await client.listIssues();
       expect(res).toEqual({ issues: [], total: 0 });
     });
+
+    it("uses safe unit test defaults for legacy issue responses", async () => {
+      stubFetchJson({
+        id: "issue-1",
+        workspace_id: "ws-1",
+        number: 1,
+        identifier: "MUL-1",
+        title: "Legacy issue",
+        description: null,
+        status: "todo",
+        priority: "none",
+        assignee_type: null,
+        assignee_id: null,
+        creator_type: "member",
+        creator_id: "user-1",
+        parent_issue_id: null,
+        project_id: null,
+        position: 0,
+        start_date: null,
+        due_date: null,
+        created_at: "2026-05-21T00:00:00Z",
+        updated_at: "2026-05-21T00:00:00Z",
+      });
+      const client = new ApiClient("https://api.example.test");
+      const issue = await client.getIssue("issue-1");
+      expect(issue.unit_test_checklist).toEqual([]);
+      expect(issue.unit_test_status).toBe("not_required");
+      expect(issue.unit_test_iteration_count).toBe(0);
+      expect(issue.unit_test_max_iterations).toBe(2);
+    });
+
+    it("parses issue unit test checklist result fields", async () => {
+      stubFetchJson({
+        id: "issue-1",
+        workspace_id: "ws-1",
+        number: 1,
+        identifier: "MUL-1",
+        title: "Checklist issue",
+        description: null,
+        status: "todo",
+        priority: "none",
+        assignee_type: "agent",
+        assignee_id: "agent-1",
+        creator_type: "member",
+        creator_id: "user-1",
+        parent_issue_id: null,
+        project_id: null,
+        position: 0,
+        start_date: null,
+        due_date: null,
+        unit_test_status: "failed",
+        unit_test_iteration_count: 1,
+        unit_test_max_iterations: 2,
+        unit_test_checklist: [
+          {
+            id: "check-1",
+            title: "Focused unit test",
+            command: "go test ./internal/service -run TestFocused -count=1",
+            expected: "passes",
+            required: true,
+            status: "failed",
+            last_run_at: "2026-05-21T00:00:00Z",
+            output_excerpt: "expected pass",
+            failure_summary: "test failed",
+            task_id: "task-1",
+          },
+        ],
+        created_at: "2026-05-21T00:00:00Z",
+        updated_at: "2026-05-21T00:00:00Z",
+      });
+      const client = new ApiClient("https://api.example.test");
+      const issue = await client.getIssue("issue-1");
+      expect(issue.unit_test_status).toBe("failed");
+      expect(issue.unit_test_checklist?.[0]).toMatchObject({
+        id: "check-1",
+        status: "failed",
+        failure_summary: "test failed",
+      });
+    });
   });
 
   describe("listGroupedIssues", () => {
@@ -146,8 +225,28 @@ describe("ApiClient schema fallback", () => {
         goal: "Ship it",
         success_criteria: [],
         open_questions: [],
+        clarifications: [],
       });
       expect(res.plans[0]?.spec_approved_at).toBeNull();
+    });
+
+    it("parses plan spec clarification history", async () => {
+      stubFetchJson({
+        id: "plan-1",
+        workspace_id: "ws-1",
+        title: "Plan",
+        prompt: "Build it",
+        status: "spec_review",
+        planner_agent_id: "agent-1",
+        spec: {
+          summary: "Draft",
+          goal: "Ship it",
+          clarifications: [{ question: "Which repo?", answer: "multica" }],
+        },
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.getPlan("plan-1");
+      expect(res.spec.clarifications).toEqual([{ question: "Which repo?", answer: "multica" }]);
     });
 
     it("uses safe execution contract defaults for malformed plan items", async () => {
@@ -185,6 +284,7 @@ describe("ApiClient schema fallback", () => {
       expect(res.plans[0]?.items[0]).toMatchObject({
         acceptance_criteria: [],
         suggested_test_commands: [],
+        unit_test_checklist: [],
         context_resources: ["server/internal/handler/plan.go"],
         risk_notes: [],
         execution_kind: "agent_task",

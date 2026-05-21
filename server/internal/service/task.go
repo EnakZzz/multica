@@ -554,16 +554,23 @@ const IssuePlanPhaseItems = "items"
 
 const PlanItemExecutionKindAgentTask = "agent_task"
 const PlanItemExecutionKindHumanConfirmation = "human_confirmation"
+const maxPlanSpecOpenQuestions = 2
 
 type PlanSpec struct {
-	Summary         string   `json:"summary"`
-	Goal            string   `json:"goal"`
-	SuccessCriteria []string `json:"success_criteria"`
-	InScope         []string `json:"in_scope"`
-	OutOfScope      []string `json:"out_of_scope"`
-	Approach        string   `json:"approach"`
-	Assumptions     []string `json:"assumptions"`
-	OpenQuestions   []string `json:"open_questions"`
+	Summary         string              `json:"summary"`
+	Goal            string              `json:"goal"`
+	SuccessCriteria []string            `json:"success_criteria"`
+	InScope         []string            `json:"in_scope"`
+	OutOfScope      []string            `json:"out_of_scope"`
+	Approach        string              `json:"approach"`
+	Assumptions     []string            `json:"assumptions"`
+	OpenQuestions   []string            `json:"open_questions"`
+	Clarifications  []PlanClarification `json:"clarifications,omitempty"`
+}
+
+type PlanClarification struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
 }
 
 type issuePlanResult struct {
@@ -585,25 +592,26 @@ type issuePlanParent struct {
 }
 
 type issuePlanResultItem struct {
-	Title                 string   `json:"title"`
-	Description           string   `json:"description"`
-	AcceptanceCriteria    []string `json:"acceptance_criteria"`
-	SuggestedTestCommands []string `json:"suggested_test_commands"`
-	ContextResources      []string `json:"context_resources"`
-	RiskNotes             []string `json:"risk_notes"`
-	NodeType              string   `json:"node_type"`
-	ExecutionKind         string   `json:"execution_kind"`
-	ConfirmationQuestion  string   `json:"confirmation_question"`
-	ConfirmationReason    string   `json:"confirmation_reason"`
-	RequiredEvidence      []string `json:"required_evidence"`
-	RequiresGitCommit     *bool    `json:"requires_git_commit"`
-	BranchName            string   `json:"branch_name"`
-	RecommendedAgentID    string   `json:"recommended_agent_id"`
-	MatchScore            int32    `json:"match_score"`
-	MatchReason           string   `json:"match_reason"`
-	MissingCapability     string   `json:"missing_capability"`
-	DependsOnPositions    []int32  `json:"depends_on_positions"`
-	Selected              *bool    `json:"selected"`
+	Title                 string          `json:"title"`
+	Description           string          `json:"description"`
+	AcceptanceCriteria    []string        `json:"acceptance_criteria"`
+	SuggestedTestCommands []string        `json:"suggested_test_commands"`
+	UnitTestChecklist     []UnitTestCheck `json:"unit_test_checklist"`
+	ContextResources      []string        `json:"context_resources"`
+	RiskNotes             []string        `json:"risk_notes"`
+	NodeType              string          `json:"node_type"`
+	ExecutionKind         string          `json:"execution_kind"`
+	ConfirmationQuestion  string          `json:"confirmation_question"`
+	ConfirmationReason    string          `json:"confirmation_reason"`
+	RequiredEvidence      []string        `json:"required_evidence"`
+	RequiresGitCommit     *bool           `json:"requires_git_commit"`
+	BranchName            string          `json:"branch_name"`
+	RecommendedAgentID    string          `json:"recommended_agent_id"`
+	MatchScore            int32           `json:"match_score"`
+	MatchReason           string          `json:"match_reason"`
+	MissingCapability     string          `json:"missing_capability"`
+	DependsOnPositions    []int32         `json:"depends_on_positions"`
+	Selected              *bool           `json:"selected"`
 }
 
 type issuePlanPipeline struct {
@@ -614,25 +622,26 @@ type issuePlanPipeline struct {
 }
 
 type issuePlanPipelineNode struct {
-	Key                   string   `json:"key"`
-	Type                  string   `json:"type"`
-	NodeType              string   `json:"node_type"`
-	Title                 string   `json:"title"`
-	Description           string   `json:"description"`
-	AcceptanceCriteria    []string `json:"acceptance_criteria"`
-	SuggestedTestCommands []string `json:"suggested_test_commands"`
-	ContextResources      []string `json:"context_resources"`
-	RiskNotes             []string `json:"risk_notes"`
-	ExecutionKind         string   `json:"execution_kind"`
-	ConfirmationQuestion  string   `json:"confirmation_question"`
-	ConfirmationReason    string   `json:"confirmation_reason"`
-	RequiredEvidence      []string `json:"required_evidence"`
-	RequiresGitCommit     *bool    `json:"requires_git_commit"`
-	BranchName            string   `json:"branch_name"`
-	AgentID               string   `json:"agent_id"`
-	RepoKeys              []string `json:"repo_keys"`
-	DependsOnNodeKeys     []string `json:"depends_on_node_keys"`
-	Selected              *bool    `json:"selected"`
+	Key                   string          `json:"key"`
+	Type                  string          `json:"type"`
+	NodeType              string          `json:"node_type"`
+	Title                 string          `json:"title"`
+	Description           string          `json:"description"`
+	AcceptanceCriteria    []string        `json:"acceptance_criteria"`
+	SuggestedTestCommands []string        `json:"suggested_test_commands"`
+	UnitTestChecklist     []UnitTestCheck `json:"unit_test_checklist"`
+	ContextResources      []string        `json:"context_resources"`
+	RiskNotes             []string        `json:"risk_notes"`
+	ExecutionKind         string          `json:"execution_kind"`
+	ConfirmationQuestion  string          `json:"confirmation_question"`
+	ConfirmationReason    string          `json:"confirmation_reason"`
+	RequiredEvidence      []string        `json:"required_evidence"`
+	RequiresGitCommit     *bool           `json:"requires_git_commit"`
+	BranchName            string          `json:"branch_name"`
+	AgentID               string          `json:"agent_id"`
+	RepoKeys              []string        `json:"repo_keys"`
+	DependsOnNodeKeys     []string        `json:"depends_on_node_keys"`
+	Selected              *bool           `json:"selected"`
 }
 
 func (r issuePlanResult) shouldCreatePlan() bool {
@@ -680,6 +689,11 @@ func normalizePlanSpec(spec PlanSpec) PlanSpec {
 	spec.Approach = strings.TrimSpace(spec.Approach)
 	spec.Assumptions = normalizeSpecStringList(spec.Assumptions)
 	spec.OpenQuestions = normalizeSpecStringList(spec.OpenQuestions)
+	if len(spec.OpenQuestions) > maxPlanSpecOpenQuestions {
+		spec.Assumptions = normalizeSpecStringList(append(spec.Assumptions, spec.OpenQuestions[maxPlanSpecOpenQuestions:]...))
+		spec.OpenQuestions = spec.OpenQuestions[:maxPlanSpecOpenQuestions]
+	}
+	spec.Clarifications = normalizePlanClarifications(spec.Clarifications)
 	return spec
 }
 
@@ -702,6 +716,43 @@ func normalizeSpecStringList(in []string) []string {
 		out = append(out, item)
 	}
 	return out
+}
+
+func normalizePlanClarifications(in []PlanClarification) []PlanClarification {
+	if len(in) == 0 {
+		return []PlanClarification{}
+	}
+	out := make([]PlanClarification, 0, len(in))
+	seen := make(map[string]int, len(in))
+	for _, item := range in {
+		question := strings.TrimSpace(item.Question)
+		answer := strings.TrimSpace(item.Answer)
+		if question == "" || answer == "" {
+			continue
+		}
+		normalized := PlanClarification{Question: question, Answer: answer}
+		key := strings.ToLower(question)
+		if idx, ok := seen[key]; ok {
+			out[idx] = normalized
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func hasPlanSpecContext(spec PlanSpec) bool {
+	spec = normalizePlanSpec(spec)
+	return spec.Summary != "" ||
+		spec.Goal != "" ||
+		len(spec.SuccessCriteria) > 0 ||
+		len(spec.InScope) > 0 ||
+		len(spec.OutOfScope) > 0 ||
+		spec.Approach != "" ||
+		len(spec.Assumptions) > 0 ||
+		len(spec.OpenQuestions) > 0 ||
+		len(spec.Clarifications) > 0
 }
 
 func marshalPlanSpec(spec PlanSpec) ([]byte, error) {
@@ -802,7 +853,7 @@ func (s *TaskService) EnqueueIssuePlanTask(ctx context.Context, workspaceID, req
 	if projectID.Valid {
 		payload.ProjectID = util.UUIDToString(projectID)
 	}
-	if payload.Phase == IssuePlanPhaseItems {
+	if payload.Phase == IssuePlanPhaseItems || hasPlanSpecContext(spec) {
 		payload.Spec = normalizePlanSpec(spec)
 	}
 	contextJSON, err := json.Marshal(payload)
@@ -1329,10 +1380,12 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	s.captureTaskCompleted(ctx, task)
 
 	reviewGateHandled := false
+	unitTestHandled := false
 	if task.IssueID.Valid {
 		reviewGateHandled = s.applyReviewGateCompleted(ctx, task, result)
 		if !reviewGateHandled {
-			if !s.applyReviewGateRepairTaskCompleted(ctx, task) {
+			unitTestHandled = s.applyUnitTestChecklistCompleted(ctx, task, result)
+			if !unitTestHandled && !s.applyReviewGateRepairTaskCompleted(ctx, task) {
 				s.applyPlanAgentTaskCompleted(ctx, task)
 			}
 		}
@@ -1346,7 +1399,7 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	// tasks, TriggerCommentID threads the fallback under the original comment;
 	// for assignment-triggered tasks it is NULL and the fallback is top-level.
 	// Chat tasks have no IssueID and are handled separately below.
-	if task.IssueID.Valid && !reviewGateHandled {
+	if task.IssueID.Valid && !reviewGateHandled && !unitTestHandled {
 		agentCommented, _ := s.Queries.HasAgentCommentedSince(ctx, db.HasAgentCommentedSinceParams{
 			IssueID:  task.IssueID,
 			AuthorID: task.AgentID,
@@ -2602,6 +2655,7 @@ func parseIssuePlanOutput(output string) (issuePlanResult, error) {
 					Description:           strings.TrimSpace(node.Description),
 					AcceptanceCriteria:    normalizeStringSlice(node.AcceptanceCriteria),
 					SuggestedTestCommands: normalizeStringSlice(node.SuggestedTestCommands),
+					UnitTestChecklist:     NormalizeUnitTestChecks(node.UnitTestChecklist),
 					ContextResources:      normalizeStringSlice(node.ContextResources),
 					RiskNotes:             normalizeStringSlice(node.RiskNotes),
 					NodeType:              NormalizePlanItemNodeType(firstNonEmpty(node.NodeType, node.Type)),
@@ -2649,6 +2703,7 @@ func parseIssuePlanOutput(output string) (issuePlanResult, error) {
 		out.Items[i].DependsOnPositions = normalizedDeps
 		out.Items[i].AcceptanceCriteria = normalizeStringSlice(item.AcceptanceCriteria)
 		out.Items[i].SuggestedTestCommands = normalizeStringSlice(item.SuggestedTestCommands)
+		out.Items[i].UnitTestChecklist = NormalizeUnitTestChecks(item.UnitTestChecklist)
 		out.Items[i].ContextResources = normalizeStringSlice(item.ContextResources)
 		out.Items[i].RiskNotes = normalizeStringSlice(item.RiskNotes)
 		out.Items[i] = normalizeIssuePlanResultItemContract(out.Items[i])
@@ -3001,6 +3056,136 @@ func formatExistingReviewGateRepairComment(repairIssue db.Issue) string {
 	return fmt.Sprintf("Review gate remains blocked. Existing repair issue #%d is still open, so no duplicate repair issue was created.", repairIssue.Number)
 }
 
+func (s *TaskService) applyUnitTestChecklistCompleted(ctx context.Context, task db.AgentTaskQueue, result []byte) bool {
+	if !task.IssueID.Valid || task.TriggerCommentID.Valid {
+		return false
+	}
+	item, err := s.Queries.GetPlanItemByGeneratedIssue(ctx, task.IssueID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("unit test gate plan item lookup failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		}
+		return false
+	}
+	if normalizePlanItemExecutionKind(item.ExecutionKind) != PlanItemExecutionKindAgentTask {
+		return false
+	}
+	fields, err := s.Queries.GetIssueUnitTestFields(ctx, task.IssueID)
+	if err != nil {
+		slog.Warn("unit test gate field lookup failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		return false
+	}
+	checks := NormalizeUnitTestChecklistJSON(fields.UnitTestChecklist)
+	if len(checks) == 0 {
+		return false
+	}
+	issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+	if err != nil {
+		slog.Warn("unit test gate issue lookup failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		return true
+	}
+	if issue.Status == "cancelled" {
+		return true
+	}
+
+	output := taskCompletedOutput(result)
+	report, parseErr := parseUnitTestReportOutput(output)
+	nextChecks := checks
+	nextStatus := UnitTestStatusFailed
+	if parseErr == nil {
+		nextChecks = applyUnitTestReport(checks, report, util.UUIDToString(task.ID), time.Now())
+		nextStatus = UnitTestStatusForChecklist(nextChecks)
+		if report.Status == UnitTestStatusFailed || nextStatus != UnitTestStatusPassed {
+			nextStatus = UnitTestStatusFailed
+		}
+	}
+
+	nextCount := fields.UnitTestIterationCount
+	if nextStatus != UnitTestStatusPassed {
+		nextCount++
+	}
+	if nextStatus != UnitTestStatusPassed && nextCount > UnitTestMaxIterations {
+		nextStatus = UnitTestStatusBlocked
+	}
+	if _, err := s.Queries.UpdateIssueUnitTestFields(ctx, db.UpdateIssueUnitTestFieldsParams{
+		ID:                     task.IssueID,
+		UnitTestChecklist:      MarshalUnitTestChecklist(nextChecks),
+		UnitTestStatus:         nextStatus,
+		UnitTestIterationCount: nextCount,
+		UnitTestLastTaskID:     task.ID,
+	}); err != nil {
+		slog.Warn("unit test gate update failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		return true
+	}
+
+	switch nextStatus {
+	case UnitTestStatusPassed:
+		updated, err := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: task.IssueID, Status: "done"})
+		if err != nil {
+			slog.Warn("unit test gate pass status update failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+			return true
+		}
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(formatUnitTestGateComment(nextStatus, nextChecks, nextCount, nil, false)), "system", pgtype.UUID{})
+		s.broadcastIssueUpdated(updated)
+		s.enqueueUnblockedIssueTasks(ctx, task.IssueID)
+	case UnitTestStatusBlocked:
+		updated, err := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: task.IssueID, Status: "blocked"})
+		if err != nil {
+			slog.Warn("unit test gate blocked status update failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+			return true
+		}
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(formatUnitTestGateComment(nextStatus, nextChecks, nextCount, parseErr, false)), "system", pgtype.UUID{})
+		s.broadcastIssueUpdated(updated)
+	default:
+		updated, err := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: task.IssueID, Status: "todo"})
+		if err != nil {
+			slog.Warn("unit test gate retry status update failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+			return true
+		}
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(formatUnitTestGateComment(nextStatus, nextChecks, nextCount, parseErr, true)), "system", pgtype.UUID{})
+		s.broadcastIssueUpdated(updated)
+		if _, err := s.EnqueueTaskForIssue(ctx, updated); err != nil {
+			slog.Warn("unit test gate retry enqueue failed", "issue_id", util.UUIDToString(task.IssueID), "task_id", util.UUIDToString(task.ID), "error", err)
+		}
+	}
+	return true
+}
+
+func formatUnitTestGateComment(status string, checks []UnitTestCheck, iteration int32, parseErr error, willRetry bool) string {
+	var b strings.Builder
+	switch status {
+	case UnitTestStatusPassed:
+		b.WriteString("Unit test checklist passed. The server marked this issue done.")
+	case UnitTestStatusBlocked:
+		fmt.Fprintf(&b, "Unit test checklist failed after %d iteration(s). The server marked this issue blocked.", iteration)
+	default:
+		fmt.Fprintf(&b, "Unit test checklist failed on iteration %d.", iteration)
+		if willRetry {
+			b.WriteString(" The server requeued this same issue for the same agent.")
+		}
+	}
+	if parseErr != nil {
+		fmt.Fprintf(&b, "\n\nReport error: %s", parseErr.Error())
+	}
+	if len(checks) > 0 {
+		b.WriteString("\n\nChecks:")
+		for _, check := range NormalizeUnitTestChecks(checks) {
+			label := strings.TrimSpace(check.Title)
+			if label == "" {
+				label = strings.TrimSpace(check.Command)
+			}
+			if label == "" {
+				label = check.ID
+			}
+			fmt.Fprintf(&b, "\n- %s: %s", label, check.Status)
+			if check.FailureSummary != "" {
+				fmt.Fprintf(&b, " - %s", check.FailureSummary)
+			}
+		}
+	}
+	return b.String()
+}
+
 func (s *TaskService) applyPlanAgentTaskCompleted(ctx context.Context, task db.AgentTaskQueue) bool {
 	if !task.IssueID.Valid || task.TriggerCommentID.Valid {
 		return false
@@ -3191,14 +3376,15 @@ func (s *TaskService) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue
 
 func (s *TaskService) writeIssuePlanSpec(ctx context.Context, planID pgtype.UUID, spec PlanSpec) error {
 	spec = normalizePlanSpec(spec)
-	specJSON, err := marshalPlanSpec(spec)
-	if err != nil {
-		return fmt.Errorf("marshal plan spec: %w", err)
-	}
 	return s.runInTx(ctx, func(qtx *db.Queries) error {
 		existing, err := qtx.GetPlan(ctx, planID)
 		if err != nil {
 			return fmt.Errorf("load plan: %w", err)
+		}
+		spec = mergeExistingPlanClarifications(existing.Spec, spec)
+		specJSON, err := marshalPlanSpec(spec)
+		if err != nil {
+			return fmt.Errorf("marshal plan spec: %w", err)
 		}
 		title := strings.TrimSpace(existing.Title)
 		if title == "" {
@@ -3219,6 +3405,22 @@ func (s *TaskService) writeIssuePlanSpec(ctx context.Context, planID pgtype.UUID
 		}
 		return nil
 	})
+}
+
+func mergeExistingPlanClarifications(existingJSON []byte, spec PlanSpec) PlanSpec {
+	if len(spec.Clarifications) > 0 || len(existingJSON) == 0 {
+		return normalizePlanSpec(spec)
+	}
+	var existing PlanSpec
+	if err := json.Unmarshal(existingJSON, &existing); err != nil {
+		return normalizePlanSpec(spec)
+	}
+	existing = normalizePlanSpec(existing)
+	if len(existing.Clarifications) == 0 {
+		return normalizePlanSpec(spec)
+	}
+	spec.Clarifications = existing.Clarifications
+	return normalizePlanSpec(spec)
 }
 
 func firstNonEmptyLine(s string) string {
@@ -3342,6 +3544,7 @@ func (s *TaskService) createPlanItemsFromResult(ctx context.Context, qtx *db.Que
 			Description:           strings.TrimSpace(item.Description),
 			AcceptanceCriteria:    normalizeStringSlice(item.AcceptanceCriteria),
 			SuggestedTestCommands: normalizeStringSlice(item.SuggestedTestCommands),
+			UnitTestChecklist:     MarshalUnitTestChecklist(NormalizeUnitTestChecks(item.UnitTestChecklist)),
 			ContextResources:      normalizeStringSlice(item.ContextResources),
 			RiskNotes:             normalizeStringSlice(item.RiskNotes),
 			NodeType:              item.NodeType,
@@ -3539,6 +3742,7 @@ func pipelinePlanItemsFromStages(stages []db.PipelineStage, overrides map[string
 			Description:           description,
 			AcceptanceCriteria:    override.acceptanceCriteria,
 			SuggestedTestCommands: override.suggestedTestCommands,
+			UnitTestChecklist:     override.unitTestChecklist,
 			ContextResources:      override.contextResources,
 			RiskNotes:             override.riskNotes,
 			NodeType:              nodeType,
@@ -3680,6 +3884,7 @@ func (s *TaskService) createPipelinePlanFromPlannerIssue(ctx context.Context, ta
 				Description:           description,
 				AcceptanceCriteria:    override.acceptanceCriteria,
 				SuggestedTestCommands: override.suggestedTestCommands,
+				UnitTestChecklist:     MarshalUnitTestChecklist(NormalizeUnitTestChecks(itemContract.UnitTestChecklist)),
 				ContextResources:      override.contextResources,
 				RiskNotes:             override.riskNotes,
 				NodeType:              itemContract.NodeType,
@@ -3707,21 +3912,23 @@ func (s *TaskService) createPipelinePlanFromPlannerIssue(ctx context.Context, ta
 			if agentID.Valid {
 				assigneeType = pgtype.Text{String: "agent", Valid: true}
 			}
-			child, err := qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
-				WorkspaceID:   sourceIssue.WorkspaceID,
-				Title:         title,
-				Description:   serviceStrOrNullText(description),
-				Status:        "todo",
-				Priority:      "none",
-				AssigneeType:  assigneeType,
-				AssigneeID:    agentID,
-				CreatorType:   "member",
-				CreatorID:     requesterID,
-				ParentIssueID: sourceIssue.ID,
-				Number:        number,
-				ProjectID:     projectID,
-				OriginType:    pgtype.Text{String: "plan_item", Valid: true},
-				OriginID:      item.ID,
+			unitTestChecklist := MarshalUnitTestChecklist(NormalizeUnitTestChecks(itemContract.UnitTestChecklist))
+			child, err := qtx.CreateIssueWithOriginAndUnitTestsManual(ctx, db.CreateIssueWithOriginAndUnitTestsManualParams{
+				WorkspaceID:       sourceIssue.WorkspaceID,
+				Title:             title,
+				Description:       serviceStrOrNullText(description),
+				Status:            "todo",
+				Priority:          "none",
+				AssigneeType:      assigneeType,
+				AssigneeID:        agentID,
+				CreatorType:       "member",
+				CreatorID:         requesterID,
+				ParentIssueID:     sourceIssue.ID,
+				Number:            number,
+				ProjectID:         projectID,
+				OriginType:        pgtype.Text{String: "plan_item", Valid: true},
+				OriginID:          item.ID,
+				UnitTestChecklist: unitTestChecklist,
 			})
 			if err != nil {
 				return fmt.Errorf("create pipeline child issue: %w", err)
@@ -3785,6 +3992,7 @@ type plannerPipelineOverride struct {
 	description           string
 	acceptanceCriteria    []string
 	suggestedTestCommands []string
+	unitTestChecklist     []UnitTestCheck
 	contextResources      []string
 	riskNotes             []string
 	executionKind         string
@@ -3866,6 +4074,7 @@ func (s *TaskService) normalizePlannerPipelineOverrides(ctx context.Context, qtx
 			description:           strings.TrimSpace(node.Description),
 			acceptanceCriteria:    normalizeStringSlice(node.AcceptanceCriteria),
 			suggestedTestCommands: normalizeStringSlice(node.SuggestedTestCommands),
+			unitTestChecklist:     NormalizeUnitTestChecks(node.UnitTestChecklist),
 			contextResources:      normalizeStringSlice(node.ContextResources),
 			riskNotes:             normalizeStringSlice(node.RiskNotes),
 			executionKind:         normalizePlanItemExecutionKind(node.ExecutionKind),
@@ -4016,6 +4225,7 @@ func normalizeIssuePlanResultItemContract(item issuePlanResultItem) issuePlanRes
 	item.ConfirmationQuestion = strings.TrimSpace(item.ConfirmationQuestion)
 	item.ConfirmationReason = strings.TrimSpace(item.ConfirmationReason)
 	item.RequiredEvidence = normalizeStringSlice(item.RequiredEvidence)
+	item.UnitTestChecklist = NormalizeUnitTestChecks(item.UnitTestChecklist)
 	item.BranchName = normalizeIssuePlanBranchName(item.BranchName, item.Title)
 	if item.ExecutionKind != PlanItemExecutionKindHumanConfirmation {
 		if item.RequiresGitCommit == nil {

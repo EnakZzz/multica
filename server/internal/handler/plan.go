@@ -40,31 +40,32 @@ type PlanResponse struct {
 }
 
 type PlanItemResponse struct {
-	ID                    string   `json:"id"`
-	PlanID                string   `json:"plan_id"`
-	Position              int32    `json:"position"`
-	Title                 string   `json:"title"`
-	Description           string   `json:"description"`
-	AcceptanceCriteria    []string `json:"acceptance_criteria"`
-	SuggestedTestCommands []string `json:"suggested_test_commands"`
-	ContextResources      []string `json:"context_resources"`
-	RiskNotes             []string `json:"risk_notes"`
-	NodeType              string   `json:"node_type"`
-	ExecutionKind         string   `json:"execution_kind"`
-	ConfirmationQuestion  string   `json:"confirmation_question"`
-	ConfirmationReason    string   `json:"confirmation_reason"`
-	RequiredEvidence      []string `json:"required_evidence"`
-	RequiresGitCommit     bool     `json:"requires_git_commit"`
-	BranchName            string   `json:"branch_name"`
-	RecommendedAgentID    *string  `json:"recommended_agent_id"`
-	MatchScore            int32    `json:"match_score"`
-	MatchReason           string   `json:"match_reason"`
-	MissingCapability     string   `json:"missing_capability"`
-	DependsOnPositions    []int32  `json:"depends_on_positions"`
-	Selected              bool     `json:"selected"`
-	GeneratedIssueID      *string  `json:"generated_issue_id"`
-	CreatedAt             *string  `json:"created_at"`
-	UpdatedAt             *string  `json:"updated_at"`
+	ID                    string                  `json:"id"`
+	PlanID                string                  `json:"plan_id"`
+	Position              int32                   `json:"position"`
+	Title                 string                  `json:"title"`
+	Description           string                  `json:"description"`
+	AcceptanceCriteria    []string                `json:"acceptance_criteria"`
+	SuggestedTestCommands []string                `json:"suggested_test_commands"`
+	UnitTestChecklist     []service.UnitTestCheck `json:"unit_test_checklist"`
+	ContextResources      []string                `json:"context_resources"`
+	RiskNotes             []string                `json:"risk_notes"`
+	NodeType              string                  `json:"node_type"`
+	ExecutionKind         string                  `json:"execution_kind"`
+	ConfirmationQuestion  string                  `json:"confirmation_question"`
+	ConfirmationReason    string                  `json:"confirmation_reason"`
+	RequiredEvidence      []string                `json:"required_evidence"`
+	RequiresGitCommit     bool                    `json:"requires_git_commit"`
+	BranchName            string                  `json:"branch_name"`
+	RecommendedAgentID    *string                 `json:"recommended_agent_id"`
+	MatchScore            int32                   `json:"match_score"`
+	MatchReason           string                  `json:"match_reason"`
+	MissingCapability     string                  `json:"missing_capability"`
+	DependsOnPositions    []int32                 `json:"depends_on_positions"`
+	Selected              bool                    `json:"selected"`
+	GeneratedIssueID      *string                 `json:"generated_issue_id"`
+	CreatedAt             *string                 `json:"created_at"`
+	UpdatedAt             *string                 `json:"updated_at"`
 }
 
 type createPlanRequest struct {
@@ -87,30 +88,36 @@ type approvePlanSpecRequest struct {
 	Spec *service.PlanSpec `json:"spec"`
 }
 
+type clarifyPlanSpecRequest struct {
+	Spec    *service.PlanSpec           `json:"spec"`
+	Answers []service.PlanClarification `json:"answers"`
+}
+
 type commitPlanRequest struct {
 	AcknowledgedHumanConfirmationItemIDs []string `json:"acknowledged_human_confirmation_item_ids"`
 }
 
 type updatePlanItemRequest struct {
-	Title                 string   `json:"title"`
-	Description           string   `json:"description"`
-	AcceptanceCriteria    []string `json:"acceptance_criteria"`
-	SuggestedTestCommands []string `json:"suggested_test_commands"`
-	ContextResources      []string `json:"context_resources"`
-	RiskNotes             []string `json:"risk_notes"`
-	NodeType              string   `json:"node_type"`
-	ExecutionKind         string   `json:"execution_kind"`
-	ConfirmationQuestion  string   `json:"confirmation_question"`
-	ConfirmationReason    string   `json:"confirmation_reason"`
-	RequiredEvidence      []string `json:"required_evidence"`
-	RequiresGitCommit     *bool    `json:"requires_git_commit"`
-	BranchName            string   `json:"branch_name"`
-	RecommendedAgentID    string   `json:"recommended_agent_id"`
-	MatchScore            int32    `json:"match_score"`
-	MatchReason           string   `json:"match_reason"`
-	MissingCapability     string   `json:"missing_capability"`
-	DependsOnPositions    []int32  `json:"depends_on_positions"`
-	Selected              bool     `json:"selected"`
+	Title                 string                  `json:"title"`
+	Description           string                  `json:"description"`
+	AcceptanceCriteria    []string                `json:"acceptance_criteria"`
+	SuggestedTestCommands []string                `json:"suggested_test_commands"`
+	UnitTestChecklist     []service.UnitTestCheck `json:"unit_test_checklist"`
+	ContextResources      []string                `json:"context_resources"`
+	RiskNotes             []string                `json:"risk_notes"`
+	NodeType              string                  `json:"node_type"`
+	ExecutionKind         string                  `json:"execution_kind"`
+	ConfirmationQuestion  string                  `json:"confirmation_question"`
+	ConfirmationReason    string                  `json:"confirmation_reason"`
+	RequiredEvidence      []string                `json:"required_evidence"`
+	RequiresGitCommit     *bool                   `json:"requires_git_commit"`
+	BranchName            string                  `json:"branch_name"`
+	RecommendedAgentID    string                  `json:"recommended_agent_id"`
+	MatchScore            int32                   `json:"match_score"`
+	MatchReason           string                  `json:"match_reason"`
+	MissingCapability     string                  `json:"missing_capability"`
+	DependsOnPositions    []int32                 `json:"depends_on_positions"`
+	Selected              bool                    `json:"selected"`
 }
 
 func (h *Handler) ListPlans(w http.ResponseWriter, r *http.Request) {
@@ -369,6 +376,65 @@ func (h *Handler) ApprovePlanSpec(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, planToResponse(approved, nil))
 }
 
+func (h *Handler) ClarifyPlanSpec(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	plan, ok := h.loadPlan(w, r)
+	if !ok {
+		return
+	}
+	if plan.Status != "spec_review" {
+		writeError(w, http.StatusBadRequest, "plan spec is not ready for clarification")
+		return
+	}
+	if status, msg := h.validatePlanAgent(r, plan.PlannerAgentID, plan.WorkspaceID); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	var req clarifyPlanSpecRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	spec := planSpecFromJSON(plan.Spec)
+	if req.Spec != nil {
+		spec = service.NormalizePlanSpec(*req.Spec)
+	}
+	nextSpec, answered := applyPlanClarifications(spec, req.Answers)
+	if len(answered) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one clarification answer is required")
+		return
+	}
+	specJSON, err := service.MarshalPlanSpec(nextSpec)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid spec")
+		return
+	}
+	if _, err := h.Queries.UpdatePlanDraft(r.Context(), db.UpdatePlanDraftParams{
+		ID:                plan.ID,
+		Title:             pgtype.Text{},
+		ParentTitle:       plan.ParentTitle,
+		ParentDescription: plan.ParentDescription,
+		Spec:              specJSON,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update plan spec")
+		return
+	}
+	task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), plan.WorkspaceID, parseUUID(userID), plan.ID, plan.PlannerAgentID, plan.Prompt, plan.ProjectID, service.IssuePlanPhaseSpec, nextSpec)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	clarifying, err := h.Queries.MarkPlanPlanning(r.Context(), db.MarkPlanPlanningParams{ID: plan.ID, TaskID: task.ID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clarify plan spec")
+		return
+	}
+	writeJSON(w, http.StatusOK, planToResponse(clarifying, nil))
+}
+
 func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -473,21 +539,23 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 				assigneeID = item.RecommendedAgentID
 			}
 		}
-		child, err := qtx.CreateIssueWithOrigin(r.Context(), db.CreateIssueWithOriginParams{
-			WorkspaceID:   plan.WorkspaceID,
-			Title:         item.Title,
-			Description:   strOrNullText(planItemIssueDescription(item)),
-			Status:        "todo",
-			Priority:      "none",
-			AssigneeType:  assigneeType,
-			AssigneeID:    assigneeID,
-			CreatorType:   "member",
-			CreatorID:     parseUUID(userID),
-			ParentIssueID: parentID,
-			Number:        number,
-			ProjectID:     plan.ProjectID,
-			OriginType:    pgtype.Text{String: "plan_item", Valid: true},
-			OriginID:      item.ID,
+		unitTestChecklist := service.MarshalUnitTestChecklist(service.NormalizeUnitTestChecklistJSON(item.UnitTestChecklist))
+		child, err := qtx.CreateIssueWithOriginAndUnitTestsManual(r.Context(), db.CreateIssueWithOriginAndUnitTestsManualParams{
+			WorkspaceID:       plan.WorkspaceID,
+			Title:             item.Title,
+			Description:       strOrNullText(planItemIssueDescription(item)),
+			Status:            "todo",
+			Priority:          "none",
+			AssigneeType:      assigneeType,
+			AssigneeID:        assigneeID,
+			CreatorType:       "member",
+			CreatorID:         parseUUID(userID),
+			ParentIssueID:     parentID,
+			Number:            number,
+			ProjectID:         plan.ProjectID,
+			OriginType:        pgtype.Text{String: "plan_item", Valid: true},
+			OriginID:          item.ID,
+			UnitTestChecklist: unitTestChecklist,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create child issue")
@@ -696,6 +764,7 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 			Description:           strings.TrimSpace(item.Description),
 			AcceptanceCriteria:    normalizePlanItemStringList(item.AcceptanceCriteria),
 			SuggestedTestCommands: normalizePlanItemStringList(item.SuggestedTestCommands),
+			UnitTestChecklist:     service.MarshalUnitTestChecklist(service.NormalizeUnitTestChecks(item.UnitTestChecklist)),
 			ContextResources:      normalizePlanItemStringList(item.ContextResources),
 			RiskNotes:             normalizePlanItemStringList(item.RiskNotes),
 			NodeType:              nodeType,
@@ -863,6 +932,45 @@ func planSpecFromJSON(data []byte) service.PlanSpec {
 	return service.NormalizePlanSpec(spec)
 }
 
+func applyPlanClarifications(spec service.PlanSpec, answers []service.PlanClarification) (service.PlanSpec, []service.PlanClarification) {
+	spec = service.NormalizePlanSpec(spec)
+	answered := make([]service.PlanClarification, 0, len(answers))
+	byQuestion := make(map[string]int, len(spec.Clarifications))
+	for i, c := range spec.Clarifications {
+		byQuestion[strings.ToLower(strings.TrimSpace(c.Question))] = i
+	}
+	for _, answer := range answers {
+		question := strings.TrimSpace(answer.Question)
+		value := strings.TrimSpace(answer.Answer)
+		if question == "" || value == "" {
+			continue
+		}
+		normalized := service.PlanClarification{Question: question, Answer: value}
+		if idx, ok := byQuestion[strings.ToLower(question)]; ok {
+			spec.Clarifications[idx] = normalized
+		} else {
+			byQuestion[strings.ToLower(question)] = len(spec.Clarifications)
+			spec.Clarifications = append(spec.Clarifications, normalized)
+		}
+		answered = append(answered, normalized)
+	}
+	if len(answered) == 0 {
+		return spec, answered
+	}
+	answeredQuestions := make(map[string]bool, len(answered))
+	for _, item := range answered {
+		answeredQuestions[strings.ToLower(strings.TrimSpace(item.Question))] = true
+	}
+	open := spec.OpenQuestions[:0]
+	for _, question := range spec.OpenQuestions {
+		if !answeredQuestions[strings.ToLower(strings.TrimSpace(question))] {
+			open = append(open, question)
+		}
+	}
+	spec.OpenQuestions = open
+	return service.NormalizePlanSpec(spec), answered
+}
+
 func planItemToResponse(item db.PlanItem) PlanItemResponse {
 	var agentID *string
 	if item.RecommendedAgentID.Valid {
@@ -882,6 +990,7 @@ func planItemToResponse(item db.PlanItem) PlanItemResponse {
 		Description:           item.Description,
 		AcceptanceCriteria:    normalizePlanItemStringList(item.AcceptanceCriteria),
 		SuggestedTestCommands: normalizePlanItemStringList(item.SuggestedTestCommands),
+		UnitTestChecklist:     service.NormalizeUnitTestChecklistJSON(item.UnitTestChecklist),
 		ContextResources:      normalizePlanItemStringList(item.ContextResources),
 		RiskNotes:             normalizePlanItemStringList(item.RiskNotes),
 		NodeType:              service.NormalizePlanItemNodeType(item.NodeType),
@@ -926,10 +1035,43 @@ func planItemIssueDescription(item db.PlanItem) string {
 		appendPlanItemTextSection(&b, "Git commit expected", "No")
 	}
 	appendPlanItemSection(&b, "Acceptance criteria", item.AcceptanceCriteria)
+	appendPlanItemUnitTestSection(&b, "Unit test checklist", service.NormalizeUnitTestChecklistJSON(item.UnitTestChecklist))
 	appendPlanItemSection(&b, "Suggested test commands", item.SuggestedTestCommands)
 	appendPlanItemSection(&b, "Context resources", item.ContextResources)
 	appendPlanItemSection(&b, "Risks and notes", item.RiskNotes)
 	return strings.TrimSpace(b.String())
+}
+
+func appendPlanItemUnitTestSection(b *strings.Builder, title string, checks []service.UnitTestCheck) {
+	checks = service.NormalizeUnitTestChecks(checks)
+	if len(checks) == 0 {
+		return
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString(title)
+	b.WriteString(":\n")
+	for _, check := range checks {
+		b.WriteString("- ")
+		if check.Required {
+			b.WriteString("[required] ")
+		} else {
+			b.WriteString("[optional] ")
+		}
+		if strings.TrimSpace(check.Command) != "" {
+			b.WriteString("`")
+			b.WriteString(check.Command)
+			b.WriteString("`")
+		} else {
+			b.WriteString(check.Title)
+		}
+		if expected := strings.TrimSpace(check.Expected); expected != "" {
+			b.WriteString(" -> ")
+			b.WriteString(expected)
+		}
+		b.WriteString("\n")
+	}
 }
 
 func appendPlanItemSection(b *strings.Builder, title string, items []string) {

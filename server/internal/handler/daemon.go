@@ -1547,6 +1547,11 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			slog.Warn("failed to load plan item execution contract", "issue_id", uuidToString(task.IssueID), "error", err)
 		}
+		if fields, err := h.Queries.GetIssueUnitTestFields(r.Context(), task.IssueID); err == nil {
+			resp.UnitTestChecklist = service.NormalizeUnitTestChecklistJSON(fields.UnitTestChecklist)
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("failed to load issue unit test checklist", "issue_id", uuidToString(task.IssueID), "error", err)
+		}
 		if resp.PlanItemNodeType == "" {
 			if stage, err := h.Queries.GetPipelineRunStageForIssue(r.Context(), task.IssueID); err == nil {
 				resp.PlanItemNodeType = service.NormalizePlanItemNodeType(stage.NodeType)

@@ -2,6 +2,24 @@ export type PlanStatus = "planning" | "spec_review" | "ready" | "failed" | "comm
 export type PlanItemExecutionKind = "agent_task" | "human_confirmation";
 export type PlanItemNodeType = "issue" | "manual" | "check" | "spec_review" | "code_review";
 
+export interface UnitTestCheck {
+  id: string;
+  title: string;
+  command: string;
+  expected: string;
+  required: boolean;
+  status: "pending" | "passed" | "failed" | "skipped" | string;
+  last_run_at: string | null;
+  output_excerpt: string;
+  failure_summary: string;
+  task_id: string;
+}
+
+export interface PlanClarification {
+  question: string;
+  answer: string;
+}
+
 export interface PlanSpec {
   summary: string;
   goal: string;
@@ -11,6 +29,7 @@ export interface PlanSpec {
   approach: string;
   assumptions: string[];
   open_questions: string[];
+  clarifications: PlanClarification[];
 }
 
 export interface PlanItem {
@@ -21,6 +40,7 @@ export interface PlanItem {
   description: string;
   acceptance_criteria: string[];
   suggested_test_commands: string[];
+  unit_test_checklist: UnitTestCheck[];
   context_resources: string[];
   risk_notes: string[];
   node_type: PlanItemNodeType;
@@ -80,6 +100,7 @@ export interface UpdatePlanItemRequest {
   description: string;
   acceptance_criteria?: string[];
   suggested_test_commands?: string[];
+  unit_test_checklist?: UnitTestCheck[];
   context_resources?: string[];
   risk_notes?: string[];
   node_type?: PlanItemNodeType;
@@ -107,6 +128,11 @@ export interface UpdatePlanRequest {
 
 export interface ApprovePlanSpecRequest {
   spec?: PlanSpec;
+}
+
+export interface ClarifyPlanSpecRequest {
+  spec?: PlanSpec;
+  answers: PlanClarification[];
 }
 
 export interface CommitPlanRequest {

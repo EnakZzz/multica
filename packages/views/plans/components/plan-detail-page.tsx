@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Bot, CheckCircle2, ChevronDown, GitBranch, Loader2, RefreshCw, Save, User } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, CheckCircle2, ChevronDown, GitBranch, Loader2, MessageSquare, RefreshCw, Save, Send, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@multica/ui/components/ui/button";
@@ -27,7 +27,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { issueListOptions } from "@multica/core/issues/queries";
 import { planDetailOptions } from "@multica/core/plans/queries";
-import { useApprovePlanSpec, useCommitPlan, useRerunPlan, useUpdatePlan } from "@multica/core/plans/mutations";
+import { useApprovePlanSpec, useClarifyPlanSpec, useCommitPlan, useRerunPlan, useUpdatePlan } from "@multica/core/plans/mutations";
 import type { Issue, PlanItem, PlanSpec } from "@multica/core/types";
 import { PageHeader } from "../../layout/page-header";
 import { AppLink, useNavigation } from "../../navigation";
@@ -132,9 +132,11 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
   const updatePlan = useUpdatePlan(wsId, planId);
   const rerunPlan = useRerunPlan(wsId, planId);
   const approvePlanSpec = useApprovePlanSpec(wsId, planId);
+  const clarifyPlanSpec = useClarifyPlanSpec(wsId, planId);
   const commitPlan = useCommitPlan(wsId, planId);
   const [dirtyItems, setDirtyItems] = useState<PlanItem[] | null>(null);
   const [specDraft, setSpecDraft] = useState<PlanSpec | null>(null);
+  const [clarificationAnswers, setClarificationAnswers] = useState<Record<string, string>>({});
   const [parentTitle, setParentTitle] = useState("");
   const [parentDescription, setParentDescription] = useState("");
   const [confirmationOpen, setConfirmationOpen] = useState(false);
@@ -158,6 +160,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
   const editable = status !== "committed";
   const specEditable = status === "spec_review";
   const itemsVisible = status === "ready" || status === "committed";
+  const specOpenQuestionCount = status === "spec_review" ? spec.open_questions.length : 0;
 
   const selectedHumanConfirmationItems = items.filter(
     (item) => item.selected && item.execution_kind === "human_confirmation" && !item.generated_issue_id,
@@ -177,6 +180,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
         description: item.description,
         acceptance_criteria: item.acceptance_criteria,
         suggested_test_commands: item.suggested_test_commands,
+        unit_test_checklist: item.unit_test_checklist,
         context_resources: item.context_resources,
         risk_notes: item.risk_notes,
         node_type: item.node_type,
@@ -242,6 +246,25 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
       if (approved.id) nav.push(paths.planDetail(approved.id));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to approve spec");
+    }
+  };
+
+  const answerOpenQuestions = async () => {
+    const answers = spec.open_questions
+      .map((question) => ({ question, answer: (clarificationAnswers[question] ?? "").trim() }))
+      .filter((answer) => answer.answer.length > 0);
+    if (answers.length === 0) {
+      toast.error("Answer at least one planner question");
+      return;
+    }
+    try {
+      const clarified = await clarifyPlanSpec.mutateAsync({ spec, answers });
+      setClarificationAnswers({});
+      setSpecDraft(null);
+      toast.success("Answers sent to planner");
+      if (clarified.id) nav.push(paths.planDetail(clarified.id));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to send answers");
     }
   };
 
@@ -328,6 +351,16 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
                 onChange={setSpecDraft}
               />
 
+              {status === "spec_review" && (
+                <SpecConversation
+                  spec={spec}
+                  answers={clarificationAnswers}
+                  pending={clarifyPlanSpec.isPending}
+                  onAnswerChange={(question, answer) => setClarificationAnswers((current) => ({ ...current, [question]: answer }))}
+                  onSubmit={answerOpenQuestions}
+                />
+              )}
+
               {/* Pipeline graph */}
               {itemsVisible && (
                 <div>
@@ -377,7 +410,9 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold">Ready to proceed?</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    Approving starts the task breakdown phase — items will be generated from this spec.
+                    {specOpenQuestionCount > 0
+                      ? "You can answer key questions, or approve now and let task breakdown carry them as assumptions or manual gates."
+                      : "Approving starts the task breakdown phase — items will be generated from this spec."}
                   </p>
                 </div>
 
@@ -511,6 +546,84 @@ function SpecDocument({
 
 // Suppress unused variable — SPEC_SECTIONS is intentionally defined for future use
 void SPEC_SECTIONS;
+
+function SpecConversation({
+  spec,
+  answers,
+  pending,
+  onAnswerChange,
+  onSubmit,
+}: {
+  spec: PlanSpec;
+  answers: Record<string, string>;
+  pending: boolean;
+  onAnswerChange: (question: string, answer: string) => void;
+  onSubmit: () => void;
+}) {
+  const answered = spec.clarifications ?? [];
+  const openQuestions = spec.open_questions ?? [];
+  const hasDraftAnswer = openQuestions.some((question) => (answers[question] ?? "").trim().length > 0);
+
+  if (answered.length === 0 && openQuestions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div>
+      <SectionRule
+        label="Conversation"
+        meta={openQuestions.length > 0 ? `${openQuestions.length} optional` : "resolved"}
+      />
+      <div className="mt-5 space-y-4 border-l-2 border-primary/20 pl-5">
+        {answered.map((item, idx) => (
+          <div key={`${item.question}-${idx}`} className="space-y-2">
+            <div className="flex items-start gap-2.5">
+              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded border bg-muted/40 text-muted-foreground">
+                <MessageSquare className="h-3.5 w-3.5" />
+              </span>
+              <p className="min-w-0 flex-1 text-sm leading-relaxed text-foreground/85">{item.question}</p>
+            </div>
+            <div className="ml-8 rounded-md border bg-primary/5 px-3 py-2 text-sm leading-relaxed text-foreground/85">
+              {item.answer}
+            </div>
+          </div>
+        ))}
+
+        {openQuestions.map((question, idx) => (
+          <div key={question} className="space-y-2">
+            <div className="flex items-start gap-2.5">
+              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded border bg-amber-500/8 text-amber-600">
+                <MessageSquare className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="font-mono text-[9px] font-bold uppercase tracking-widest text-amber-600/60">
+                  Question {String(idx + 1).padStart(2, "0")}
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-foreground/85">{question}</p>
+              </div>
+            </div>
+            <Textarea
+              value={answers[question] ?? ""}
+              disabled={pending}
+              placeholder="Optional: answer this if it changes the plan"
+              className="ml-8 min-h-20 w-[calc(100%-2rem)] resize-none"
+              onChange={(e) => onAnswerChange(question, e.target.value)}
+            />
+          </div>
+        ))}
+
+        {openQuestions.length > 0 && (
+          <div className="flex justify-end">
+            <Button size="sm" disabled={pending || !hasDraftAnswer} onClick={onSubmit}>
+              {pending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+              Send answers
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function SpecTextField({
   label,
@@ -916,6 +1029,7 @@ function PlanItemContractEditor({
       <div className="grid gap-3 md:grid-cols-2">
         <ContractListField label="Acceptance criteria" value={item.acceptance_criteria} disabled={disabled} onChange={(v) => onChange({ acceptance_criteria: v })} />
         <ContractListField label="Suggested test commands" value={item.suggested_test_commands} disabled={disabled} onChange={(v) => onChange({ suggested_test_commands: v })} />
+        <ContractUnitTestField value={item.unit_test_checklist} disabled={disabled} onChange={(v) => onChange({ unit_test_checklist: v })} />
         <ContractListField label="Context resources" value={item.context_resources} disabled={disabled} onChange={(v) => onChange({ context_resources: v })} />
         <ContractListField label="Risks and notes" value={item.risk_notes} disabled={disabled} onChange={(v) => onChange({ risk_notes: v })} />
       </div>
@@ -946,9 +1060,55 @@ function ContractListField({
       />
     </label>
   );
+  }
+
+function ContractUnitTestField({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: PlanItem["unit_test_checklist"] | undefined;
+  disabled: boolean;
+  onChange: (value: PlanItem["unit_test_checklist"]) => void;
+}) {
+  return (
+    <label className="grid gap-1.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/40">
+      <span>Unit test checklist</span>
+      <Textarea
+        value={(value ?? []).map((check) => check.command || check.title).join("\n")}
+        disabled={disabled}
+        placeholder="One runnable unit test command per line"
+        className="min-h-20 resize-none bg-background text-sm font-normal normal-case tracking-normal text-foreground"
+        onChange={(e) => onChange(parseUnitTestChecklist(e.target.value))}
+      />
+    </label>
+  );
 }
 
-// ─── Dependency summary ───────────────────────────────────────────────────────
+function parseUnitTestChecklist(raw: string): PlanItem["unit_test_checklist"] {
+  return parseLineList(raw).map((line) => ({
+    id: unitTestLineID(line),
+    title: line,
+    command: line,
+    expected: "passes",
+    required: true,
+    status: "pending",
+    last_run_at: null,
+    output_excerpt: "",
+    failure_summary: "",
+    task_id: "",
+  }));
+}
+
+function unitTestLineID(line: string): string {
+  const slug = line
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "unit-test";
+}
+
+  // ─── Dependency summary ───────────────────────────────────────────────────────
 
 function PlanDependencySummary({
   item,
@@ -1062,7 +1222,7 @@ function parseLineList(value: string) {
 }
 
 function emptyPlanSpec(): PlanSpec {
-  return { summary: "", goal: "", success_criteria: [], in_scope: [], out_of_scope: [], approach: "", assumptions: [], open_questions: [] };
+  return { summary: "", goal: "", success_criteria: [], in_scope: [], out_of_scope: [], approach: "", assumptions: [], open_questions: [], clarifications: [] };
 }
 
 function formatPositions(positions: number[] | undefined) {

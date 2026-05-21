@@ -8,8 +8,35 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestApplyPlanClarificationsMovesAnsweredQuestions(t *testing.T) {
+	spec := service.PlanSpec{
+		Summary:       "Draft",
+		Goal:          "Clarify before execution",
+		OpenQuestions: []string{"Which repo?", "Which runtime?"},
+		Clarifications: []service.PlanClarification{
+			{Question: "Existing?", Answer: "Keep it"},
+		},
+	}
+
+	next, answered := applyPlanClarifications(spec, []service.PlanClarification{
+		{Question: "Which repo?", Answer: "multica"},
+		{Question: " ", Answer: "ignored"},
+	})
+
+	if len(answered) != 1 || answered[0].Question != "Which repo?" || answered[0].Answer != "multica" {
+		t.Fatalf("answered = %#v", answered)
+	}
+	if got := strings.Join(next.OpenQuestions, "|"); got != "Which runtime?" {
+		t.Fatalf("open questions = %q", got)
+	}
+	if len(next.Clarifications) != 2 || next.Clarifications[1].Answer != "multica" {
+		t.Fatalf("clarifications = %#v", next.Clarifications)
+	}
+}
 
 func TestCreatePlanFromSourceIssueCreatesLinkedPlannerTask(t *testing.T) {
 	if testHandler == nil {

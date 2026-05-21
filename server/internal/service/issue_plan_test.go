@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,39 @@ func TestParseIssuePlanSpecOutputAcceptsSpec(t *testing.T) {
 	}
 }
 
+func TestNormalizePlanSpecLimitsOpenQuestions(t *testing.T) {
+	spec := normalizePlanSpec(PlanSpec{
+		Summary:       "Draft",
+		Goal:          "Reduce planner back-and-forth.",
+		Assumptions:   []string{"Use existing planner UI."},
+		OpenQuestions: []string{"Which repo?", "Which runtime?", "Which style?", "Which rollout?"},
+	})
+
+	if got := strings.Join(spec.OpenQuestions, "|"); got != "Which repo?|Which runtime?" {
+		t.Fatalf("OpenQuestions = %q, want first two questions only", got)
+	}
+	if got := strings.Join(spec.Assumptions, "|"); got != "Use existing planner UI.|Which style?|Which rollout?" {
+		t.Fatalf("Assumptions = %q, want overflow questions carried as assumptions", got)
+	}
+}
+
+func TestMergeExistingPlanClarificationsPreservesHistory(t *testing.T) {
+	existing, err := json.Marshal(PlanSpec{
+		Summary: "Old",
+		Clarifications: []PlanClarification{
+			{Question: "Which repo?", Answer: "multica"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal existing spec: %v", err)
+	}
+
+	merged := mergeExistingPlanClarifications(existing, PlanSpec{Summary: "New", Goal: "Regenerate spec"})
+	if len(merged.Clarifications) != 1 || merged.Clarifications[0].Answer != "multica" {
+		t.Fatalf("clarifications = %#v", merged.Clarifications)
+	}
+}
+
 func TestParseIssuePlanSpecOutputRejectsMissingGoal(t *testing.T) {
 	_, err := parseIssuePlanSpecOutput(`{
 		"summary": "Build a two-stage planner."
@@ -43,6 +77,15 @@ func TestParseIssuePlanOutputAcceptsDependencies(t *testing.T) {
 				"description": "Implement APIs",
 				"acceptance_criteria": ["API creates plan items", "API creates plan items", "No old items remain"],
 				"suggested_test_commands": ["go test ./internal/handler"],
+				"unit_test_checklist": [
+					{
+						"id": "plan-item-save",
+						"title": "Plan item save test",
+						"command": "go test ./internal/handler -run TestPlanItemSave -count=1",
+						"expected": "passes",
+						"required": true
+					}
+				],
 				"context_resources": ["server/internal/handler/plan.go"],
 				"risk_notes": ["Migration must keep existing plans readable"],
 				"recommended_agent_id": "",
@@ -75,6 +118,9 @@ func TestParseIssuePlanOutputAcceptsDependencies(t *testing.T) {
 	}
 	if got := out.Items[0].SuggestedTestCommands; len(got) != 1 || got[0] != "go test ./internal/handler" {
 		t.Fatalf("SuggestedTestCommands = %v, want test command", got)
+	}
+	if got := out.Items[0].UnitTestChecklist; len(got) != 1 || got[0].ID != "plan-item-save" || got[0].Status != UnitTestStatusPending {
+		t.Fatalf("UnitTestChecklist = %#v, want normalized pending check", got)
 	}
 }
 

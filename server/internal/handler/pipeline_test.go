@@ -995,6 +995,191 @@ func TestInternalPlannerIssueCompletionCreatesDirectPlanDraft(t *testing.T) {
 	}
 }
 
+func TestPlanItemUnitTestChecklistCopiesToChildIssueAndGatesCompletion(t *testing.T) {
+	workerID := createHandlerTestAgent(t, "Planner Unit Test Worker "+uuid.NewString(), nil)
+	plannerID := createInternalPlannerAgentForTest(t)
+
+	rr := httptest.NewRecorder()
+	testHandler.CreateIssue(rr, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":         "Add checklist gated issue",
+		"description":   "Planner should emit a runnable unit test checklist.",
+		"status":        "todo",
+		"assignee_type": "agent",
+		"assignee_id":   plannerID,
+	}))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var source IssueResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &source); err != nil {
+		t.Fatalf("decode source issue: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT id::text
+		FROM agent_task_queue
+		WHERE agent_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, plannerID).Scan(&taskID); err != nil {
+		t.Fatalf("load planner task: %v", err)
+	}
+
+	planID, itemsTaskID := completeSpecAndApproveForTest(t, taskID, source.ID)
+	output := `{
+		"needs_plan": false,
+		"reason": "single-agent bug fix with unit gate",
+		"direct_issue": {
+			"title": "Fix checklist gated path",
+			"description": "Implement the gated behavior and prove it with the focused unit test.",
+			"acceptance_criteria": ["Gated behavior is implemented"],
+			"suggested_test_commands": ["pnpm typecheck"],
+			"unit_test_checklist": [
+				{
+					"id": "checklist-gate",
+					"title": "Checklist gate regression",
+					"command": "go test ./internal/service -run TestChecklistGate -count=1",
+					"expected": "passes",
+					"required": true
+				}
+			],
+			"recommended_agent_id": "` + workerID + `",
+			"match_score": 90,
+			"match_reason": "Worker owns this area."
+		}
+	}`
+	completePlannerTaskForTest(t, itemsTaskID, output)
+
+	var planChecklist string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT unit_test_checklist::text
+		FROM plan_item
+		WHERE plan_id = $1 AND title = 'Fix checklist gated path'
+	`, planID).Scan(&planChecklist); err != nil {
+		t.Fatalf("load plan item checklist: %v", err)
+	}
+	if !strings.Contains(planChecklist, "checklist-gate") || !strings.Contains(planChecklist, "TestChecklistGate") {
+		t.Fatalf("plan checklist was not stored: %s", planChecklist)
+	}
+
+	commitRR := httptest.NewRecorder()
+	testHandler.CommitPlan(commitRR, withURLParam(newPipelineRequest(t, "POST", "/api/plans/"+planID+"/commit", nil), "id", planID))
+	if commitRR.Code != http.StatusOK {
+		t.Fatalf("CommitPlan status = %d body=%s", commitRR.Code, commitRR.Body.String())
+	}
+
+	var childID string
+	var childDescription string
+	var childChecklist string
+	var unitStatus string
+	var iterationCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT id::text, description, unit_test_checklist::text, unit_test_status, unit_test_iteration_count
+		FROM issue
+		WHERE parent_issue_id = $1 AND title = 'Fix checklist gated path' AND assignee_id = $2
+	`, source.ID, workerID).Scan(&childID, &childDescription, &childChecklist, &unitStatus, &iterationCount); err != nil {
+		t.Fatalf("load committed checklist child issue: %v", err)
+	}
+	if !strings.Contains(childDescription, "Unit test checklist:") || !strings.Contains(childChecklist, "checklist-gate") {
+		t.Fatalf("child issue missing checklist description/data: description=%s checklist=%s", childDescription, childChecklist)
+	}
+	if unitStatus != "pending" || iterationCount != 0 {
+		t.Fatalf("initial unit status/count = %s/%d, want pending/0", unitStatus, iterationCount)
+	}
+
+	failingReport := `{
+		"unit_test_report": {
+			"status": "failed",
+			"checks": [
+				{
+					"id": "checklist-gate",
+					"status": "failed",
+					"command": "go test ./internal/service -run TestChecklistGate -count=1",
+					"summary": "regression still fails",
+					"output_excerpt": "expected pass"
+				}
+			]
+		},
+		"branch": "feature/checklist-gate",
+		"notes": "first attempt failed"
+	}`
+	completeAgentTaskForTest(t, latestTaskForIssue(t, childID), failingReport)
+
+	var childStatus string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status, unit_test_status, unit_test_iteration_count
+		FROM issue
+		WHERE id = $1
+	`, childID).Scan(&childStatus, &unitStatus, &iterationCount); err != nil {
+		t.Fatalf("load failed checklist status: %v", err)
+	}
+	if childStatus != "todo" || unitStatus != "failed" || iterationCount != 1 {
+		t.Fatalf("after failed report status/unit/count = %s/%s/%d, want todo/failed/1", childStatus, unitStatus, iterationCount)
+	}
+	if taskCount := taskCountForIssue(t, childID); taskCount != 2 {
+		t.Fatalf("task count after failed checklist = %d, want 2", taskCount)
+	}
+
+	passingReport := `{
+		"unit_test_report": {
+			"status": "passed",
+			"checks": [
+				{
+					"id": "checklist-gate",
+					"status": "passed",
+					"command": "go test ./internal/service -run TestChecklistGate -count=1",
+					"summary": "focused unit test passed",
+					"output_excerpt": "ok"
+				}
+			]
+		},
+		"branch": "feature/checklist-gate",
+		"notes": "second attempt passed"
+	}`
+	completeAgentTaskForTest(t, latestTaskForIssue(t, childID), passingReport)
+
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status, unit_test_status, unit_test_iteration_count, unit_test_checklist::text
+		FROM issue
+		WHERE id = $1
+	`, childID).Scan(&childStatus, &unitStatus, &iterationCount, &childChecklist); err != nil {
+		t.Fatalf("load passed checklist status: %v", err)
+	}
+	if childStatus != "done" || unitStatus != "passed" || iterationCount != 1 {
+		t.Fatalf("after passed report status/unit/count = %s/%s/%d, want done/passed/1", childStatus, unitStatus, iterationCount)
+	}
+	if !strings.Contains(childChecklist, `"status": "passed"`) || !strings.Contains(childChecklist, `"task_id"`) {
+		t.Fatalf("child checklist did not store passing result: %s", childChecklist)
+	}
+}
+
+func TestPlanItemUnitTestChecklistBlocksAfterMaxMissingReports(t *testing.T) {
+	workerID := createHandlerTestAgent(t, "Checklist Max Retry Worker "+uuid.NewString(), nil)
+	childID := createChecklistPlanIssueForTest(t, workerID, "Max retry checklist issue")
+
+	for i := 0; i < 3; i++ {
+		completeAgentTaskForTest(t, latestTaskForIssue(t, childID), "implementation completed without JSON report")
+	}
+
+	var childStatus string
+	var unitStatus string
+	var iterationCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status, unit_test_status, unit_test_iteration_count
+		FROM issue
+		WHERE id = $1
+	`, childID).Scan(&childStatus, &unitStatus, &iterationCount); err != nil {
+		t.Fatalf("load max retry checklist status: %v", err)
+	}
+	if childStatus != "blocked" || unitStatus != "blocked" || iterationCount != 3 {
+		t.Fatalf("after max missing reports status/unit/count = %s/%s/%d, want blocked/blocked/3", childStatus, unitStatus, iterationCount)
+	}
+	if taskCount := taskCountForIssue(t, childID); taskCount != 3 {
+		t.Fatalf("task count after max missing reports = %d, want 3", taskCount)
+	}
+}
+
 func TestHumanConfirmationPlanItemRequiresAckAndBlocksDownstream(t *testing.T) {
 	workerID := createHandlerTestAgent(t, "Human Confirmation Worker "+uuid.NewString(), nil)
 	plannerID := createInternalPlannerAgentForTest(t)
@@ -1741,6 +1926,79 @@ func latestTaskForIssue(t *testing.T, issueID string) string {
 		t.Fatalf("load latest task for issue %s: %v", issueID, err)
 	}
 	return taskID
+}
+
+func createChecklistPlanIssueForTest(t *testing.T, workerID, title string) string {
+	t.Helper()
+	ctx := context.Background()
+	checklist := `[
+		{
+			"id": "max-retry-check",
+			"title": "Max retry check",
+			"command": "go test ./internal/service -run TestMaxRetry -count=1",
+			"expected": "passes",
+			"required": true,
+			"status": "pending"
+		}
+	]`
+
+	var planID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO plan (workspace_id, title, prompt, status, planner_agent_id, created_by)
+		VALUES ($1, $2, $3, 'committed', $4, $5)
+		RETURNING id::text
+	`, testWorkspaceID, title+" plan", "Seeded checklist plan", workerID, testUserID).Scan(&planID); err != nil {
+		t.Fatalf("create checklist plan: %v", err)
+	}
+
+	var planItemID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO plan_item (
+			plan_id, position, title, description, recommended_agent_id,
+			execution_kind, unit_test_checklist, selected
+		)
+		VALUES ($1, 1, $2, $3, $4, 'agent_task', $5::jsonb, true)
+		RETURNING id::text
+	`, planID, title, "Seeded issue with unit test checklist.", workerID, checklist).Scan(&planItemID); err != nil {
+		t.Fatalf("create checklist plan item: %v", err)
+	}
+
+	number, err := testHandler.Queries.IncrementIssueCounter(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("allocate checklist issue number: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, title, description, status, priority,
+			assignee_type, assignee_id, creator_type, creator_id,
+			number, origin_type, origin_id, unit_test_checklist, unit_test_status
+		)
+		VALUES (
+			$1, $2, 'Seeded issue with unit test checklist.', 'todo', 'medium',
+			'agent', $3, 'member', $4,
+			$5, 'plan_item', $6, $7::jsonb, 'pending'
+		)
+		RETURNING id::text
+	`, testWorkspaceID, title, workerID, testUserID, number, planItemID, checklist).Scan(&issueID); err != nil {
+		t.Fatalf("create checklist issue: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE plan_item
+		SET generated_issue_id = $1
+		WHERE id = $2
+	`, issueID, planItemID); err != nil {
+		t.Fatalf("link checklist issue to plan item: %v", err)
+	}
+	issue, err := testHandler.Queries.GetIssue(ctx, parseUUID(issueID))
+	if err != nil {
+		t.Fatalf("load seeded checklist issue: %v", err)
+	}
+	if _, err := testHandler.TaskService.EnqueueTaskForIssue(ctx, issue); err != nil {
+		t.Fatalf("enqueue seeded checklist issue: %v", err)
+	}
+	return issueID
 }
 
 func taskCountForIssue(t *testing.T, issueID string) int {

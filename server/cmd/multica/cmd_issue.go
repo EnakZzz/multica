@@ -522,6 +522,28 @@ func runIssueGet(cmd *cobra.Command, args []string) error {
 			strVal(issue, "description"),
 		}}
 		cli.PrintTable(os.Stdout, headers, rows)
+		if checks, ok := issue["unit_test_checklist"].([]any); ok && len(checks) > 0 {
+			fmt.Fprintln(os.Stdout)
+			status := strVal(issue, "unit_test_status")
+			iteration := fmt.Sprintf("%v/%v", issue["unit_test_iteration_count"], issue["unit_test_max_iterations"])
+			fmt.Fprintf(os.Stdout, "Unit tests: status=%s iteration=%s\n", status, iteration)
+			testRows := make([][]string, 0, len(checks))
+			for _, raw := range checks {
+				check, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				testRows = append(testRows, []string{
+					strVal(check, "id"),
+					strVal(check, "status"),
+					strVal(check, "command"),
+					firstNonEmptyString(strVal(check, "failure_summary"), strVal(check, "output_excerpt")),
+				})
+			}
+			if len(testRows) > 0 {
+				cli.PrintTable(os.Stdout, []string{"ID", "STATUS", "COMMAND", "RESULT"}, testRows)
+			}
+		}
 		return nil
 	}
 
@@ -1485,6 +1507,15 @@ func runIssueSubscriberMutation(cmd *cobra.Command, issueID, action string) erro
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
 
 type assigneeMatch struct {
 	Type string // "member" or "agent"

@@ -526,6 +526,7 @@ type PlanItem struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	AcceptanceCriteria    []string           `json:"acceptance_criteria"`
 	SuggestedTestCommands []string           `json:"suggested_test_commands"`
+	UnitTestChecklist     []byte             `json:"unit_test_checklist"`
 	ContextResources      []string           `json:"context_resources"`
 	RiskNotes             []string           `json:"risk_notes"`
 	ExecutionKind         string             `json:"execution_kind"`

@@ -98,6 +98,7 @@ import type {
   GitHubConnectResponse,
   Plan,
   ApprovePlanSpecRequest,
+  ClarifyPlanSpecRequest,
   CommitPlanRequest,
   CreatePlanRequest,
   UpdatePlanRequest,
@@ -134,6 +135,7 @@ import {
   EMPTY_ATTACHMENT,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
+  EMPTY_ISSUE,
   EMPTY_ISSUE_DEPENDENCIES_RESPONSE,
   EMPTY_LIST_PIPELINES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
@@ -149,6 +151,7 @@ import {
   EMPTY_WEBHOOK_DELIVERY,
   GroupedIssuesResponseSchema,
   IssueDependenciesResponseSchema,
+  IssueSchema,
   ListPipelinesResponseSchema,
   ListIssuesResponseSchema,
   ListWebhookDeliveriesResponseSchema,
@@ -560,13 +563,19 @@ export class ApiClient {
   }
 
   async getIssue(id: string): Promise<Issue> {
-    return this.fetch(`/api/issues/${id}`);
+    const raw = await this.fetch<unknown>(`/api/issues/${id}`);
+    return parseWithFallback<Issue>(raw, IssueSchema, EMPTY_ISSUE, {
+      endpoint: "GET /api/issues/{id}",
+    });
   }
 
   async createIssue(data: CreateIssueRequest): Promise<Issue> {
-    return this.fetch("/api/issues", {
+    const raw = await this.fetch<unknown>("/api/issues", {
       method: "POST",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback<Issue>(raw, IssueSchema, EMPTY_ISSUE, {
+      endpoint: "POST /api/issues",
     });
   }
 
@@ -624,6 +633,16 @@ export class ApiClient {
     });
     return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
       endpoint: "POST /api/plans/{id}/approve-spec",
+    });
+  }
+
+  async clarifyPlanSpec(id: string, data: ClarifyPlanSpecRequest): Promise<Plan> {
+    const raw = await this.fetch<unknown>(`/api/plans/${id}/clarify-spec`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback<Plan>(raw, PlanSchema, EMPTY_PLAN, {
+      endpoint: "POST /api/plans/{id}/clarify-spec",
     });
   }
 
@@ -744,9 +763,12 @@ export class ApiClient {
   }
 
   async updateIssue(id: string, data: UpdateIssueRequest): Promise<Issue> {
-    return this.fetch(`/api/issues/${id}`, {
+    const raw = await this.fetch<unknown>(`/api/issues/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback<Issue>(raw, IssueSchema, EMPTY_ISSUE, {
+      endpoint: "PUT /api/issues/{id}",
     });
   }
 
