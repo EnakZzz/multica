@@ -1,12 +1,14 @@
-// hast-util-to-html 4.x does not ship TypeScript declarations. Keep the
-// untyped dependency isolated here so apps type-checking @multica/views source
-// do not need their own ambient module declarations.
+// Some local installs still resolve hast-util-to-html 4.x, which does not ship
+// declarations, while clean Docker installs resolve 9.x. Keep the dependency
+// isolated behind the narrow API we use.
 // @ts-ignore
-import { toHtml as hastToHtml } from "hast-util-to-html";
+import { toHtml as importedToHtml } from "hast-util-to-html";
 
 export interface ToHtmlOptions {
-  allowDangerousHtml?: boolean;
+  allowDangerousHtml?: boolean | null | undefined;
 }
+
+const hastToHtml = importedToHtml as (tree: unknown, options?: ToHtmlOptions) => string;
 
 export function toHtml(tree: unknown, options?: ToHtmlOptions): string {
   return hastToHtml(tree, options);

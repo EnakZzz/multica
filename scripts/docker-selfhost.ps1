@@ -81,7 +81,8 @@ function Ensure-EnvFile {
 
 function Wait-Backend {
     $port = Get-EnvValue -Name "PORT" -Default "8080"
-    $url = "http://localhost:$port/health"
+    $hostAddress = "127.0.0.1"
+    $url = "http://${hostAddress}:$port/health"
 
     Write-Host "==> Waiting for backend to be ready..."
     for ($i = 0; $i -lt 30; $i++) {
@@ -89,8 +90,8 @@ function Wait-Backend {
             Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 | Out-Null
             Write-Host ""
             Write-Host "Multica is running."
-            Write-Host "  Frontend: http://localhost:$(Get-EnvValue -Name 'FRONTEND_PORT' -Default '3000')"
-            Write-Host "  Backend:  http://localhost:$port"
+            Write-Host "  Frontend: http://${hostAddress}:$(Get-EnvValue -Name 'FRONTEND_PORT' -Default '3000')"
+            Write-Host "  Backend:  http://${hostAddress}:$port"
             return
         }
         catch {
