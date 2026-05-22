@@ -31,7 +31,7 @@ export function buildAnchorMarkdown(anchor: ContextAnchor): string {
     const base = `Context: [${anchor.label}](mention://issue/${anchor.id})`;
     return anchor.subtitle ? `${base} — "${anchor.subtitle}"` : base;
   }
-  return `Context: Project "${anchor.label}"`;
+  return `Context: Project "${anchor.label}" (id: ${anchor.id})`;
 }
 
 /**

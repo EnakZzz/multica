@@ -45,10 +45,10 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   );
   const createResource = useCreateProjectResource(wsId, projectId);
   const deleteResource = useDeleteProjectResource(wsId, projectId);
+  const gitResources = resources.filter(isGitRepoResource);
 
   const attachedUrls = new Set(
-    resources
-      .filter(isGitRepoResource)
+    gitResources
       .map((r) => (r.resource_ref as GitRepoResourceRef).url),
   );
 
@@ -91,12 +91,12 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       </button>
       {open && (
         <div className="pl-2 space-y-1.5">
-          {resources.length === 0 && (
+          {gitResources.length === 0 && (
             <p className="text-xs text-muted-foreground">
               {t(($) => $.resources.empty)}
             </p>
           )}
-          {resources.map((resource) => (
+          {gitResources.map((resource) => (
             <ResourceRow
               key={resource.id}
               resource={resource}

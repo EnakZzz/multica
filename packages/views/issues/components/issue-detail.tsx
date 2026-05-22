@@ -15,6 +15,7 @@ import {
   ChevronRight,
   CircleCheck,
   ClipboardCheck,
+  Database,
   GitBranch,
   MoreHorizontal,
   PanelRight,
@@ -80,6 +81,7 @@ import {
   issueAttachmentsOptions,
   issueDependenciesOptions,
 } from "@multica/core/issues/queries";
+import { issueKnowledgeTraceOptions, issueRelatedMemoryOptions } from "@multica/core/project-knowledge";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
@@ -221,6 +223,83 @@ function unitTestStatusLabel(status: string, t: ActivityT): string {
     default:
       return status || t(($) => $.detail.unit_tests_status_pending);
   }
+}
+
+function RelatedMemorySection({ issueId }: { issueId: string }) {
+  const wsId = useWorkspaceId();
+  const { data, isLoading } = useQuery(issueRelatedMemoryOptions(wsId, issueId));
+  const { data: traceData } = useQuery(issueKnowledgeTraceOptions(wsId, issueId));
+  const items = data?.related_memory ?? [];
+  const latestTrace = traceData?.retrieval_logs?.[0];
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium">
+        <Database className="h-3.5 w-3.5 text-muted-foreground" />
+        <span>Related memory</span>
+      </div>
+      <div className="space-y-2 pl-2">
+        {isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : data?.configured === false ? (
+          <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
+            Embeddings are not configured.
+          </div>
+        ) : items.length === 0 ? (
+          <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
+            No similar history found.
+          </div>
+        ) : (
+          items.slice(0, 5).map((result) => {
+            const item = result.memory_item;
+            const page = result.wiki_page;
+            const title = item?.title ?? page?.title ?? result.target_type;
+            const summary = item?.summary ?? page?.body ?? result.snippet;
+            return (
+              <div key={`${result.target_type}-${item?.id ?? page?.id}`} className="rounded-md border bg-background p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-xs font-medium">{item?.kind ?? "wiki"}</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {item?.confidence ?? Math.round(result.score * 100)}
+                  </span>
+                </div>
+                <p className="mt-1 line-clamp-1 text-xs font-medium">{title}</p>
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{summary}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {result.match_type ?? "match"}
+                  {typeof result.keyword_score === "number" ? ` · keyword ${result.keyword_score.toFixed(2)}` : ""}
+                  {typeof result.vector_score === "number" ? ` · vector ${result.vector_score.toFixed(2)}` : ""}
+                </p>
+                {(item?.issue_id || item?.task_id) && (
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                    {item.issue_id ? `issue ${item.issue_id}` : ""}
+                    {item.task_id ? ` task ${item.task_id}` : ""}
+                  </p>
+                )}
+              </div>
+            );
+          })
+        )}
+        {latestTrace && (
+          <div className="rounded-md border bg-muted/20 p-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium">Injected knowledge</span>
+              <span className="text-[11px] text-muted-foreground">
+                {latestTrace.injected_item_count} items
+              </span>
+            </div>
+            <p className="mt-1 line-clamp-2 text-muted-foreground">
+              {latestTrace.selected_items[0]?.title || latestTrace.query_text}
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {latestTrace.search_mode} · {latestTrace.status}
+              {latestTrace.task_outcome ? ` · ${latestTrace.task_outcome}` : ""}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function UnitTestsSection({ issue, t }: { issue: Issue; t: ActivityT }) {
@@ -1529,6 +1608,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           )}
         </div>}
       </div>
+
+      <RelatedMemorySection issueId={id} />
 
       {/* Parent issue — standalone section, only when the issue has a
           parent. Setting a parent is reachable via the issue actions menu;

@@ -2,14 +2,25 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { Check, ChevronRight, Link2, ListTodo, MoreHorizontal, PanelRight, Pin, PinOff, Plus, Trash2, UserMinus } from "lucide-react";
-import { useQuery, type QueryKey } from "@tanstack/react-query";
+import { BookOpen, Check, ChevronRight, Database, Download, Eye, FileText, Link2, ListTodo, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Plus, Search, Trash2, Upload, UserMinus } from "lucide-react";
+import { useMutation, useQuery, type QueryKey } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
-import type { Issue, IssueAssigneeGroup, ProjectStatus, ProjectPriority, UpdateIssueRequest } from "@multica/core/types";
+import type { Issue, IssueAssigneeGroup, ProjectResource, ProjectStatus, ProjectPriority, ProjectWikiPage, SourceFileResourceRef, UpdateIssueRequest } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
-import { projectDetailOptions } from "@multica/core/projects/queries";
-import { useUpdateProject, useDeleteProject } from "@multica/core/projects/mutations";
+import { projectDetailOptions, projectResourcesOptions, useCreateProjectResource, useUpdateProject, useDeleteProject } from "@multica/core/projects";
+import { api } from "@multica/core/api";
+import {
+  projectMemoryItemsOptions,
+  projectKnowledgeRetrievalLogsOptions,
+  projectWikiPagesOptions,
+} from "@multica/core/project-knowledge";
+import {
+  useCreateProjectWikiPage,
+  useUpdateProjectKnowledgeRetrievalLogFeedback,
+  useUpdateProjectWikiPage,
+} from "@multica/core/project-knowledge";
+import type { ProjectKnowledgeRetrievalLog, ProjectKnowledgeSearchResult } from "@multica/core/types";
 import { pinListOptions } from "@multica/core/pins";
 import { useCreatePin, useDeletePin } from "@multica/core/pins";
 import {
@@ -33,6 +44,7 @@ import { ViewStoreProvider, useViewStore } from "@multica/core/issues/stores/vie
 import { filterIssues } from "../../issues/utils/filter";
 import { getProjectIssueMetrics } from "./project-issue-metrics";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { Markdown } from "../../common/markdown";
 import { AppLink, useNavigation } from "../../navigation";
 import { TitleEditor, ContentEditor, type ContentEditorRef } from "../../editor";
 import { PriorityIcon } from "../../issues/components/priority-icon";
@@ -44,8 +56,10 @@ import { GanttView } from "../../issues/components/gantt-view";
 import { BatchActionToolbar } from "../../issues/components/batch-action-toolbar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
+import { Input } from "@multica/ui/components/ui/input";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multica/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multica/ui/components/ui/sheet";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import {
   DropdownMenu,
@@ -323,6 +337,635 @@ function ProjectIssuesSurface({
   );
 }
 
+function RetrievalLogCard({
+  log,
+  onFeedback,
+}: {
+  log: ProjectKnowledgeRetrievalLog;
+  onFeedback: (feedback: "useful" | "noisy") => void;
+}) {
+  const first = log.selected_items[0];
+  const label = first?.title || log.query_text || log.status;
+  return (
+    <div className="rounded-md border bg-background p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-xs font-medium">{log.status}</span>
+        <span className="text-[11px] text-muted-foreground">
+          {log.injected_item_count} injected
+        </span>
+      </div>
+      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{label}</p>
+      <div className="mt-1 flex flex-wrap gap-1 text-[11px] text-muted-foreground">
+        <span>{log.search_mode}</span>
+        {log.task_outcome && <span>· {log.task_outcome}</span>}
+        {log.feedback && <span>· {log.feedback}</span>}
+      </div>
+      <div className="mt-2 flex gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-[11px]"
+          onClick={() => onFeedback("useful")}
+        >
+          Useful
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-[11px]"
+          onClick={() => onFeedback("noisy")}
+        >
+          Noisy
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type WikiTreeNode = WikiTreeFolderNode | WikiTreePageNode;
+
+interface WikiTreeFolderNode {
+  kind: "folder";
+  name: string;
+  path: string;
+  children: WikiTreeNode[];
+}
+
+interface WikiTreePageNode {
+  kind: "page";
+  name: string;
+  path: string;
+  page: ProjectWikiPage;
+}
+
+type WikiTreeRow =
+  | { kind: "folder"; node: WikiTreeFolderNode; depth: number }
+  | { kind: "page"; node: WikiTreePageNode; depth: number };
+
+function wikiSegmentLabel(segment: string): string {
+  return segment
+    .replace(/^\d+[-_]/, "")
+    .replace(/[-_]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function sortWikiTreeNodes(nodes: WikiTreeNode[]): WikiTreeNode[] {
+  return nodes
+    .map((node) =>
+      node.kind === "folder"
+        ? { ...node, children: sortWikiTreeNodes(node.children) }
+        : node,
+    )
+    .sort((a, b) => {
+      if (a.kind !== b.kind) {
+        return a.kind === "folder" ? -1 : 1;
+      }
+      return a.path.localeCompare(b.path, undefined, { numeric: true });
+    });
+}
+
+function buildWikiTree(pages: ProjectWikiPage[]): WikiTreeNode[] {
+  const root: WikiTreeFolderNode = { kind: "folder", name: "", path: "", children: [] };
+  const folders = new Map<string, WikiTreeFolderNode>([["", root]]);
+
+  for (const page of pages) {
+    const parts = page.slug.split("/").map((part) => part.trim()).filter(Boolean);
+    const pageSegment = parts.pop() ?? page.slug;
+    let parent = root;
+    let currentPath = "";
+
+    for (const part of parts) {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      let folder = folders.get(currentPath);
+      if (!folder) {
+        folder = {
+          kind: "folder",
+          name: wikiSegmentLabel(part),
+          path: currentPath,
+          children: [],
+        };
+        folders.set(currentPath, folder);
+        parent.children.push(folder);
+      }
+      parent = folder;
+    }
+
+    const pagePath = parts.length > 0 ? `${parts.join("/")}/${pageSegment}` : pageSegment;
+    parent.children.push({
+      kind: "page",
+      name: page.title || wikiSegmentLabel(pageSegment),
+      path: pagePath,
+      page,
+    });
+  }
+
+  return sortWikiTreeNodes(root.children);
+}
+
+function flattenWikiTree(
+  nodes: WikiTreeNode[],
+  expandedFolders: Record<string, boolean>,
+  depth = 0,
+): WikiTreeRow[] {
+  const rows: WikiTreeRow[] = [];
+  for (const node of nodes) {
+    if (node.kind === "folder") {
+      rows.push({ kind: "folder", node, depth });
+      if (expandedFolders[node.path] !== false) {
+        rows.push(...flattenWikiTree(node.children, expandedFolders, depth + 1));
+      }
+      continue;
+    }
+    rows.push({ kind: "page", node, depth });
+  }
+  return rows;
+}
+
+function isSourceFileResource(
+  resource: ProjectResource,
+): resource is ProjectResource & { resource_ref: SourceFileResourceRef } {
+  if (resource.resource_type !== "source_file") {
+    return false;
+  }
+  const ref = resource.resource_ref as Partial<SourceFileResourceRef>;
+  return (
+    typeof ref.attachment_id === "string" &&
+    typeof ref.filename === "string" &&
+    typeof ref.content_type === "string" &&
+    typeof ref.size_bytes === "number"
+  );
+}
+
+function formatFileSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let value = sizeBytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function SourceFileArchive({ projectId }: { projectId: string }) {
+  const wsId = useWorkspaceId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const { data: resources = [] } = useQuery(
+    projectResourcesOptions(wsId, projectId),
+  );
+  const createResource = useCreateProjectResource(wsId, projectId);
+  const sourceFiles = resources.filter(isSourceFileResource);
+
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    setUploading(true);
+    try {
+      const attachment = await api.uploadFile(file);
+      if (!attachment.id) {
+        throw new Error("Upload did not return an attachment id.");
+      }
+      await createResource.mutateAsync({
+        resource_type: "source_file",
+        resource_ref: {
+          attachment_id: attachment.id,
+          filename: attachment.filename,
+          content_type: attachment.content_type,
+          size_bytes: attachment.size_bytes,
+        },
+        label: attachment.filename,
+      });
+      toast.success("Source file archived.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to archive source file.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDownload = async (resource: ProjectResource & { resource_ref: SourceFileResourceRef }) => {
+    try {
+      const attachment = await api.getAttachment(resource.resource_ref.attachment_id);
+      const url = attachment.download_url || attachment.url;
+      if (!url) {
+        throw new Error("Download URL is missing.");
+      }
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (opened) {
+        opened.opener = null;
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to open source file.");
+    }
+  };
+
+  return (
+    <div className="mt-6">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <FileText className="h-3.5 w-3.5" />
+          Source files
+        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          className="hidden"
+          onChange={handleUpload}
+        />
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title="Archive source file"
+          disabled={uploading || createResource.isPending}
+          onClick={() => inputRef.current?.click()}
+        >
+          <Upload className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="space-y-1.5">
+        {sourceFiles.length === 0 ? (
+          <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+            No source files archived.
+          </div>
+        ) : (
+          sourceFiles.map((resource) => {
+            const ref = resource.resource_ref;
+            return (
+              <div key={resource.id} className="flex items-center gap-2 rounded-md border bg-background p-2 text-xs">
+                <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium" title={ref.filename}>
+                    {ref.filename}
+                  </div>
+                  <div className="truncate text-[11px] text-muted-foreground">
+                    {formatFileSize(ref.size_bytes)} · {ref.content_type}
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  title="Download source file"
+                  onClick={() => handleDownload(resource)}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProjectKnowledgeSurface({ projectId }: { projectId: string }) {
+  const newWikiPageId = "__new_wiki_page__";
+  const wsId = useWorkspaceId();
+  const { data: wikiPages = [], isLoading: wikiLoading } = useQuery(
+    projectWikiPagesOptions(wsId, projectId),
+  );
+  const { data: memoryItems = [], isLoading: memoryLoading } = useQuery(
+    projectMemoryItemsOptions(wsId, projectId),
+  );
+  const { data: retrievalLogs = [], isLoading: retrievalLoading } = useQuery(
+    projectKnowledgeRetrievalLogsOptions(wsId, projectId),
+  );
+  const createWikiPage = useCreateProjectWikiPage(projectId);
+  const updateWikiPage = useUpdateProjectWikiPage(projectId);
+  const updateRetrievalFeedback = useUpdateProjectKnowledgeRetrievalLogFeedback(projectId);
+  const [selectedPageId, setSelectedPageId] = useState<string>("");
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftSlug, setDraftSlug] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+  const [isEditingPage, setIsEditingPage] = useState(false);
+  const [expandedWikiFolders, setExpandedWikiFolders] = useState<Record<string, boolean>>({});
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<ProjectKnowledgeSearchResult[]>([]);
+  const [searchError, setSearchError] = useState("");
+  const wikiTree = useMemo(() => buildWikiTree(wikiPages), [wikiPages]);
+  const wikiTreeRows = useMemo(
+    () => flattenWikiTree(wikiTree, expandedWikiFolders),
+    [wikiTree, expandedWikiFolders],
+  );
+
+  const selectedPage =
+    selectedPageId === newWikiPageId
+      ? undefined
+      : (wikiPages.find((page) => page.id === selectedPageId) ?? wikiPages[0]);
+
+  useEffect(() => {
+    if (selectedPageId === newWikiPageId) {
+      return;
+    }
+    if (!selectedPage) {
+      setSelectedPageId("");
+      setDraftTitle("");
+      setDraftSlug("");
+      setDraftBody("");
+      setIsEditingPage(false);
+      return;
+    }
+    setSelectedPageId(selectedPage.id);
+    setDraftTitle(selectedPage.title);
+    setDraftSlug(selectedPage.slug);
+    setDraftBody(selectedPage.body);
+    setIsEditingPage(false);
+  }, [selectedPage?.id, selectedPageId]);
+
+  const searchMutation = useMutation({
+    mutationFn: (value: string) =>
+      api.searchProjectKnowledge(projectId, { query: value, limit: 8 }),
+    onSuccess: (data) => {
+      setSearchResults(data.results);
+      setSearchError(data.configured ? "" : (data.error ?? "Embeddings are not configured."));
+    },
+    onError: (err) => {
+      setSearchResults([]);
+      setSearchError(err instanceof Error ? err.message : "Search failed.");
+    },
+  });
+
+  const handleNewPage = () => {
+    setSelectedPageId(newWikiPageId);
+    setDraftTitle("New knowledge page");
+    setDraftSlug(`knowledge/new-page-${Date.now().toString(36)}`);
+    setDraftBody("");
+    setIsEditingPage(true);
+  };
+
+  const handleSavePage = () => {
+    const payload = {
+      title: draftTitle.trim(),
+      body: draftBody,
+      status: "draft" as const,
+      source_refs: [],
+    };
+    if (!payload.title) {
+      toast.error("Title is required.");
+      return;
+    }
+    if (selectedPageId && selectedPageId !== newWikiPageId) {
+      updateWikiPage.mutate(
+        { pageId: selectedPageId, ...payload },
+        { onSuccess: () => {
+          setIsEditingPage(false);
+          toast.success("Wiki page saved.");
+        } },
+      );
+      return;
+    }
+    if (!draftSlug.trim()) {
+      toast.error("Slug is required.");
+      return;
+    }
+    createWikiPage.mutate(
+      { slug: draftSlug.trim(), ...payload },
+      { onSuccess: (page) => {
+        setSelectedPageId(page.id);
+        setIsEditingPage(false);
+        toast.success("Wiki page created.");
+      } },
+    );
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 gap-0 border-t">
+      <aside className="w-64 shrink-0 overflow-y-auto border-r bg-muted/20 p-3">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <BookOpen className="h-3.5 w-3.5" />
+            Wiki
+          </div>
+          <Button variant="ghost" size="icon-sm" onClick={handleNewPage} title="New wiki page">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+        <div className="space-y-0.5">
+          {wikiLoading ? (
+            <Skeleton className="h-8 w-full" />
+          ) : wikiPages.length === 0 ? (
+            <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              No wiki pages yet.
+            </div>
+          ) : (
+            wikiTreeRows.map((row) => {
+              const paddingLeft = 8 + row.depth * 14;
+              if (row.kind === "folder") {
+                const expanded = expandedWikiFolders[row.node.path] !== false;
+                return (
+                  <button
+                    key={`folder-${row.node.path}`}
+                    type="button"
+                    onClick={() =>
+                      setExpandedWikiFolders((current) => ({
+                        ...current,
+                        [row.node.path]: !expanded,
+                      }))
+                    }
+                    className="flex h-7 w-full items-center gap-1 rounded-md pr-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    style={{ paddingLeft }}
+                  >
+                    <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", expanded && "rotate-90")} />
+                    <span className="truncate">{row.node.name}</span>
+                  </button>
+                );
+              }
+
+              const page = row.node.page;
+              return (
+                <button
+                  key={page.id}
+                  type="button"
+                  onClick={() => setSelectedPageId(page.id)}
+                  className={cn(
+                    "block w-full rounded-md py-1.5 pr-2 text-left text-sm transition-colors hover:bg-accent",
+                    page.id === selectedPage?.id && "bg-accent text-accent-foreground",
+                  )}
+                  style={{ paddingLeft }}
+                  title={page.slug}
+                >
+                  <span className="block truncate font-medium">{page.title}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {page.slug.split("/").pop() ?? page.slug}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        <SourceFileArchive projectId={projectId} />
+
+        <div className="mt-6 mb-3 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <Database className="h-3.5 w-3.5" />
+          Memory
+        </div>
+        <div className="space-y-2">
+          {memoryLoading ? (
+            <Skeleton className="h-14 w-full" />
+          ) : memoryItems.length === 0 ? (
+            <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              No captured memory yet.
+            </div>
+          ) : (
+            memoryItems.slice(0, 12).map((item) => (
+              <div key={item.id} className="rounded-md border bg-background p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-xs font-medium">{item.kind}</span>
+                  <span className="text-[11px] text-muted-foreground">{item.confidence}</span>
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.title}</p>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="mt-6 mb-3 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <Search className="h-3.5 w-3.5" />
+          Retrieval logs
+        </div>
+        <div className="space-y-2">
+          {retrievalLoading ? (
+            <Skeleton className="h-14 w-full" />
+          ) : retrievalLogs.length === 0 ? (
+            <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              No retrieval trace yet.
+            </div>
+          ) : (
+            retrievalLogs.slice(0, 8).map((log) => (
+              <RetrievalLogCard
+                key={log.id}
+                log={log}
+                onFeedback={(feedback) =>
+                  updateRetrievalFeedback.mutate({ logId: log.id, feedback })
+                }
+              />
+            ))
+          )}
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="border-b p-3">
+          <div className="flex items-center gap-2">
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search project knowledge"
+              className="h-8"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && query.trim()) {
+                  searchMutation.mutate(query.trim());
+                }
+              }}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => query.trim() && searchMutation.mutate(query.trim())}
+              disabled={!query.trim() || searchMutation.isPending}
+            >
+              <Search className="mr-1.5 h-3.5 w-3.5" />
+              Search
+            </Button>
+          </div>
+          {searchError && <p className="mt-2 text-xs text-destructive">{searchError}</p>}
+          {searchResults.length > 0 && (
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {searchResults.map((result) => {
+                const title = result.wiki_page?.title ?? result.memory_item?.title ?? result.target_type;
+                const summary = result.memory_item?.summary ?? result.wiki_page?.body ?? result.snippet;
+                return (
+                  <div key={`${result.target_type}-${result.wiki_page?.id ?? result.memory_item?.id}`} className="rounded-md border bg-background p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs font-medium">{title}</span>
+                      <span className="text-[11px] text-muted-foreground">{result.score.toFixed(2)}</span>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{summary}</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="truncate text-lg font-semibold">
+                {draftTitle.trim() || "Untitled wiki page"}
+              </h2>
+              <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                {draftSlug.trim() || "unsaved"}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsEditingPage((value) => !value)}
+            >
+              {isEditingPage ? (
+                <Eye className="mr-1.5 h-3.5 w-3.5" />
+              ) : (
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {isEditingPage ? "Preview" : "Edit"}
+            </Button>
+          </div>
+
+          {isEditingPage ? (
+            <>
+              <div className="mb-3 grid gap-2 md:grid-cols-[1fr_220px]">
+                <Input
+                  value={draftTitle}
+                  onChange={(event) => setDraftTitle(event.target.value)}
+                  placeholder="Page title"
+                />
+                <Input
+                  value={draftSlug}
+                  onChange={(event) => setDraftSlug(event.target.value)}
+                  placeholder="slug"
+                  disabled={selectedPageId !== newWikiPageId}
+                />
+              </div>
+              <Textarea
+                value={draftBody}
+                onChange={(event) => setDraftBody(event.target.value)}
+                placeholder="Stable project knowledge, decisions, conventions, and handoff notes."
+                className="min-h-0 flex-1 resize-none font-mono text-sm"
+              />
+              <div className="mt-3 flex justify-end">
+                <Button size="sm" onClick={handleSavePage} disabled={createWikiPage.isPending || updateWikiPage.isPending}>
+                  <Check className="mr-1.5 h-3.5 w-3.5" />
+                  Save page
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-md border bg-background p-5">
+              {draftBody.trim() ? (
+                <Markdown mode="full">{draftBody}</Markdown>
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  No content yet.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ProjectDetail
 // ---------------------------------------------------------------------------
@@ -362,6 +1005,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [progressOpen, setProgressOpen] = useState(true);
   const [descriptionOpen, setDescriptionOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState<"issues" | "knowledge">("issues");
 
   // Sidebar panel
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -726,13 +1370,37 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             </div>
           </PageHeader>
 
-          <ViewStoreProvider store={projectViewStore}>
-              <ProjectIssuesSurface
-                projectId={projectId}
-                scope={projectScope}
-                filter={projectFilter}
-              />
-            </ViewStoreProvider>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex h-10 shrink-0 items-center gap-1 border-b px-3">
+              <Button
+                variant={activeTab === "issues" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setActiveTab("issues")}
+              >
+                <ListTodo className="mr-1.5 h-3.5 w-3.5" />
+                Issues
+              </Button>
+              <Button
+                variant={activeTab === "knowledge" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setActiveTab("knowledge")}
+              >
+                <BookOpen className="mr-1.5 h-3.5 w-3.5" />
+                Knowledge
+              </Button>
+            </div>
+            {activeTab === "issues" ? (
+              <ViewStoreProvider store={projectViewStore}>
+                <ProjectIssuesSurface
+                  projectId={projectId}
+                  scope={projectScope}
+                  filter={projectFilter}
+                />
+              </ViewStoreProvider>
+            ) : (
+              <ProjectKnowledgeSurface projectId={projectId} />
+            )}
+          </div>
           </div>
         </ResizablePanel>
         {!isMobile && <ResizableHandle />}

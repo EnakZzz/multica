@@ -2,10 +2,12 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, GitBranch, Loader2, RotateCcw, Square } from "lucide-react";
+import { ChevronRight, Database, GitBranch, Loader2, RotateCcw, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { issueKeys } from "@multica/core/issues/queries";
+import { taskKnowledgeTraceOptions, taskRelatedMemoryOptions } from "@multica/core/project-knowledge";
+import { useWorkspaceId } from "@multica/core/hooks";
 import type { AgentTask, TaskFailureReason } from "@multica/core/types";
 import { timeAgo } from "@multica/core/utils";
 import {
@@ -403,6 +405,46 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
         </RowActions>
       </RowShell>
       {codeOutput && <CodeOutput output={codeOutput} />}
+      <TaskRelatedMemoryInline taskId={task.id} />
+    </div>
+  );
+}
+
+function TaskRelatedMemoryInline({ taskId }: { taskId: string }) {
+  const wsId = useWorkspaceId();
+  const { data } = useQuery(taskRelatedMemoryOptions(wsId, taskId));
+  const { data: traceData } = useQuery(taskKnowledgeTraceOptions(wsId, taskId));
+  const items = data?.related_memory ?? [];
+  const latestTrace = traceData?.retrieval_logs?.[0];
+  if ((!data?.configured || items.length === 0) && !latestTrace) return null;
+  return (
+    <div className="ml-8 mb-1 space-y-1 rounded border border-border/60 bg-muted/20 px-2 py-1.5">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+        <Database className="h-3.5 w-3.5 text-muted-foreground" />
+        <span>Related memory</span>
+      </div>
+      {latestTrace && (
+        <div className="text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Injected</span>
+          <span> · </span>
+          <span>{latestTrace.injected_item_count} items</span>
+          <span> · </span>
+          <span>{latestTrace.status}</span>
+        </div>
+      )}
+      {items.slice(0, 3).map((result) => {
+        const item = result.memory_item;
+        const page = result.wiki_page;
+        return (
+          <div key={`${result.target_type}-${item?.id ?? page?.id}`} className="text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{item?.kind ?? "wiki"}</span>
+            <span> · </span>
+            <span>{item?.title ?? page?.title ?? result.snippet}</span>
+            <span> · </span>
+            <span>{result.match_type ?? "match"}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

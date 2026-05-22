@@ -23,12 +23,12 @@ describe("buildAnchorMarkdown", () => {
     expect(md).toBe("Context: [MUL-7](mention://issue/uuid-x)");
   });
 
-  it("formats a project anchor as plain text (no mention type)", () => {
+  it("formats a project anchor with the project id", () => {
     const md = buildAnchorMarkdown({
       type: "project",
       id: "proj-uuid",
       label: "Authentication",
     });
-    expect(md).toBe('Context: Project "Authentication"');
+    expect(md).toBe('Context: Project "Authentication" (id: proj-uuid)');
   });
 });
