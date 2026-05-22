@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestProjectResourceLifecycle(t *testing.T) {
@@ -135,6 +139,76 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	}
 }
 
+func TestProjectResourceSourceFileValidatesAttachmentWorkspace(t *testing.T) {
+	project := createProjectResourceTestProject(t, "Source file resource project")
+	attachmentID := createProjectResourceTestAttachment(t, testWorkspaceID, "LOST PET (1).pdf")
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "source_file",
+		"resource_ref": map[string]any{
+			"attachment_id": attachmentID,
+			"filename":      "client-supplied.pdf",
+			"content_type":  "application/octet-stream",
+			"size_bytes":    1,
+		},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateProjectResource(source_file): expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var created ProjectResourceResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode CreateProjectResource: %v", err)
+	}
+	if created.ResourceType != "source_file" {
+		t.Fatalf("created.ResourceType = %q, want source_file", created.ResourceType)
+	}
+	var ref sourceFileRef
+	if err := json.Unmarshal(created.ResourceRef, &ref); err != nil {
+		t.Fatalf("decode resource_ref: %v", err)
+	}
+	if ref.AttachmentID != attachmentID {
+		t.Errorf("attachment_id = %q, want %q", ref.AttachmentID, attachmentID)
+	}
+	if ref.Filename != "LOST PET (1).pdf" {
+		t.Errorf("filename = %q, want DB attachment filename", ref.Filename)
+	}
+	if ref.ContentType != "application/pdf" {
+		t.Errorf("content_type = %q, want application/pdf", ref.ContentType)
+	}
+	if ref.SizeBytes != 12345 {
+		t.Errorf("size_bytes = %d, want 12345", ref.SizeBytes)
+	}
+
+	missingID := uuid.NewString()
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "source_file",
+		"resource_ref":  map[string]any{"attachment_id": missingID},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("missing source attachment: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	foreignWorkspaceID := createProjectResourceTestWorkspace(t)
+	foreignAttachmentID := createProjectResourceTestAttachment(t, foreignWorkspaceID, "foreign.pdf")
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "source_file",
+		"resource_ref":  map[string]any{"attachment_id": foreignAttachmentID},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("foreign source attachment: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestProjectResourceAcceptsSSHRepoURLs covers GitHub issue #2484: SSH and
 // scp-like git URLs must be accepted alongside https URLs, because workspace
 // repos configured with an SSH remote previously got rejected when attached
@@ -215,9 +289,9 @@ func TestIsValidGitRepoURL(t *testing.T) {
 		"ftp://example.com/repo",        // unsupported scheme
 		"file:///tmp/repo",              // unsupported scheme
 		"some random text with spaces",
-		"github.com:org/repo@branch",    // '@' after ':' belongs to the path, not user
-		"foo:bar@baz",                   // '@' after ':' with no scheme
-		":foo/bar",                      // leading ':' with no host
+		"github.com:org/repo@branch", // '@' after ':' belongs to the path, not user
+		"foo:bar@baz",                // '@' after ':' with no scheme
+		":foo/bar",                   // leading ':' with no host
 	}
 	for _, s := range good {
 		if !isValidGitRepoURL(s) {
@@ -302,6 +376,90 @@ func TestValidateGitRepoRefKeepsLegacyGithubRepoType(t *testing.T) {
 	if _, err := validateAndNormalizeResourceRef("github_repo", ref); err != nil {
 		t.Fatalf("legacy github_repo should remain valid: %v", err)
 	}
+}
+
+func TestValidateSourceFileRef(t *testing.T) {
+	ref, err := json.Marshal(map[string]any{
+		"attachment_id": uuid.NewString(),
+		"filename":      "  source.pdf  ",
+		"content_type":  " application/pdf ",
+		"size_bytes":    42,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	normalized, err := validateAndNormalizeResourceRef("source_file", ref)
+	if err != nil {
+		t.Fatalf("validateAndNormalizeResourceRef: %v", err)
+	}
+	var got sourceFileRef
+	if err := json.Unmarshal(normalized, &got); err != nil {
+		t.Fatalf("decode normalized ref: %v", err)
+	}
+	if got.Filename != "source.pdf" || got.ContentType != "application/pdf" || got.SizeBytes != 42 {
+		t.Fatalf("normalized source file ref mismatch: %+v", got)
+	}
+
+	bad, _ := json.Marshal(map[string]any{"attachment_id": "not-a-uuid"})
+	if _, err := validateAndNormalizeResourceRef("source_file", bad); err == nil {
+		t.Fatal("invalid source_file attachment_id should fail")
+	}
+}
+
+func createProjectResourceTestProject(t *testing.T, title string) ProjectResponse {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": title,
+	})
+	testHandler.CreateProject(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateProject: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var project ProjectResponse
+	if err := json.NewDecoder(w.Body).Decode(&project); err != nil {
+		t.Fatalf("decode CreateProject: %v", err)
+	}
+	t.Cleanup(func() {
+		req := newRequest("DELETE", "/api/projects/"+project.ID, nil)
+		req = withURLParam(req, "id", project.ID)
+		testHandler.DeleteProject(httptest.NewRecorder(), req)
+	})
+	return project
+}
+
+func createProjectResourceTestWorkspace(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+	id := uuid.NewString()
+	slug := "source-file-" + strings.ReplaceAll(id, "-", "")
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO workspace (id, name, slug, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+	`, id, "Foreign Source File Test", slug, "FSF"); err != nil {
+		t.Fatalf("create foreign workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, id)
+	})
+	return id
+}
+
+func createProjectResourceTestAttachment(t *testing.T, workspaceID, filename string) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO attachment (
+			id, workspace_id, uploader_type, uploader_id, filename, url, content_type, size_bytes
+		)
+		VALUES ($1, $2, 'member', $3, $4, $5, 'application/pdf', 12345)
+	`, id, workspaceID, testUserID, filename, "http://example.test/uploads/"+id+".pdf"); err != nil {
+		t.Fatalf("create attachment: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM attachment WHERE id = $1`, id)
+	})
+	return id
 }
 
 // TestProjectResourceCountBreadcrumb asserts the resource_count breadcrumb

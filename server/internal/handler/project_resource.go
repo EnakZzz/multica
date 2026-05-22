@@ -54,6 +54,8 @@ type CreateProjectResourceRequest struct {
 	Position     *int32          `json:"position"`
 }
 
+const projectResourceTypeSourceFile = "source_file"
+
 // validateAndNormalizeResourceRef checks the payload for a known resource_type.
 // New types are added here without schema migration; unknown types are rejected
 // at the API boundary so a typo can't slip through and produce a resource the
@@ -65,6 +67,16 @@ func validateAndNormalizeResourceRef(resourceType string, ref json.RawMessage) (
 	switch resourceType {
 	case "git_repo", "github_repo":
 		return validateGitRepoRef(resourceType, ref)
+	case projectResourceTypeSourceFile:
+		payload, err := validateSourceFileRef(ref)
+		if err != nil {
+			return nil, err
+		}
+		out, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
 	default:
 		return nil, fmt.Errorf("unknown resource_type %q", resourceType)
 	}
@@ -88,6 +100,68 @@ func validateGitRepoRef(resourceType string, ref json.RawMessage) (json.RawMessa
 		return nil, fmt.Errorf("%s: url must be a valid http(s), ssh, or scp-style Git URL", resourceType)
 	}
 	payload.DefaultBranchHint = strings.TrimSpace(payload.DefaultBranchHint)
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+type sourceFileRef struct {
+	AttachmentID string `json:"attachment_id"`
+	Filename     string `json:"filename"`
+	ContentType  string `json:"content_type"`
+	SizeBytes    int64  `json:"size_bytes"`
+}
+
+func validateSourceFileRef(ref json.RawMessage) (sourceFileRef, error) {
+	var payload sourceFileRef
+	if err := json.Unmarshal(ref, &payload); err != nil {
+		return sourceFileRef{}, fmt.Errorf("invalid %s payload: %w", projectResourceTypeSourceFile, err)
+	}
+	payload.AttachmentID = strings.TrimSpace(payload.AttachmentID)
+	if payload.AttachmentID == "" {
+		return sourceFileRef{}, fmt.Errorf("%s: attachment_id is required", projectResourceTypeSourceFile)
+	}
+	if _, err := parseUUIDLoose(payload.AttachmentID); err != nil {
+		return sourceFileRef{}, fmt.Errorf("%s: attachment_id must be a valid uuid", projectResourceTypeSourceFile)
+	}
+	payload.Filename = strings.TrimSpace(payload.Filename)
+	payload.ContentType = strings.TrimSpace(payload.ContentType)
+	if payload.SizeBytes < 0 {
+		return sourceFileRef{}, fmt.Errorf("%s: size_bytes must be non-negative", projectResourceTypeSourceFile)
+	}
+	return payload, nil
+}
+
+func (h *Handler) validateAndNormalizeProjectResourceRef(ctx context.Context, workspaceID pgtype.UUID, resourceType string, ref json.RawMessage) (json.RawMessage, error) {
+	normalized, err := validateAndNormalizeResourceRef(resourceType, ref)
+	if err != nil {
+		return nil, err
+	}
+	if resourceType != projectResourceTypeSourceFile {
+		return normalized, nil
+	}
+
+	var payload sourceFileRef
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		return nil, err
+	}
+	attachmentUUID, _ := parseUUIDLoose(payload.AttachmentID)
+	attachment, err := h.Queries.GetAttachment(ctx, db.GetAttachmentParams{
+		ID:          attachmentUUID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: attachment not found in this workspace", projectResourceTypeSourceFile)
+	}
+
+	payload = sourceFileRef{
+		AttachmentID: uuidToString(attachment.ID),
+		Filename:     attachment.Filename,
+		ContentType:  attachment.ContentType,
+		SizeBytes:    attachment.SizeBytes,
+	}
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -201,7 +275,7 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "resource_type is required")
 		return
 	}
-	normalizedRef, err := validateAndNormalizeResourceRef(req.ResourceType, req.ResourceRef)
+	normalizedRef, err := h.validateAndNormalizeProjectResourceRef(r.Context(), project.WorkspaceID, req.ResourceType, req.ResourceRef)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

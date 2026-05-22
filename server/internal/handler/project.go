@@ -231,7 +231,7 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "resources[].resource_type is required")
 			return
 		}
-		ref, err := validateAndNormalizeResourceRef(res.ResourceType, res.ResourceRef)
+		ref, err := h.validateAndNormalizeProjectResourceRef(r.Context(), wsUUID, res.ResourceType, res.ResourceRef)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "resources["+strconv.Itoa(i)+"]: "+err.Error())
 			return

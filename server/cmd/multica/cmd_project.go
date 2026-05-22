@@ -612,7 +612,8 @@ func runProjectResourceRemove(cmd *cobra.Command, args []string) error {
 }
 
 // summarizeResourceRef extracts the most useful single string from a
-// resource_ref object — for github_repo this is the URL.
+// resource_ref object — for github_repo this is the URL, for source_file this
+// is the archived filename.
 func summarizeResourceRef(raw any) string {
 	m, ok := raw.(map[string]any)
 	if !ok {
@@ -620,6 +621,9 @@ func summarizeResourceRef(raw any) string {
 	}
 	if u, ok := m["url"].(string); ok && u != "" {
 		return u
+	}
+	if filename, ok := m["filename"].(string); ok && filename != "" {
+		return filename
 	}
 	if data, err := json.Marshal(m); err == nil {
 		return string(data)
