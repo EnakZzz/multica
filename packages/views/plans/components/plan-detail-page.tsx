@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Bot, CheckCircle2, ChevronDown, GitBranch, Loader2, RefreshCw, Save, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -28,6 +28,7 @@ import { agentListOptions } from "@multica/core/workspace/queries";
 import { issueListOptions } from "@multica/core/issues/queries";
 import { planDetailOptions } from "@multica/core/plans/queries";
 import { useApprovePlanSpec, useCommitPlan, useRerunPlan, useUpdatePlan } from "@multica/core/plans/mutations";
+import { usePlanDraftStore } from "@multica/core/plans";
 import type { Issue, PlanItem, PlanSpec } from "@multica/core/types";
 import { PageHeader } from "../../layout/page-header";
 import { AppLink, useNavigation } from "../../navigation";
@@ -139,6 +140,39 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
   const [parentDescription, setParentDescription] = useState("");
   const [confirmationOpen, setConfirmationOpen] = useState(false);
 
+  const getDraft = usePlanDraftStore.getState().getDraft;
+  const setStoreDraft = usePlanDraftStore((s) => s.setDraft);
+  const clearStoreDraft = usePlanDraftStore((s) => s.clearDraft);
+
+  // Track whether we've already seeded local state from the store for this planId.
+  const seededPlanIdRef = useRef<string | null>(null);
+
+  // On first render for a given planId, restore draft state from the store.
+  // We guard with seededPlanIdRef so this only runs once per planId and never
+  // overwrites edits the user has already made in this session.
+  if (seededPlanIdRef.current !== planId) {
+    seededPlanIdRef.current = planId;
+    const saved = getDraft(planId);
+    if (saved) {
+      setDirtyItems(saved.dirtyItems);
+      setSpecDraft(saved.specDraft);
+      setParentTitle(saved.parentTitle);
+      setParentDescription(saved.parentDescription);
+    } else {
+      // Different plan loaded — reset local state so previous plan edits don't bleed in.
+      setDirtyItems(null);
+      setSpecDraft(null);
+      setParentTitle("");
+      setParentDescription("");
+    }
+  }
+
+  // Mirror every edit into the draft store so navigating away and back restores state.
+  useEffect(() => {
+    if (!planId) return;
+    setStoreDraft(planId, { specDraft, dirtyItems, parentTitle, parentDescription });
+  }, [planId, specDraft, dirtyItems, parentTitle, parentDescription, setStoreDraft]);
+
   const items = dirtyItems ?? plan?.items ?? [];
   const spec = specDraft ?? plan?.spec ?? emptyPlanSpec();
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
@@ -197,6 +231,9 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
     });
     setDirtyItems(null);
     setSpecDraft(null);
+    setParentTitle("");
+    setParentDescription("");
+    clearStoreDraft(planId);
     toast.success("Plan saved");
     return updated;
   };
@@ -218,6 +255,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
           .filter((item) => item.selected && item.execution_kind === "human_confirmation" && !item.generated_issue_id)
           .map((item) => item.id),
       });
+      clearStoreDraft(planId);
       setConfirmationOpen(false);
       toast.success("Issues created");
       if (committed.parent_issue_id) nav.push(paths.issueDetail(committed.parent_issue_id));
@@ -238,6 +276,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
     try {
       const approved = await approvePlanSpec.mutateAsync({ spec });
       setSpecDraft(null);
+      clearStoreDraft(planId);
       toast.success("Spec approved");
       if (approved.id) nav.push(paths.planDetail(approved.id));
     } catch (e) {
