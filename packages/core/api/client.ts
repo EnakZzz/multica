@@ -69,6 +69,19 @@ import type {
   ProjectResource,
   CreateProjectResourceRequest,
   ListProjectResourcesResponse,
+  CreateProjectMemoryItemRequest,
+  CreateProjectWikiPageRequest,
+  ListProjectMemoryItemsResponse,
+  ListProjectWikiPagesResponse,
+  ProjectKnowledgeRetrievalLog,
+  ProjectKnowledgeRetrievalLogsResponse,
+  ProjectKnowledgeSearchResponse,
+  ProjectMemoryItem,
+  ProjectWikiPage,
+  RelatedMemoryResponse,
+  UpdateProjectKnowledgeRetrievalLogFeedbackRequest,
+  UpdateProjectMemoryItemRequest,
+  UpdateProjectWikiPageRequest,
   Label,
   CreateLabelRequest,
   UpdateLabelRequest,
@@ -140,11 +153,19 @@ import {
   EMPTY_LIST_PIPELINES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_LIST_PLANS_RESPONSE,
+  EMPTY_LIST_PROJECT_MEMORY_ITEMS_RESPONSE,
+  EMPTY_LIST_PROJECT_WIKI_PAGES_RESPONSE,
   EMPTY_PIPELINE,
   EMPTY_PIPELINE_IMPORT_VALIDATION_RESPONSE,
   EMPTY_PIPELINE_RUN,
   EMPTY_PLAN,
+  EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOG,
+  EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOGS_RESPONSE,
+  EMPTY_PROJECT_KNOWLEDGE_SEARCH_RESPONSE,
+  EMPTY_PROJECT_MEMORY_ITEM,
+  EMPTY_PROJECT_WIKI_PAGE,
   EMPTY_QUICK_CREATE_ISSUE_RESPONSE,
+  EMPTY_RELATED_MEMORY_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
@@ -154,6 +175,8 @@ import {
   IssueSchema,
   ListPipelinesResponseSchema,
   ListIssuesResponseSchema,
+  ListProjectMemoryItemsResponseSchema,
+  ListProjectWikiPagesResponseSchema,
   ListWebhookDeliveriesResponseSchema,
   ListPlansResponseSchema,
   OnboardingNoRuntimeBootstrapResponseSchema,
@@ -162,7 +185,13 @@ import {
   PipelineRunSchema,
   PipelineSchema,
   PlanSchema,
+  ProjectKnowledgeRetrievalLogSchema,
+  ProjectKnowledgeRetrievalLogsResponseSchema,
+  ProjectKnowledgeSearchResponseSchema,
+  ProjectMemoryItemSchema,
+  ProjectWikiPageSchema,
   QuickCreateIssueResponseSchema,
+  RelatedMemoryResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
   UserSchema,
@@ -1649,6 +1678,226 @@ export class ApiClient {
     await this.fetch(`/api/projects/${projectId}/resources/${resourceId}`, {
       method: "DELETE",
     });
+  }
+
+  // Project knowledge
+  async listProjectWikiPages(
+    projectId: string,
+  ): Promise<ListProjectWikiPagesResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/wiki-pages`,
+    );
+    return parseWithFallback(
+      raw,
+      ListProjectWikiPagesResponseSchema,
+      EMPTY_LIST_PROJECT_WIKI_PAGES_RESPONSE,
+      { endpoint: "GET /api/projects/{id}/knowledge/wiki-pages" },
+    );
+  }
+
+  async createProjectWikiPage(
+    projectId: string,
+    data: CreateProjectWikiPageRequest,
+  ): Promise<ProjectWikiPage> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/wiki-pages`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(raw, ProjectWikiPageSchema, EMPTY_PROJECT_WIKI_PAGE, {
+      endpoint: "POST /api/projects/{id}/knowledge/wiki-pages",
+    });
+  }
+
+  async updateProjectWikiPage(
+    projectId: string,
+    pageId: string,
+    data: UpdateProjectWikiPageRequest,
+  ): Promise<ProjectWikiPage> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/wiki-pages/${pageId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(raw, ProjectWikiPageSchema, EMPTY_PROJECT_WIKI_PAGE, {
+      endpoint: "PATCH /api/projects/{id}/knowledge/wiki-pages/{pageId}",
+    });
+  }
+
+  async deleteProjectWikiPage(projectId: string, pageId: string): Promise<void> {
+    await this.fetch(`/api/projects/${projectId}/knowledge/wiki-pages/${pageId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listProjectMemoryItems(
+    projectId: string,
+    params?: { limit?: number },
+  ): Promise<ListProjectMemoryItemsResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/memory-items?${search}`,
+    );
+    return parseWithFallback(
+      raw,
+      ListProjectMemoryItemsResponseSchema,
+      EMPTY_LIST_PROJECT_MEMORY_ITEMS_RESPONSE,
+      { endpoint: "GET /api/projects/{id}/knowledge/memory-items" },
+    );
+  }
+
+  async createProjectMemoryItem(
+    projectId: string,
+    data: CreateProjectMemoryItemRequest,
+  ): Promise<ProjectMemoryItem> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/memory-items`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(
+      raw,
+      ProjectMemoryItemSchema,
+      EMPTY_PROJECT_MEMORY_ITEM,
+      { endpoint: "POST /api/projects/{id}/knowledge/memory-items" },
+    );
+  }
+
+  async updateProjectMemoryItem(
+    projectId: string,
+    memoryItemId: string,
+    data: UpdateProjectMemoryItemRequest,
+  ): Promise<ProjectMemoryItem> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/memory-items/${memoryItemId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(
+      raw,
+      ProjectMemoryItemSchema,
+      EMPTY_PROJECT_MEMORY_ITEM,
+      { endpoint: "PATCH /api/projects/{id}/knowledge/memory-items/{memoryItemId}" },
+    );
+  }
+
+  async deleteProjectMemoryItem(
+    projectId: string,
+    memoryItemId: string,
+  ): Promise<void> {
+    await this.fetch(
+      `/api/projects/${projectId}/knowledge/memory-items/${memoryItemId}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async searchProjectKnowledge(
+    projectId: string,
+    data: { query: string; limit?: number },
+  ): Promise<ProjectKnowledgeSearchResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/search`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(
+      raw,
+      ProjectKnowledgeSearchResponseSchema,
+      EMPTY_PROJECT_KNOWLEDGE_SEARCH_RESPONSE,
+      { endpoint: "POST /api/projects/{id}/knowledge/search" },
+    );
+  }
+
+  async getIssueRelatedMemory(
+    issueId: string,
+    params?: { limit?: number },
+  ): Promise<RelatedMemoryResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/related-memory?${search}`,
+    );
+    return parseWithFallback(raw, RelatedMemoryResponseSchema, EMPTY_RELATED_MEMORY_RESPONSE, {
+      endpoint: "GET /api/issues/{id}/related-memory",
+    });
+  }
+
+  async getTaskRelatedMemory(
+    taskId: string,
+    params?: { limit?: number },
+  ): Promise<RelatedMemoryResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/tasks/${taskId}/related-memory?${search}`,
+    );
+    return parseWithFallback(raw, RelatedMemoryResponseSchema, EMPTY_RELATED_MEMORY_RESPONSE, {
+      endpoint: "GET /api/tasks/{id}/related-memory",
+    });
+  }
+
+  async listProjectKnowledgeRetrievalLogs(
+    projectId: string,
+    params?: { limit?: number },
+  ): Promise<ProjectKnowledgeRetrievalLogsResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/retrieval-logs?${search}`,
+    );
+    return parseWithFallback(
+      raw,
+      ProjectKnowledgeRetrievalLogsResponseSchema,
+      EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOGS_RESPONSE,
+      { endpoint: "GET /api/projects/{id}/knowledge/retrieval-logs" },
+    );
+  }
+
+  async getIssueKnowledgeTrace(
+    issueId: string,
+    params?: { limit?: number },
+  ): Promise<ProjectKnowledgeRetrievalLogsResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/knowledge-trace?${search}`,
+    );
+    return parseWithFallback(
+      raw,
+      ProjectKnowledgeRetrievalLogsResponseSchema,
+      EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOGS_RESPONSE,
+      { endpoint: "GET /api/issues/{id}/knowledge-trace" },
+    );
+  }
+
+  async getTaskKnowledgeTrace(
+    taskId: string,
+    params?: { limit?: number },
+  ): Promise<ProjectKnowledgeRetrievalLogsResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(
+      `/api/tasks/${taskId}/knowledge-trace?${search}`,
+    );
+    return parseWithFallback(
+      raw,
+      ProjectKnowledgeRetrievalLogsResponseSchema,
+      EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOGS_RESPONSE,
+      { endpoint: "GET /api/tasks/{id}/knowledge-trace" },
+    );
+  }
+
+  async updateProjectKnowledgeRetrievalLogFeedback(
+    projectId: string,
+    logId: string,
+    data: UpdateProjectKnowledgeRetrievalLogFeedbackRequest,
+  ): Promise<ProjectKnowledgeRetrievalLog> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/retrieval-logs/${logId}/feedback`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(
+      raw,
+      ProjectKnowledgeRetrievalLogSchema,
+      EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOG,
+      { endpoint: "PATCH /api/projects/{id}/knowledge/retrieval-logs/{logId}/feedback" },
+    );
   }
 
   // Labels

@@ -33,6 +33,7 @@ func BuildPrompt(task Task, provider string) string {
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
+	writeRelevantKnowledgeBlock(&b, task)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
 	if isReviewGateNodeType(task.PlanItemNodeType) {
@@ -120,6 +121,40 @@ func isReviewGateNodeType(nodeType string) bool {
 	}
 }
 
+func writeRelevantKnowledgeBlock(b *strings.Builder, task Task) {
+	if len(task.RelevantKnowledge) == 0 {
+		return
+	}
+	b.WriteString("Relevant project knowledge retrieved from prior work:\n")
+	totalChars := 0
+	for i, item := range task.RelevantKnowledge {
+		if i >= 5 || totalChars >= 2500 {
+			break
+		}
+		line := fmt.Sprintf("- kind=%s outcome=%s confidence=%d source=%s", item.Kind, item.Outcome, item.Confidence, item.ID)
+		if item.IssueID != "" {
+			line += " issue=" + item.IssueID
+		}
+		if item.TaskID != "" {
+			line += " task=" + item.TaskID
+		}
+		line += "\n"
+		totalChars += len(line)
+		b.WriteString(line)
+		if strings.TrimSpace(item.Title) != "" {
+			title := trimForPrompt(item.Title, 180)
+			totalChars += len(title)
+			fmt.Fprintf(b, "  title: %s\n", title)
+		}
+		if strings.TrimSpace(item.Summary) != "" {
+			summary := trimForPrompt(item.Summary, 500)
+			totalChars += len(summary)
+			fmt.Fprintf(b, "  summary: %s\n", summary)
+		}
+	}
+	b.WriteString("\nUse this as prior evidence, not as a substitute for inspecting the current issue and repository state.\n\n")
+}
+
 func buildIssuePlanPrompt(task Task) string {
 	if task.IssuePlanPhase == "spec" {
 		return buildIssuePlanSpecPrompt(task)
@@ -127,6 +162,7 @@ func buildIssuePlanPrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("You are running as an issue-planning assistant for a Multica workspace.\n\n")
 	b.WriteString("A user approved a planning spec and now wants executable issue drafts. Do not create issues, do not call `multica issue create`, and do not modify workspace data. Your only job is to return one JSON object.\n\n")
+	writeRelevantKnowledgeBlock(&b, task)
 	if task.IssuePlanID != "" {
 		fmt.Fprintf(&b, "Plan ID: %s\n\n", task.IssuePlanID)
 	}
@@ -296,6 +332,7 @@ func buildIssuePlanSpecPrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("You are running as an issue-planning assistant for a Multica workspace.\n\n")
 	b.WriteString("A user wants a goal evaluated before issue generation. Do not create issues, do not call `multica issue create`, and do not modify workspace data. Your only job is to return one JSON object for human review.\n\n")
+	writeRelevantKnowledgeBlock(&b, task)
 	if task.IssuePlanID != "" {
 		fmt.Fprintf(&b, "Plan ID: %s\n\n", task.IssuePlanID)
 	}
@@ -460,6 +497,7 @@ func buildQuickCreatePrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("You are running as a quick-create assistant for a Multica workspace.\n\n")
 	b.WriteString("A user captured the following input via the quick-create modal. There is NO existing issue. Your job is to create a well-formed issue from this input with a single `multica issue create` command.\n\n")
+	writeRelevantKnowledgeBlock(&b, task)
 	fmt.Fprintf(&b, "User input:\n> %s\n\n", task.QuickCreatePrompt)
 
 	b.WriteString("Field rules:\n\n")
@@ -531,6 +569,7 @@ func buildCommentPrompt(task Task, provider string) string {
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
+	writeRelevantKnowledgeBlock(&b, task)
 	if task.TriggerCommentContent != "" {
 		authorLabel := "A user"
 		if task.TriggerAuthorType == "agent" {
@@ -557,6 +596,8 @@ func buildChatPrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("You are running as a chat assistant for a Multica workspace.\n")
 	b.WriteString("A user is chatting with you directly. Respond to their message.\n\n")
+	writeRelevantKnowledgeBlock(&b, task)
+	b.WriteString("If the message includes `Context: Project \"...\" (id: <project-id>)`, treat that project id as the active project. Project wiki-capable agents may inspect or update its Wiki with `multica project wiki ...` when the conversation produces durable project knowledge.\n\n")
 	fmt.Fprintf(&b, "User message:\n%s\n", task.ChatMessage)
 	// List attachments by id + filename so the agent can fetch them via
 	// the CLI. We deliberately do NOT inline the URL: chat attachments
@@ -583,6 +624,7 @@ func buildAutopilotPrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	b.WriteString("This task was triggered by an Autopilot in run-only mode. There is no assigned Multica issue for this run.\n\n")
+	writeRelevantKnowledgeBlock(&b, task)
 	fmt.Fprintf(&b, "Autopilot run ID: %s\n", task.AutopilotRunID)
 	if task.AutopilotID != "" {
 		fmt.Fprintf(&b, "Autopilot ID: %s\n", task.AutopilotID)

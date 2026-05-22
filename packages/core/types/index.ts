@@ -76,9 +76,28 @@ export type {
   ProjectResourceType,
   GitRepoResourceRef,
   GithubRepoResourceRef,
+  SourceFileResourceRef,
   CreateProjectResourceRequest,
   ListProjectResourcesResponse,
 } from "./project";
+export type {
+  ProjectWikiPage,
+  ProjectWikiPageStatus,
+  ProjectMemoryItem,
+  ProjectKnowledgeSearchResult,
+  ProjectKnowledgeRetrievalLog,
+  ProjectKnowledgeRetrievalLogsResponse,
+  ProjectRelevantKnowledge,
+  ListProjectWikiPagesResponse,
+  ListProjectMemoryItemsResponse,
+  ProjectKnowledgeSearchResponse,
+  RelatedMemoryResponse,
+  UpdateProjectKnowledgeRetrievalLogFeedbackRequest,
+  CreateProjectWikiPageRequest,
+  UpdateProjectWikiPageRequest,
+  CreateProjectMemoryItemRequest,
+  UpdateProjectMemoryItemRequest,
+} from "./project-knowledge";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   Plan,

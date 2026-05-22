@@ -17,6 +17,13 @@ import type {
   PipelineRun,
   Plan,
   PlanSpec,
+  ProjectKnowledgeRetrievalLog,
+  ProjectKnowledgeRetrievalLogsResponse,
+  ProjectKnowledgeSearchResponse,
+  ProjectMemoryItem,
+  ProjectRelevantKnowledge,
+  ProjectWikiPage,
+  RelatedMemoryResponse,
   TimelineEntry,
   User,
   WebhookDelivery,
@@ -218,6 +225,231 @@ export const ListIssuesResponseSchema = z.object({
 
 export const EMPTY_LIST_ISSUES_RESPONSE: ListIssuesResponse = {
   issues: [],
+  total: 0,
+};
+
+const UnknownArraySchema = z.array(z.unknown()).catch([]).default([]);
+
+export const ProjectWikiPageSchema = z.object({
+  id: z.string().catch("").default(""),
+  workspace_id: z.string().catch("").default(""),
+  project_id: z.string().catch("").default(""),
+  slug: z.string().catch("").default(""),
+  title: z.string().catch("").default(""),
+  body: z.string().catch("").default(""),
+  source_refs: UnknownArraySchema,
+  status: z.string().catch("draft").default("draft"),
+  updated_by: z.string().nullable().catch(null).default(null),
+  reviewed_at: z.string().nullable().catch(null).default(null),
+  created_at: z.string().catch("").default(""),
+  updated_at: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_PROJECT_WIKI_PAGE: ProjectWikiPage = {
+  id: "",
+  workspace_id: "",
+  project_id: "",
+  slug: "",
+  title: "",
+  body: "",
+  source_refs: [],
+  status: "draft",
+  updated_by: null,
+  reviewed_at: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const ListProjectWikiPagesResponseSchema = z.object({
+  wiki_pages: z.array(ProjectWikiPageSchema).catch([]).default([]),
+  total: z.number().catch(0).default(0),
+}).loose();
+
+export const EMPTY_LIST_PROJECT_WIKI_PAGES_RESPONSE = {
+  wiki_pages: [],
+  total: 0,
+};
+
+export const ProjectMemoryItemSchema = z.object({
+  id: z.string().catch("").default(""),
+  workspace_id: z.string().catch("").default(""),
+  project_id: z.string().catch("").default(""),
+  issue_id: z.string().nullable().catch(null).default(null),
+  task_id: z.string().nullable().catch(null).default(null),
+  comment_id: z.string().nullable().catch(null).default(null),
+  kind: z.string().catch("").default(""),
+  outcome: z.string().catch("").default(""),
+  title: z.string().catch("").default(""),
+  summary: z.string().catch("").default(""),
+  symptom: z.string().catch("").default(""),
+  cause: z.string().catch("").default(""),
+  fix_path: z.string().catch("").default(""),
+  commands: UnknownArraySchema,
+  repo_refs: UnknownArraySchema,
+  tags: z.array(z.string()).catch([]).default([]),
+  confidence: z.number().catch(0).default(0),
+  expires_at: z.string().nullable().catch(null).default(null),
+  created_at: z.string().catch("").default(""),
+  updated_at: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_PROJECT_MEMORY_ITEM: ProjectMemoryItem = {
+  id: "",
+  workspace_id: "",
+  project_id: "",
+  issue_id: null,
+  task_id: null,
+  comment_id: null,
+  kind: "",
+  outcome: "",
+  title: "",
+  summary: "",
+  symptom: "",
+  cause: "",
+  fix_path: "",
+  commands: [],
+  repo_refs: [],
+  tags: [],
+  confidence: 0,
+  expires_at: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const ListProjectMemoryItemsResponseSchema = z.object({
+  memory_items: z.array(ProjectMemoryItemSchema).catch([]).default([]),
+  total: z.number().catch(0).default(0),
+}).loose();
+
+export const EMPTY_LIST_PROJECT_MEMORY_ITEMS_RESPONSE = {
+  memory_items: [],
+  total: 0,
+};
+
+export const ProjectKnowledgeSearchResultSchema = z.object({
+  target_type: z.string().catch("").default(""),
+  score: z.number().catch(0).default(0),
+  match_type: z.string().optional(),
+  vector_score: z.number().nullable().optional(),
+  keyword_score: z.number().nullable().optional(),
+  wiki_page: ProjectWikiPageSchema.optional(),
+  memory_item: ProjectMemoryItemSchema.optional(),
+  snippet: z.string().catch("").default(""),
+  source_refs: UnknownArraySchema.optional(),
+}).loose();
+
+export const ProjectRelevantKnowledgeSchema = z.object({
+  target_type: z.string().catch("").default(""),
+  id: z.string().catch("").default(""),
+  kind: z.string().catch("").default(""),
+  outcome: z.string().catch("").default(""),
+  title: z.string().catch("").default(""),
+  summary: z.string().catch("").default(""),
+  issue_id: z.string().optional(),
+  task_id: z.string().optional(),
+  comment_id: z.string().optional(),
+  confidence: z.number().catch(0).default(0),
+  score: z.number().catch(0).default(0),
+}).loose();
+
+export const EMPTY_PROJECT_RELEVANT_KNOWLEDGE: ProjectRelevantKnowledge = {
+  target_type: "",
+  id: "",
+  kind: "",
+  outcome: "",
+  title: "",
+  summary: "",
+  confidence: 0,
+  score: 0,
+};
+
+const UnknownRecordSchema = z.record(z.string(), z.unknown()).catch({}).default({});
+
+export const ProjectKnowledgeRetrievalLogSchema = z.object({
+  id: z.string().catch("").default(""),
+  workspace_id: z.string().catch("").default(""),
+  project_id: z.string().catch("").default(""),
+  issue_id: z.string().nullable().catch(null).default(null),
+  task_id: z.string().nullable().catch(null).default(null),
+  query_text: z.string().catch("").default(""),
+  returned_items: UnknownArraySchema,
+  search_mode: z.string().catch("hybrid").default("hybrid"),
+  query_context: UnknownRecordSchema,
+  candidates: z.array(ProjectKnowledgeSearchResultSchema).catch([]).default([]),
+  selected_items: z.array(ProjectRelevantKnowledgeSchema).catch([]).default([]),
+  injected_text: z.string().catch("").default(""),
+  token_budget: z.number().nullable().catch(null).default(null),
+  injected_item_count: z.number().catch(0).default(0),
+  prompt_section_hash: z.string().nullable().catch(null).default(null),
+  status: z.string().catch("").default(""),
+  error: z.string().nullable().catch(null).default(null),
+  task_outcome: z.string().nullable().catch(null).default(null),
+  helpfulness: z.number().nullable().catch(null).default(null),
+  feedback: z.string().nullable().catch(null).default(null),
+  feedback_note: z.string().nullable().catch(null).default(null),
+  created_at: z.string().catch("").default(""),
+  updated_at: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOG: ProjectKnowledgeRetrievalLog = {
+  id: "",
+  workspace_id: "",
+  project_id: "",
+  issue_id: null,
+  task_id: null,
+  query_text: "",
+  returned_items: [],
+  search_mode: "hybrid",
+  query_context: {},
+  candidates: [],
+  selected_items: [],
+  injected_text: "",
+  token_budget: null,
+  injected_item_count: 0,
+  prompt_section_hash: null,
+  status: "",
+  error: null,
+  task_outcome: null,
+  helpfulness: null,
+  feedback: null,
+  feedback_note: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const ProjectKnowledgeRetrievalLogsResponseSchema = z.object({
+  retrieval_logs: z.array(ProjectKnowledgeRetrievalLogSchema).catch([]).default([]),
+  total: z.number().catch(0).default(0),
+}).loose();
+
+export const EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOGS_RESPONSE: ProjectKnowledgeRetrievalLogsResponse = {
+  retrieval_logs: [],
+  total: 0,
+};
+
+export const ProjectKnowledgeSearchResponseSchema = z.object({
+  configured: z.boolean().catch(false).default(false),
+  results: z.array(ProjectKnowledgeSearchResultSchema).catch([]).default([]),
+  total: z.number().catch(0).default(0),
+  error: z.string().optional(),
+}).loose();
+
+export const EMPTY_PROJECT_KNOWLEDGE_SEARCH_RESPONSE: ProjectKnowledgeSearchResponse = {
+  configured: false,
+  results: [],
+  total: 0,
+};
+
+export const RelatedMemoryResponseSchema = z.object({
+  configured: z.boolean().catch(false).default(false),
+  related_memory: z.array(ProjectKnowledgeSearchResultSchema).catch([]).default([]),
+  total: z.number().catch(0).default(0),
+  error: z.string().optional(),
+}).loose();
+
+export const EMPTY_RELATED_MEMORY_RESPONSE: RelatedMemoryResponse = {
+  configured: false,
+  related_memory: [],
   total: 0,
 };
 

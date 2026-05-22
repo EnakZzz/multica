@@ -24,12 +24,13 @@ import (
 )
 
 type TaskService struct {
-	Queries   *db.Queries
-	TxStarter TxStarter
-	Hub       *realtime.Hub
-	Bus       *events.Bus
-	Analytics analytics.Client
-	Wakeup    TaskWakeupNotifier
+	Queries          *db.Queries
+	TxStarter        TxStarter
+	Hub              *realtime.Hub
+	Bus              *events.Bus
+	Analytics        analytics.Client
+	Wakeup           TaskWakeupNotifier
+	ProjectKnowledge *ProjectKnowledgeService
 	// EmptyClaim caches "this runtime has no queued task" so the daemon
 	// poll path can skip a Postgres scan on the steady-state empty case.
 	// Optional — a nil cache disables the fast path and every claim
@@ -1378,6 +1379,10 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 	s.captureTaskCompleted(ctx, task)
+	if s.ProjectKnowledge != nil {
+		s.ProjectKnowledge.UpdateRetrievalOutcomeForTask(ctx, task.ID, "completed")
+		s.ProjectKnowledge.CaptureTaskCompleted(ctx, task, result)
+	}
 
 	reviewGateHandled := false
 	unitTestHandled := false
@@ -1559,6 +1564,10 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 
 	slog.Warn("task failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "error", errMsg, "failure_reason", failureReason)
 	s.captureTaskFailed(ctx, task)
+	if s.ProjectKnowledge != nil {
+		s.ProjectKnowledge.UpdateRetrievalOutcomeForTask(ctx, task.ID, "failed")
+		s.ProjectKnowledge.CaptureTaskFailed(ctx, task, errMsg, failureReason)
+	}
 
 	// Auto-retry eligible failures (orphan, timeout, runtime_offline,
 	// runtime_recovery). The helper itself enforces attempt < max_attempts
@@ -2791,6 +2800,9 @@ func (s *TaskService) applyReviewGateCompleted(ctx context.Context, task db.Agen
 	if nextStatus == "done" {
 		s.enqueueUnblockedIssueTasks(ctx, task.IssueID)
 	} else if parseErr == nil && review.Status == reviewGateStatusFail {
+		if s.ProjectKnowledge != nil {
+			s.ProjectKnowledge.CaptureReviewFinding(ctx, task, issue, nodeType, review)
+		}
 		s.ensureReviewGateRepairIssue(ctx, task, issue, nodeType, review)
 	}
 	return true

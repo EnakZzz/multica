@@ -1638,6 +1638,9 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		if hasClaimedIssue && claimedIssue.ProjectID.Valid {
+			h.applyRelevantKnowledgeToTaskResponse(r.Context(), &resp, claimedIssue, task.ID)
+		}
 	}
 
 	// Chat task: populate workspace/session info from the chat_session table.

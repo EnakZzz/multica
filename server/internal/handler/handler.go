@@ -98,6 +98,7 @@ type Handler struct {
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
 	AutopilotService      *service.AutopilotService
+	ProjectKnowledge      *service.ProjectKnowledgeService
 	EmailService          *service.EmailService
 	UpdateStore           UpdateStore
 	ModelListStore        ModelListStore
@@ -133,6 +134,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)
 	taskSvc.Analytics = analyticsClient
+	projectKnowledgeSvc := service.NewProjectKnowledgeService(queries, txStarter, nil)
+	taskSvc.ProjectKnowledge = projectKnowledgeSvc
 	return &Handler{
 		Queries:               queries,
 		DB:                    executor,
@@ -142,6 +145,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		Bus:                   bus,
 		TaskService:           taskSvc,
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
+		ProjectKnowledge:      projectKnowledgeSvc,
 		EmailService:          emailService,
 		UpdateStore:           NewInMemoryUpdateStore(),
 		ModelListStore:        NewInMemoryModelListStore(),

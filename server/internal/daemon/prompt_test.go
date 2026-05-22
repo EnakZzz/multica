@@ -87,6 +87,58 @@ func TestBuildQuickCreatePromptProjectPinning(t *testing.T) {
 	}
 }
 
+func TestBuildPromptIncludesRelevantProjectKnowledge(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID: "issue-123",
+		RelevantKnowledge: []RelevantKnowledgeData{
+			{
+				TargetType: "memory_item",
+				ID:         "mem-1",
+				Kind:       "successful_fix",
+				Outcome:    "completed",
+				Title:      "Successful fix: restore daemon claim",
+				Summary:    "Previous fix required checking the runtime workspace header before changing the router.",
+				IssueID:    "issue-111",
+				TaskID:     "task-222",
+				Confidence: 72,
+			},
+		},
+	}, "codex")
+
+	mustContain := []string{
+		"Relevant project knowledge retrieved from prior work:",
+		"kind=successful_fix outcome=completed confidence=72 source=mem-1 issue=issue-111 task=task-222",
+		"Successful fix: restore daemon claim",
+		"Previous fix required checking the runtime workspace header",
+		"Use this as prior evidence",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("BuildPrompt output missing relevant knowledge text %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
+func TestBuildChatPromptIncludesProjectWikiInstruction(t *testing.T) {
+	out := BuildPrompt(Task{
+		ChatSessionID: "chat-123",
+		ChatMessage:   `Context: Project "Lost Pet" (id: project-123)` + "\n\nUpdate the wiki from the archived source file.",
+	}, "codex")
+
+	mustContain := []string{
+		`Context: Project "..." (id: <project-id>)`,
+		"active project",
+		"multica project wiki",
+		"durable project knowledge",
+		`Context: Project "Lost Pet" (id: project-123)`,
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildChatPrompt output missing project wiki instruction %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
 func TestBuildIssuePlanSpecPromptPreservesUserLanguage(t *testing.T) {
 	out := buildIssuePlanSpecPrompt(Task{
 		IssuePlanPrompt: "实现一个 Web 版多人贪吃蛇，先生成 spec 给我确认",

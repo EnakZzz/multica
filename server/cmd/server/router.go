@@ -402,6 +402,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/rerun", h.RerunIssue)
 					r.Get("/task-runs", h.ListTasksByIssue)
 					r.Get("/usage", h.GetIssueUsage)
+					r.Get("/related-memory", h.GetIssueRelatedMemory)
+					r.Get("/knowledge-trace", h.GetIssueKnowledgeTrace)
 					r.Post("/reactions", h.AddIssueReaction)
 					r.Delete("/reactions", h.RemoveIssueReaction)
 					r.Get("/attachments", h.ListAttachments)
@@ -416,6 +418,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
+			r.Get("/api/tasks/{taskId}/related-memory", h.GetTaskRelatedMemory)
+			r.Get("/api/tasks/{taskId}/knowledge-trace", h.GetTaskKnowledgeTrace)
 
 			// Labels
 			r.Route("/api/labels", func(r chi.Router) {
@@ -440,6 +444,17 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/resources", h.ListProjectResources)
 					r.Post("/resources", h.CreateProjectResource)
 					r.Delete("/resources/{resourceId}", h.DeleteProjectResource)
+					r.Get("/knowledge/wiki-pages", h.ListProjectWikiPages)
+					r.Post("/knowledge/wiki-pages", h.CreateProjectWikiPage)
+					r.Patch("/knowledge/wiki-pages/{pageId}", h.UpdateProjectWikiPage)
+					r.Delete("/knowledge/wiki-pages/{pageId}", h.DeleteProjectWikiPage)
+					r.Get("/knowledge/memory-items", h.ListProjectMemoryItems)
+					r.Post("/knowledge/memory-items", h.CreateProjectMemoryItem)
+					r.Patch("/knowledge/memory-items/{memoryItemId}", h.UpdateProjectMemoryItem)
+					r.Delete("/knowledge/memory-items/{memoryItemId}", h.DeleteProjectMemoryItem)
+					r.Post("/knowledge/search", h.SearchProjectKnowledge)
+					r.Get("/knowledge/retrieval-logs", h.ListProjectKnowledgeRetrievalLogs)
+					r.Patch("/knowledge/retrieval-logs/{logId}/feedback", h.UpdateProjectKnowledgeRetrievalLogFeedback)
 				})
 			})
 
