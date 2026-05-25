@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -158,6 +160,103 @@ func TestQuickCreatePlannerAgentCreatesPlan(t *testing.T) {
 	}
 	if payload["type"] != "issue_plan" || payload["phase"] != "spec" || payload["plan_id"] != resp.PlanID {
 		t.Fatalf("unexpected planner task context: %#v", payload)
+	}
+}
+
+func TestNormalizePlanTextReplacesInvalidUTF8(t *testing.T) {
+	got := normalizePlanText(" \xe4abc ")
+	if got != "\uFFFDabc" {
+		t.Fatalf("normalizePlanText = %q, want replacement char plus suffix", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("normalizePlanText returned invalid UTF-8")
+	}
+}
+
+func TestFirstLineTruncatesByRunes(t *testing.T) {
+	got := firstLine(strings.Repeat("一", 121))
+	if utf8.RuneCountInString(got) != 120 {
+		t.Fatalf("firstLine rune count = %d, want 120", utf8.RuneCountInString(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("firstLine returned invalid UTF-8")
+	}
+}
+
+func TestQuickCreatePlannerAgentAcceptsInvalidUTF8PromptBytes(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	plannerID := createInternalPlannerAgentForTest(t)
+	body := []byte(`{"agent_id":"` + plannerID + `","prompt":"`)
+	body = append(body, 0xe4)
+	body = append(body, []byte(`abc"}`)...)
+	req := httptest.NewRequest(http.MethodPost, "/api/issues/quick-create", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+
+	rr := httptest.NewRecorder()
+	testHandler.QuickCreateIssue(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("QuickCreateIssue status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp QuickCreateIssueResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode quick create response: %v", err)
+	}
+	var prompt string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT prompt
+		FROM plan
+		WHERE id = $1
+	`, resp.PlanID).Scan(&prompt); err != nil {
+		t.Fatalf("load created plan prompt: %v", err)
+	}
+	if prompt != "\uFFFDabc" {
+		t.Fatalf("plan prompt = %q, want sanitized invalid byte", prompt)
+	}
+	if !utf8.ValidString(prompt) {
+		t.Fatalf("plan prompt should be valid UTF-8")
+	}
+}
+
+func TestQuickCreatePlannerAgentAcceptsLongChinesePrompt(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	plannerID := createInternalPlannerAgentForTest(t)
+	prompt := strings.Repeat("协议测试框架", 21)
+
+	rr := httptest.NewRecorder()
+	testHandler.QuickCreateIssue(rr, newRequest(http.MethodPost, "/api/issues/quick-create", map[string]any{
+		"agent_id": plannerID,
+		"prompt":   prompt,
+	}))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("QuickCreateIssue status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp QuickCreateIssueResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode quick create response: %v", err)
+	}
+	var title string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT title
+		FROM plan
+		WHERE id = $1
+	`, resp.PlanID).Scan(&title); err != nil {
+		t.Fatalf("load created plan title: %v", err)
+	}
+	if utf8.RuneCountInString(title) != 120 {
+		t.Fatalf("plan title rune count = %d, want 120", utf8.RuneCountInString(title))
+	}
+	if !utf8.ValidString(title) {
+		t.Fatalf("plan title should be valid UTF-8")
 	}
 }
 

@@ -523,13 +523,23 @@ const PlanClarificationSchema = z.object({
   answer: z.string().default(""),
 });
 
+const PlanAcceptanceScenarioSchema = z.object({
+  name: z.string().default(""),
+  given: z.string().default(""),
+  when: z.string().default(""),
+  then: z.string().default(""),
+});
+
 export const PlanSpecSchema = z.object({
   summary: z.string().default(""),
   goal: z.string().default(""),
   success_criteria: StringListSchema,
+  acceptance_scenarios: z.array(PlanAcceptanceScenarioSchema).catch([]).default([]),
   in_scope: StringListSchema,
   out_of_scope: StringListSchema,
   approach: z.string().default(""),
+  design_decisions: StringListSchema,
+  verification_commands: StringListSchema,
   assumptions: StringListSchema,
   open_questions: StringListSchema,
   clarifications: z.array(PlanClarificationSchema).catch([]).default([]),
@@ -539,9 +549,12 @@ export const EMPTY_PLAN_SPEC: PlanSpec = {
   summary: "",
   goal: "",
   success_criteria: [],
+  acceptance_scenarios: [],
   in_scope: [],
   out_of_scope: [],
   approach: "",
+  design_decisions: [],
+  verification_commands: [],
   assumptions: [],
   open_questions: [],
   clarifications: [],
@@ -589,6 +602,7 @@ export const PlanSchema = z.object({
   parent_description: z.string().default(""),
   parent_issue_id: z.string().nullable().default(null),
   spec: PlanSpecSchema.catch(EMPTY_PLAN_SPEC as z.infer<typeof PlanSpecSchema>).default(EMPTY_PLAN_SPEC as z.infer<typeof PlanSpecSchema>),
+  committed_spec: PlanSpecSchema.nullable().catch(null).default(null),
   spec_approved_at: z.string().nullable().default(null),
   spec_approved_by: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
@@ -611,6 +625,7 @@ export const EMPTY_PLAN: Plan = {
   parent_description: "",
   parent_issue_id: null,
   spec: EMPTY_PLAN_SPEC,
+  committed_spec: null,
   spec_approved_at: null,
   spec_approved_by: null,
   error: null,

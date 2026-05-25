@@ -117,15 +117,25 @@ type UnitTestCheckData struct {
 }
 
 type PlanSpecData struct {
-	Summary         string                  `json:"summary"`
-	Goal            string                  `json:"goal"`
-	SuccessCriteria []string                `json:"success_criteria"`
-	InScope         []string                `json:"in_scope"`
-	OutOfScope      []string                `json:"out_of_scope"`
-	Approach        string                  `json:"approach"`
-	Assumptions     []string                `json:"assumptions"`
-	OpenQuestions   []string                `json:"open_questions"`
-	Clarifications  []PlanClarificationData `json:"clarifications,omitempty"`
+	Summary              string                       `json:"summary"`
+	Goal                 string                       `json:"goal"`
+	SuccessCriteria      []string                     `json:"success_criteria"`
+	AcceptanceScenarios  []PlanAcceptanceScenarioData `json:"acceptance_scenarios"`
+	InScope              []string                     `json:"in_scope"`
+	OutOfScope           []string                     `json:"out_of_scope"`
+	Approach             string                       `json:"approach"`
+	DesignDecisions      []string                     `json:"design_decisions"`
+	VerificationCommands []string                     `json:"verification_commands"`
+	Assumptions          []string                     `json:"assumptions"`
+	OpenQuestions        []string                     `json:"open_questions"`
+	Clarifications       []PlanClarificationData      `json:"clarifications,omitempty"`
+}
+
+type PlanAcceptanceScenarioData struct {
+	Name  string `json:"name"`
+	Given string `json:"given"`
+	When  string `json:"when"`
+	Then  string `json:"then"`
 }
 
 type PlanClarificationData struct {

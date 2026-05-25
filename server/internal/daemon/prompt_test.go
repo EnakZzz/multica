@@ -167,6 +167,9 @@ func TestBuildIssuePlanSpecPromptIncludesBuiltInPlannerQualityRules(t *testing.T
 		"Planning quality rules:",
 		"Treat the user goal as the source of truth.",
 		"Success criteria must be observable.",
+		"Acceptance scenarios should translate the success criteria into concrete given/when/then cases",
+		"Verification commands should be exact runnable commands only when known",
+		"Design decisions should record why the proposed approach is chosen",
 		"Separate assumptions from open questions.",
 		"Put reasonable defaults and non-blocking uncertainties in assumptions",
 		"Never ask more than 2 questions in one spec.",
@@ -188,6 +191,11 @@ func TestBuildIssuePlanSpecPromptIncludesClarificationContext(t *testing.T) {
 			Summary:       "Draft a better plan mode.",
 			Goal:          "Make spec review interactive.",
 			OpenQuestions: []string{"Which interaction model should it use?"},
+			AcceptanceScenarios: []PlanAcceptanceScenarioData{
+				{Name: "Review spec", Given: "A draft spec exists", When: "The user approves it", Then: "The planner generates items"},
+			},
+			DesignDecisions:      []string{"Keep review before item generation."},
+			VerificationCommands: []string{"go test ./internal/handler -run TestPlan"},
 			Clarifications: []PlanClarificationData{
 				{Question: "Which interaction model should it use?", Answer: "Question and answer loop like Superpowers."},
 			},
@@ -199,6 +207,9 @@ func TestBuildIssuePlanSpecPromptIncludesClarificationContext(t *testing.T) {
 		"Revise the spec using the user's clarification answers.",
 		"Remove answered questions from open_questions.",
 		"Question and answer loop like Superpowers.",
+		"Given: A draft spec exists",
+		"Keep review before item generation.",
+		"go test ./internal/handler -run TestPlan",
 		`"clarifications": [{"question": "Question answered by the user", "answer": "User answer"}]`,
 	}
 	for _, s := range mustContain {

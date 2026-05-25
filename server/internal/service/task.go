@@ -558,15 +558,25 @@ const PlanItemExecutionKindHumanConfirmation = "human_confirmation"
 const maxPlanSpecOpenQuestions = 2
 
 type PlanSpec struct {
-	Summary         string              `json:"summary"`
-	Goal            string              `json:"goal"`
-	SuccessCriteria []string            `json:"success_criteria"`
-	InScope         []string            `json:"in_scope"`
-	OutOfScope      []string            `json:"out_of_scope"`
-	Approach        string              `json:"approach"`
-	Assumptions     []string            `json:"assumptions"`
-	OpenQuestions   []string            `json:"open_questions"`
-	Clarifications  []PlanClarification `json:"clarifications,omitempty"`
+	Summary              string                   `json:"summary"`
+	Goal                 string                   `json:"goal"`
+	SuccessCriteria      []string                 `json:"success_criteria"`
+	AcceptanceScenarios  []PlanAcceptanceScenario `json:"acceptance_scenarios"`
+	InScope              []string                 `json:"in_scope"`
+	OutOfScope           []string                 `json:"out_of_scope"`
+	Approach             string                   `json:"approach"`
+	DesignDecisions      []string                 `json:"design_decisions"`
+	VerificationCommands []string                 `json:"verification_commands"`
+	Assumptions          []string                 `json:"assumptions"`
+	OpenQuestions        []string                 `json:"open_questions"`
+	Clarifications       []PlanClarification      `json:"clarifications,omitempty"`
+}
+
+type PlanAcceptanceScenario struct {
+	Name  string `json:"name"`
+	Given string `json:"given"`
+	When  string `json:"when"`
+	Then  string `json:"then"`
 }
 
 type PlanClarification struct {
@@ -685,9 +695,12 @@ func normalizePlanSpec(spec PlanSpec) PlanSpec {
 	spec.Summary = strings.TrimSpace(spec.Summary)
 	spec.Goal = strings.TrimSpace(spec.Goal)
 	spec.SuccessCriteria = normalizeSpecStringList(spec.SuccessCriteria)
+	spec.AcceptanceScenarios = normalizePlanAcceptanceScenarios(spec.AcceptanceScenarios)
 	spec.InScope = normalizeSpecStringList(spec.InScope)
 	spec.OutOfScope = normalizeSpecStringList(spec.OutOfScope)
 	spec.Approach = strings.TrimSpace(spec.Approach)
+	spec.DesignDecisions = normalizeSpecStringList(spec.DesignDecisions)
+	spec.VerificationCommands = normalizeSpecStringList(spec.VerificationCommands)
 	spec.Assumptions = normalizeSpecStringList(spec.Assumptions)
 	spec.OpenQuestions = normalizeSpecStringList(spec.OpenQuestions)
 	if len(spec.OpenQuestions) > maxPlanSpecOpenQuestions {
@@ -696,6 +709,32 @@ func normalizePlanSpec(spec PlanSpec) PlanSpec {
 	}
 	spec.Clarifications = normalizePlanClarifications(spec.Clarifications)
 	return spec
+}
+
+func normalizePlanAcceptanceScenarios(in []PlanAcceptanceScenario) []PlanAcceptanceScenario {
+	if len(in) == 0 {
+		return []PlanAcceptanceScenario{}
+	}
+	out := make([]PlanAcceptanceScenario, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, item := range in {
+		normalized := PlanAcceptanceScenario{
+			Name:  strings.TrimSpace(item.Name),
+			Given: strings.TrimSpace(item.Given),
+			When:  strings.TrimSpace(item.When),
+			Then:  strings.TrimSpace(item.Then),
+		}
+		if normalized.Name == "" && normalized.Given == "" && normalized.When == "" && normalized.Then == "" {
+			continue
+		}
+		key := strings.ToLower(normalized.Name + "\x00" + normalized.Given + "\x00" + normalized.When + "\x00" + normalized.Then)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func NormalizePlanSpec(spec PlanSpec) PlanSpec {
@@ -748,9 +787,12 @@ func hasPlanSpecContext(spec PlanSpec) bool {
 	return spec.Summary != "" ||
 		spec.Goal != "" ||
 		len(spec.SuccessCriteria) > 0 ||
+		len(spec.AcceptanceScenarios) > 0 ||
 		len(spec.InScope) > 0 ||
 		len(spec.OutOfScope) > 0 ||
 		spec.Approach != "" ||
+		len(spec.DesignDecisions) > 0 ||
+		len(spec.VerificationCommands) > 0 ||
 		len(spec.Assumptions) > 0 ||
 		len(spec.OpenQuestions) > 0 ||
 		len(spec.Clarifications) > 0

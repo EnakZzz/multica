@@ -382,9 +382,12 @@ func buildIssuePlanSpecPrompt(task Task) string {
   "summary": "One-paragraph summary of the proposed plan",
   "goal": "Concrete goal the plan should accomplish",
   "success_criteria": ["Observable outcome that must be true"],
+  "acceptance_scenarios": [{"name": "Scenario name", "given": "Initial state", "when": "User or system action", "then": "Observable expected result"}],
   "in_scope": ["Work that belongs in this plan"],
   "out_of_scope": ["Work intentionally excluded from this plan"],
   "approach": "Recommended implementation approach and important tradeoffs",
+  "design_decisions": ["Decision and rationale that should remain reviewable"],
+  "verification_commands": ["Exact command or manual verification evidence expected to prove the spec"],
   "assumptions": ["Assumption to confirm or carry into execution"],
   "open_questions": ["Blocking question that materially changes scope or execution, max 2, or []"],
   "clarifications": [{"question": "Question answered by the user", "answer": "User answer"}]
@@ -393,6 +396,9 @@ func buildIssuePlanSpecPrompt(task Task) string {
 	b.WriteString("- Return JSON only. No markdown fences, prose, comments, or trailing text.\n")
 	b.WriteString("- This is the human-reviewable spec, not the executable issue list. Do not include items, pipeline nodes, direct_issue, or issue creation commands.\n")
 	b.WriteString("- Keep scope focused and practical. If a goal is too large, describe a safe first slice in in_scope and move the rest to out_of_scope.\n")
+	b.WriteString("- Include acceptance_scenarios for the main happy path and important edge or failure paths. Use concrete given/when/then statements.\n")
+	b.WriteString("- Include verification_commands only when you know exact runnable commands or clear manual evidence. Use [] instead of inventing commands.\n")
+	b.WriteString("- Include design_decisions for meaningful tradeoffs, architecture choices, data model choices, or boundaries the reviewer should preserve.\n")
 	b.WriteString("- Use built-in methodology pipelines as planning references when relevant: systematic-debugging for bugfix/build/integration failures, test-driven-development for TDD work, and review-gated-feature-development for high-risk feature work.\n")
 	b.WriteString("- Put non-blocking uncertainty in assumptions. Use open_questions only for decisions that would materially change scope, data access, destructive behavior, or execution safety.\n")
 	b.WriteString("- Ask at most 2 open questions. If you can proceed with a reasonable default, write the default as an assumption instead of asking.\n")
@@ -406,6 +412,9 @@ func writeIssuePlanSpecQualityRules(b *strings.Builder) {
 	b.WriteString("- Treat the user goal as the source of truth. Preserve named systems, repos, files, commands, product constraints, and explicit exclusions instead of flattening them into a generic plan.\n")
 	b.WriteString("- Produce a reviewable spec, not a task list. The spec should let a human answer: what will be built, what will not be built, what evidence proves success, what risks exist, and what still needs a decision.\n")
 	b.WriteString("- Success criteria must be observable. Prefer user-visible behavior, API/database state, generated artifacts, exact commands that should pass, or review evidence over vague goals like \"works well\".\n")
+	b.WriteString("- Acceptance scenarios should translate the success criteria into concrete given/when/then cases, including at least one edge or failure path when the risk is material.\n")
+	b.WriteString("- Verification commands should be exact runnable commands only when known; otherwise describe expected manual evidence in success criteria and leave verification_commands empty.\n")
+	b.WriteString("- Design decisions should record why the proposed approach is chosen and which alternatives or boundaries should not be silently changed during execution.\n")
 	b.WriteString("- Separate assumptions from open questions. Put reasonable defaults and non-blocking uncertainties in assumptions; put only blocking product, access, data, deployment, legal/content, destructive-change, or security decisions in open_questions.\n")
 	b.WriteString("- Keep in_scope as the smallest coherent delivery slice. Move follow-up work, optional polish, broad refactors, and unrelated cleanup to out_of_scope unless the user explicitly requested them.\n")
 	b.WriteString("- In approach, call out the likely implementation surfaces, validation strategy, dependency or migration risk, rollback/backout needs, and whether review-gated-feature-development should be used for high-risk work.\n")
@@ -432,9 +441,12 @@ func writePlanSpec(b *strings.Builder, spec PlanSpecData) {
 	fmt.Fprintf(b, "- Summary: %s\n", trimForPrompt(spec.Summary, 1000))
 	fmt.Fprintf(b, "- Goal: %s\n", trimForPrompt(spec.Goal, 1000))
 	writeSpecList(b, "Success criteria", spec.SuccessCriteria)
+	writeAcceptanceScenarios(b, spec.AcceptanceScenarios)
 	writeSpecList(b, "In scope", spec.InScope)
 	writeSpecList(b, "Out of scope", spec.OutOfScope)
 	fmt.Fprintf(b, "- Approach: %s\n", trimForPrompt(spec.Approach, 1200))
+	writeSpecList(b, "Design decisions", spec.DesignDecisions)
+	writeSpecList(b, "Verification commands", spec.VerificationCommands)
 	writeSpecList(b, "Assumptions", spec.Assumptions)
 	writeSpecList(b, "Open questions", spec.OpenQuestions)
 	if len(spec.Clarifications) == 0 {
@@ -457,12 +469,45 @@ func hasPlanSpecDraft(spec PlanSpecData) bool {
 	return strings.TrimSpace(spec.Summary) != "" ||
 		strings.TrimSpace(spec.Goal) != "" ||
 		len(spec.SuccessCriteria) > 0 ||
+		len(spec.AcceptanceScenarios) > 0 ||
 		len(spec.InScope) > 0 ||
 		len(spec.OutOfScope) > 0 ||
 		strings.TrimSpace(spec.Approach) != "" ||
+		len(spec.DesignDecisions) > 0 ||
+		len(spec.VerificationCommands) > 0 ||
 		len(spec.Assumptions) > 0 ||
 		len(spec.OpenQuestions) > 0 ||
 		len(spec.Clarifications) > 0
+}
+
+func writeAcceptanceScenarios(b *strings.Builder, scenarios []PlanAcceptanceScenarioData) {
+	if len(scenarios) == 0 {
+		b.WriteString("- Acceptance scenarios: none\n")
+		return
+	}
+	b.WriteString("- Acceptance scenarios:\n")
+	for _, scenario := range scenarios {
+		name := strings.TrimSpace(scenario.Name)
+		given := strings.TrimSpace(scenario.Given)
+		when := strings.TrimSpace(scenario.When)
+		then := strings.TrimSpace(scenario.Then)
+		if name == "" && given == "" && when == "" && then == "" {
+			continue
+		}
+		if name == "" {
+			name = "Scenario"
+		}
+		fmt.Fprintf(b, "  - %s\n", trimForPrompt(name, 300))
+		if given != "" {
+			fmt.Fprintf(b, "    Given: %s\n", trimForPrompt(given, 500))
+		}
+		if when != "" {
+			fmt.Fprintf(b, "    When: %s\n", trimForPrompt(when, 500))
+		}
+		if then != "" {
+			fmt.Fprintf(b, "    Then: %s\n", trimForPrompt(then, 500))
+		}
+	}
 }
 
 func writeSpecList(b *strings.Builder, label string, items []string) {

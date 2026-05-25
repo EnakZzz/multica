@@ -1,0 +1,2 @@
+ALTER TABLE plan
+DROP COLUMN IF EXISTS committed_spec;

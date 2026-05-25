@@ -1494,7 +1494,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	prompt := strings.TrimSpace(req.Prompt)
+	prompt := normalizePlanText(req.Prompt)
 	if prompt == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
@@ -1587,6 +1587,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 			ProjectID:      projectUUID,
 		})
 		if err != nil {
+			slog.Warn("quick-create planner plan insert failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeError(w, http.StatusInternalServerError, "failed to create plan")
 			return
 		}

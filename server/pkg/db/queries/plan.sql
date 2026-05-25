@@ -107,7 +107,11 @@ RETURNING *;
 
 -- name: MarkPlanCommitted :one
 UPDATE plan
-SET status = 'committed', parent_issue_id = $2, updated_at = now()
+SET
+    status = 'committed',
+    parent_issue_id = $2,
+    committed_spec = spec,
+    updated_at = now()
 WHERE id = $1
 RETURNING *;
 

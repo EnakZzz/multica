@@ -3,11 +3,13 @@ package handler
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -30,6 +32,7 @@ type PlanResponse struct {
 	ParentDescription string             `json:"parent_description"`
 	ParentIssueID     *string            `json:"parent_issue_id"`
 	Spec              service.PlanSpec   `json:"spec"`
+	CommittedSpec     *service.PlanSpec  `json:"committed_spec"`
 	SpecApprovedAt    *string            `json:"spec_approved_at"`
 	SpecApprovedBy    *string            `json:"spec_approved_by"`
 	Error             *string            `json:"error"`
@@ -120,6 +123,10 @@ type updatePlanItemRequest struct {
 	Selected              bool                    `json:"selected"`
 }
 
+func normalizePlanText(s string) string {
+	return strings.TrimSpace(strings.ToValidUTF8(s, "\uFFFD"))
+}
+
 func (h *Handler) ListPlans(w http.ResponseWriter, r *http.Request) {
 	wsID := middleware.WorkspaceIDFromContext(r.Context())
 	limit := int32(50)
@@ -165,13 +172,13 @@ func (h *Handler) CreatePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	req.Prompt = strings.TrimSpace(req.Prompt)
+	req.Prompt = normalizePlanText(req.Prompt)
 	sourceIssueID := strings.TrimSpace(req.SourceIssueID)
 	if req.Prompt == "" && sourceIssueID == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
-	title := strings.TrimSpace(req.Title)
+	title := normalizePlanText(req.Title)
 	if title == "" {
 		title = firstLine(req.Prompt)
 	}
@@ -226,6 +233,7 @@ func (h *Handler) CreatePlan(w http.ResponseWriter, r *http.Request) {
 		ProjectID:      projectID,
 	})
 	if err != nil {
+		slog.Warn("plan insert failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to create plan")
 		return
 	}
@@ -911,6 +919,7 @@ func planToResponse(p db.Plan, items []db.PlanItem) PlanResponse {
 		ParentDescription: p.ParentDescription.String,
 		ParentIssueID:     parentIssueID,
 		Spec:              planSpecFromJSON(p.Spec),
+		CommittedSpec:     planSpecPtrFromJSON(p.CommittedSpec),
 		SpecApprovedAt:    timestampToPtr(p.SpecApprovedAt),
 		SpecApprovedBy:    specApprovedBy,
 		Error:             textToPtr(p.Error),
@@ -919,6 +928,14 @@ func planToResponse(p db.Plan, items []db.PlanItem) PlanResponse {
 		UpdatedAt:         timestampToPtr(p.UpdatedAt),
 		Items:             itemResp,
 	}
+}
+
+func planSpecPtrFromJSON(data []byte) *service.PlanSpec {
+	if len(data) == 0 {
+		return nil
+	}
+	spec := planSpecFromJSON(data)
+	return &spec
 }
 
 func planSpecFromJSON(data []byte) service.PlanSpec {
@@ -1106,9 +1123,10 @@ func appendPlanItemTextSection(b *strings.Builder, title string, value string) {
 }
 
 func firstLine(s string) string {
-	line := strings.TrimSpace(strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")[0])
-	if len(line) > 120 {
-		return line[:120]
+	line := normalizePlanText(strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")[0])
+	runes := []rune(line)
+	if len(runes) > 120 {
+		return string(runes[:120])
 	}
 	return line
 }

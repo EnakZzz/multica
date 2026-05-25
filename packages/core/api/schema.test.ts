@@ -224,10 +224,14 @@ describe("ApiClient schema fallback", () => {
         summary: "",
         goal: "Ship it",
         success_criteria: [],
+        acceptance_scenarios: [],
+        design_decisions: [],
+        verification_commands: [],
         open_questions: [],
         clarifications: [],
       });
       expect(res.plans[0]?.spec_approved_at).toBeNull();
+      expect(res.plans[0]?.committed_spec).toBeNull();
     });
 
     it("parses plan spec clarification history", async () => {
@@ -241,12 +245,28 @@ describe("ApiClient schema fallback", () => {
         spec: {
           summary: "Draft",
           goal: "Ship it",
+          acceptance_scenarios: [
+            { name: "Approve", given: "Draft exists", when: "User approves", then: "Items are generated" },
+          ],
+          design_decisions: ["Keep approval before execution"],
+          verification_commands: ["go test ./internal/handler -run TestPlan"],
           clarifications: [{ question: "Which repo?", answer: "multica" }],
+        },
+        committed_spec: {
+          summary: "Committed draft",
+          goal: "Ship committed scope",
         },
       });
       const client = new ApiClient("https://api.example.test");
       const res = await client.getPlan("plan-1");
       expect(res.spec.clarifications).toEqual([{ question: "Which repo?", answer: "multica" }]);
+      expect(res.spec.acceptance_scenarios).toEqual([
+        { name: "Approve", given: "Draft exists", when: "User approves", then: "Items are generated" },
+      ]);
+      expect(res.spec.design_decisions).toEqual(["Keep approval before execution"]);
+      expect(res.spec.verification_commands).toEqual(["go test ./internal/handler -run TestPlan"]);
+      expect(res.committed_spec?.summary).toBe("Committed draft");
+      expect(res.committed_spec?.acceptance_scenarios).toEqual([]);
     });
 
     it("uses safe execution contract defaults for malformed plan items", async () => {

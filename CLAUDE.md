@@ -122,6 +122,12 @@ pnpm ui:add badge                # Adds component to packages/ui/components/ui/
 make db-up            # Start shared PostgreSQL (pgvector/pg17 image)
 make db-down          # Stop shared PostgreSQL
 make db-reset         # Drop + recreate current env's DB, then re-run migrations (local only; stop backend first)
+
+# Docker self-host (local self-host stack)
+.\scripts\docker-selfhost.ps1 deploy  # First local self-host start
+.\scripts\docker-selfhost.ps1 update  # Rebuild images from this checkout and restart services
+.\scripts\docker-selfhost.ps1 status  # Show self-host service status
+.\scripts\docker-selfhost.ps1 logs    # Follow self-host logs
 ```
 
 ### Common Multica CLI
@@ -379,6 +385,24 @@ test("example", async ({ page }) => {
   await page.goto(`/issues/${issue.id}`);
 });
 ```
+
+For local auth E2E runs, prefer the fixed development verification code path instead of manually handling email login codes. The backend must be running with a 6-digit `MULTICA_DEV_VERIFICATION_CODE` available from `.env` / `.env.worktree` or the shell environment, then run Playwright with `MULTICA_E2E_USE_DEV_CODE=true`.
+
+PowerShell:
+
+```powershell
+$env:MULTICA_E2E_USE_DEV_CODE='true'
+$env:PLAYWRIGHT_BASE_URL='http://localhost:3001'
+pnpm exec playwright test e2e/auth.spec.ts --project=chromium
+```
+
+Bash / WSL:
+
+```bash
+MULTICA_E2E_USE_DEV_CODE=true PLAYWRIGHT_BASE_URL=http://localhost:3001 pnpm exec playwright test e2e/auth.spec.ts --project=chromium
+```
+
+`playwright.config.ts` does not start servers automatically; backend and frontend must already be running. `PLAYWRIGHT_BASE_URL` should point at the active frontend port, while API setup uses `NEXT_PUBLIC_API_URL` or falls back to `PORT` / localhost from the loaded env file. With `screenshot: "on"` in Playwright config, each completed test writes a PNG under `test-results/<test-name>/test-finished-1.png`. Add `--trace=on` when a replayable browser trace is needed.
 
 ## Commit Rules
 

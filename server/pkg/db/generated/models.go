@@ -507,6 +507,7 @@ type Plan struct {
 	Spec              []byte             `json:"spec"`
 	SpecApprovedAt    pgtype.Timestamptz `json:"spec_approved_at"`
 	SpecApprovedBy    pgtype.UUID        `json:"spec_approved_by"`
+	CommittedSpec     []byte             `json:"committed_spec"`
 }
 
 type PlanItem struct {

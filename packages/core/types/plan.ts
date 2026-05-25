@@ -20,13 +20,23 @@ export interface PlanClarification {
   answer: string;
 }
 
+export interface PlanAcceptanceScenario {
+  name: string;
+  given: string;
+  when: string;
+  then: string;
+}
+
 export interface PlanSpec {
   summary: string;
   goal: string;
   success_criteria: string[];
+  acceptance_scenarios: PlanAcceptanceScenario[];
   in_scope: string[];
   out_of_scope: string[];
   approach: string;
+  design_decisions: string[];
+  verification_commands: string[];
   assumptions: string[];
   open_questions: string[];
   clarifications: PlanClarification[];
@@ -74,6 +84,7 @@ export interface Plan {
   parent_description: string;
   parent_issue_id: string | null;
   spec: PlanSpec;
+  committed_spec: PlanSpec | null;
   spec_approved_at: string | null;
   spec_approved_by: string | null;
   error: string | null;

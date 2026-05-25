@@ -142,7 +142,8 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
   const [confirmationOpen, setConfirmationOpen] = useState(false);
 
   const items = dirtyItems ?? plan?.items ?? [];
-  const spec = specDraft ?? plan?.spec ?? emptyPlanSpec();
+  const persistedSpec = plan?.status === "committed" ? (plan.committed_spec ?? plan.spec) : plan?.spec;
+  const spec = specDraft ?? persistedSpec ?? emptyPlanSpec();
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const issuesById = useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues]);
 
@@ -519,20 +520,26 @@ function SpecDocument({
       {/* Grid fields */}
       <div className="grid gap-6 sm:grid-cols-2 border-l-2 border-muted/80 pl-5">
         <SpecListField label="03 · Success Criteria" value={spec.success_criteria} disabled={!editable} onChange={(v) => patch({ success_criteria: v })} />
-        <SpecListField label="04 · In Scope" value={spec.in_scope} disabled={!editable} onChange={(v) => patch({ in_scope: v })} />
-      </div>
-
-      <div className="border-l-2 border-muted/80 pl-5">
-        <SpecListField label="05 · Out of Scope" value={spec.out_of_scope} disabled={!editable} onChange={(v) => patch({ out_of_scope: v })} />
-      </div>
-
-      <div className="border-l-2 border-muted/80 pl-5">
-        <SpecTextField label="06 · Approach" value={spec.approach} disabled={!editable} placeholder="How will this be implemented?" rows={4} onChange={(v) => patch({ approach: v })} />
+        <SpecScenarioField label="04 · Acceptance Scenarios" value={spec.acceptance_scenarios} disabled={!editable} onChange={(v) => patch({ acceptance_scenarios: v })} />
       </div>
 
       <div className="grid gap-6 sm:grid-cols-2 border-l-2 border-muted/80 pl-5">
-        <SpecListField label="07 · Assumptions" value={spec.assumptions} disabled={!editable} onChange={(v) => patch({ assumptions: v })} />
-        <SpecListField label="08 · Open Questions" value={spec.open_questions} disabled={!editable} onChange={(v) => patch({ open_questions: v })} />
+        <SpecListField label="05 · In Scope" value={spec.in_scope} disabled={!editable} onChange={(v) => patch({ in_scope: v })} />
+        <SpecListField label="06 · Out of Scope" value={spec.out_of_scope} disabled={!editable} onChange={(v) => patch({ out_of_scope: v })} />
+      </div>
+
+      <div className="border-l-2 border-muted/80 pl-5">
+        <SpecTextField label="07 · Approach" value={spec.approach} disabled={!editable} placeholder="How will this be implemented?" rows={4} onChange={(v) => patch({ approach: v })} />
+      </div>
+
+      <div className="grid gap-6 sm:grid-cols-2 border-l-2 border-muted/80 pl-5">
+        <SpecListField label="08 · Design Decisions" value={spec.design_decisions} disabled={!editable} onChange={(v) => patch({ design_decisions: v })} />
+        <SpecListField label="09 · Verification Commands" value={spec.verification_commands} disabled={!editable} onChange={(v) => patch({ verification_commands: v })} />
+      </div>
+
+      <div className="grid gap-6 sm:grid-cols-2 border-l-2 border-muted/80 pl-5">
+        <SpecListField label="10 · Assumptions" value={spec.assumptions} disabled={!editable} onChange={(v) => patch({ assumptions: v })} />
+        <SpecListField label="11 · Open Questions" value={spec.open_questions} disabled={!editable} onChange={(v) => patch({ open_questions: v })} />
       </div>
     </div>
   );
@@ -705,6 +712,54 @@ function SpecListField({
             onChange={(e) => onChange(parseLineList(e.target.value))}
           />
           <span className="font-mono text-[9px] text-muted-foreground/40">one item per line</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SpecScenarioField({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: PlanSpec["acceptance_scenarios"];
+  disabled: boolean;
+  onChange: (value: PlanSpec["acceptance_scenarios"]) => void;
+}) {
+  return (
+    <div className="grid gap-2">
+      <div className="font-mono text-[9px] font-bold uppercase tracking-widest text-muted-foreground/45">{label}</div>
+      {disabled ? (
+        value.length === 0 ? (
+          <p className="text-sm italic text-muted-foreground/35">—</p>
+        ) : (
+          <div className="space-y-3">
+            {value.map((scenario, i) => (
+              <div key={`${scenario.name}-${i}`} className="rounded-md border bg-muted/10 px-3 py-2">
+                <p className="font-mono text-[9px] font-bold uppercase tracking-widest text-muted-foreground/45">
+                  {scenario.name || `Scenario ${i + 1}`}
+                </p>
+                <div className="mt-2 space-y-1 text-sm leading-relaxed text-foreground/85">
+                  <p><span className="font-medium text-muted-foreground">Given:</span> {scenario.given || "—"}</p>
+                  <p><span className="font-medium text-muted-foreground">When:</span> {scenario.when || "—"}</p>
+                  <p><span className="font-medium text-muted-foreground">Then:</span> {scenario.then || "—"}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
+        <div className="grid gap-1">
+          <Textarea
+            value={formatScenarioLines(value)}
+            placeholder="Name | Given | When | Then"
+            className="min-h-24 resize-none"
+            onChange={(e) => onChange(parseScenarioLines(e.target.value))}
+          />
+          <span className="font-mono text-[9px] text-muted-foreground/40">one scenario per line · name | given | when | then</span>
         </div>
       )}
     </div>
@@ -1231,8 +1286,37 @@ function parseLineList(value: string) {
   return out;
 }
 
+function formatScenarioLines(value: PlanSpec["acceptance_scenarios"]) {
+  return value
+    .map((scenario) => [scenario.name, scenario.given, scenario.when, scenario.then].map((part) => part.trim()).join(" | "))
+    .join("\n");
+}
+
+function parseScenarioLines(value: string): PlanSpec["acceptance_scenarios"] {
+  return value
+    .split("\n")
+    .map((line) => {
+      const [name = "", given = "", when = "", then = ""] = line.split("|").map((part) => part.trim());
+      return { name, given, when, then };
+    })
+    .filter((scenario) => scenario.name || scenario.given || scenario.when || scenario.then);
+}
+
 function emptyPlanSpec(): PlanSpec {
-  return { summary: "", goal: "", success_criteria: [], in_scope: [], out_of_scope: [], approach: "", assumptions: [], open_questions: [], clarifications: [] };
+  return {
+    summary: "",
+    goal: "",
+    success_criteria: [],
+    acceptance_scenarios: [],
+    in_scope: [],
+    out_of_scope: [],
+    approach: "",
+    design_decisions: [],
+    verification_commands: [],
+    assumptions: [],
+    open_questions: [],
+    clarifications: [],
+  };
 }
 
 function formatPositions(positions: number[] | undefined) {

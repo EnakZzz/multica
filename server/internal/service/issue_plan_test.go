@@ -11,9 +11,19 @@ func TestParseIssuePlanSpecOutputAcceptsSpec(t *testing.T) {
 		"summary": "Build a two-stage planner.",
 		"goal": "Let users approve a spec before issue generation.",
 		"success_criteria": ["Plan enters spec review", "Approval generates items"],
+		"acceptance_scenarios": [
+			{
+				"name": "Approve spec",
+				"given": "A plan is in spec review",
+				"when": "The user approves the spec",
+				"then": "The planner generates executable items from that spec"
+			}
+		],
 		"in_scope": ["Plans UI"],
 		"out_of_scope": ["Automatic issue creation"],
 		"approach": "Add a spec phase before items.",
+		"design_decisions": ["Keep item generation separate from spec generation"],
+		"verification_commands": ["go test ./internal/handler -run TestPlan"],
 		"assumptions": ["Planner returns JSON"],
 		"open_questions": []
 	}`)
@@ -22,6 +32,15 @@ func TestParseIssuePlanSpecOutputAcceptsSpec(t *testing.T) {
 	}
 	if spec.Summary != "Build a two-stage planner." || spec.Goal == "" || len(spec.SuccessCriteria) != 2 {
 		t.Fatalf("spec = %#v", spec)
+	}
+	if len(spec.AcceptanceScenarios) != 1 || spec.AcceptanceScenarios[0].Then == "" {
+		t.Fatalf("acceptance scenarios = %#v", spec.AcceptanceScenarios)
+	}
+	if got := strings.Join(spec.DesignDecisions, "|"); got != "Keep item generation separate from spec generation" {
+		t.Fatalf("DesignDecisions = %q", got)
+	}
+	if got := strings.Join(spec.VerificationCommands, "|"); got != "go test ./internal/handler -run TestPlan" {
+		t.Fatalf("VerificationCommands = %q", got)
 	}
 }
 
@@ -38,6 +57,31 @@ func TestNormalizePlanSpecLimitsOpenQuestions(t *testing.T) {
 	}
 	if got := strings.Join(spec.Assumptions, "|"); got != "Use existing planner UI.|Which style?|Which rollout?" {
 		t.Fatalf("Assumptions = %q, want overflow questions carried as assumptions", got)
+	}
+}
+
+func TestNormalizePlanSpecCleansReviewContractFields(t *testing.T) {
+	spec := normalizePlanSpec(PlanSpec{
+		AcceptanceScenarios: []PlanAcceptanceScenario{
+			{Name: " Save ", Given: " Draft ", When: " Approve ", Then: " Snapshot "},
+			{Name: "Save", Given: "Draft", When: "Approve", Then: "Snapshot"},
+			{},
+		},
+		DesignDecisions:      []string{"Use existing plan table", "Use existing plan table", " "},
+		VerificationCommands: []string{"go test ./internal/service", "go test ./internal/service"},
+	})
+
+	if len(spec.AcceptanceScenarios) != 1 {
+		t.Fatalf("AcceptanceScenarios = %#v, want one normalized scenario", spec.AcceptanceScenarios)
+	}
+	if got := spec.AcceptanceScenarios[0]; got.Name != "Save" || got.Given != "Draft" || got.When != "Approve" || got.Then != "Snapshot" {
+		t.Fatalf("AcceptanceScenarios[0] = %#v", got)
+	}
+	if got := strings.Join(spec.DesignDecisions, "|"); got != "Use existing plan table" {
+		t.Fatalf("DesignDecisions = %q", got)
+	}
+	if got := strings.Join(spec.VerificationCommands, "|"); got != "go test ./internal/service" {
+		t.Fatalf("VerificationCommands = %q", got)
 	}
 }
 
