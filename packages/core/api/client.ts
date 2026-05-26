@@ -39,6 +39,16 @@ import type {
   PersonalAccessToken,
   CreatePersonalAccessTokenRequest,
   CreatePersonalAccessTokenResponse,
+  AIGatewayKey,
+  CreateAIGatewayKeyRequest,
+  CreateAIGatewayKeyResponse,
+  AIGatewayProviderPreset,
+  AIGatewayRoute,
+  SaveAIGatewayRouteRequest,
+  ProbeAIGatewayProviderRequest,
+  AIGatewayProbeResult,
+  AIGatewayUsage,
+  AIGatewayUsageSummary,
   RuntimeUsage,
   IssueUsageSummary,
   RuntimeHourlyActivity,
@@ -135,6 +145,12 @@ import { parseWithFallback } from "./schema";
 import {
   AgentTemplateSchema,
   AgentTemplateSummaryListSchema,
+  AIGatewayKeysSchema,
+  AIGatewayProviderPresetsSchema,
+  AIGatewayProbeResultSchema,
+  AIGatewayRoutesSchema,
+  AIGatewayUsageListSchema,
+  AIGatewayUsageSummaryListSchema,
   AttachmentResponseSchema,
   ChildIssuesResponseSchema,
   CommentsListSchema,
@@ -145,6 +161,11 @@ import {
   DashboardUsageDailyListSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
+  EMPTY_AI_GATEWAY_KEYS,
+  EMPTY_AI_GATEWAY_PROVIDER_PRESETS,
+  EMPTY_AI_GATEWAY_ROUTES,
+  EMPTY_AI_GATEWAY_USAGE,
+  EMPTY_AI_GATEWAY_USAGE_SUMMARY,
   EMPTY_ATTACHMENT,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
@@ -1473,6 +1494,83 @@ export class ApiClient {
 
   async revokePersonalAccessToken(id: string): Promise<void> {
     await this.fetch(`/api/tokens/${id}`, { method: "DELETE" });
+  }
+
+  // AI Gateway
+  async listAIGatewayKeys(): Promise<AIGatewayKey[]> {
+    const raw = await this.fetch<unknown>("/api/ai-gateway/keys");
+    return parseWithFallback(raw, AIGatewayKeysSchema, EMPTY_AI_GATEWAY_KEYS, {
+      endpoint: "GET /api/ai-gateway/keys",
+    });
+  }
+
+  async createAIGatewayKey(data: CreateAIGatewayKeyRequest): Promise<CreateAIGatewayKeyResponse> {
+    return this.fetch("/api/ai-gateway/keys", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async revokeAIGatewayKey(id: string): Promise<void> {
+    await this.fetch(`/api/ai-gateway/keys/${id}`, { method: "DELETE" });
+  }
+
+  async listAIGatewayProviderPresets(): Promise<AIGatewayProviderPreset[]> {
+    const raw = await this.fetch<unknown>("/api/ai-gateway/provider-presets");
+    return parseWithFallback(raw, AIGatewayProviderPresetsSchema, EMPTY_AI_GATEWAY_PROVIDER_PRESETS, {
+      endpoint: "GET /api/ai-gateway/provider-presets",
+    });
+  }
+
+  async listAIGatewayRoutes(): Promise<AIGatewayRoute[]> {
+    const raw = await this.fetch<unknown>("/api/ai-gateway/routes");
+    return parseWithFallback(raw, AIGatewayRoutesSchema, EMPTY_AI_GATEWAY_ROUTES, {
+      endpoint: "GET /api/ai-gateway/routes",
+    });
+  }
+
+  async createAIGatewayRoute(data: SaveAIGatewayRouteRequest): Promise<AIGatewayRoute> {
+    return this.fetch("/api/ai-gateway/routes", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateAIGatewayRoute(id: string, data: SaveAIGatewayRouteRequest): Promise<AIGatewayRoute> {
+    return this.fetch(`/api/ai-gateway/routes/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteAIGatewayRoute(id: string): Promise<void> {
+    await this.fetch(`/api/ai-gateway/routes/${id}`, { method: "DELETE" });
+  }
+
+  async probeAIGatewayProvider(data: ProbeAIGatewayProviderRequest): Promise<AIGatewayProbeResult> {
+    const raw = await this.fetch<unknown>("/api/ai-gateway/probe", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return AIGatewayProbeResultSchema.parse(raw);
+  }
+
+  async listAIGatewayUsage(params: { limit?: number; offset?: number } = {}): Promise<AIGatewayUsage[]> {
+    const search = new URLSearchParams();
+    if (params.limit) search.set("limit", String(params.limit));
+    if (params.offset) search.set("offset", String(params.offset));
+    const query = search.toString();
+    const raw = await this.fetch<unknown>(`/api/ai-gateway/usage${query ? `?${query}` : ""}`);
+    return parseWithFallback(raw, AIGatewayUsageListSchema, EMPTY_AI_GATEWAY_USAGE, {
+      endpoint: "GET /api/ai-gateway/usage",
+    });
+  }
+
+  async listAIGatewayUsageSummary(days = 30): Promise<AIGatewayUsageSummary[]> {
+    const raw = await this.fetch<unknown>(`/api/ai-gateway/usage/summary?days=${days}`);
+    return parseWithFallback(raw, AIGatewayUsageSummaryListSchema, EMPTY_AI_GATEWAY_USAGE_SUMMARY, {
+      endpoint: "GET /api/ai-gateway/usage/summary",
+    });
   }
 
   // File Upload & Attachments

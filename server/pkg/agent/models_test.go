@@ -86,20 +86,21 @@ func TestGeminiStaticModelsExposesAliasesAndGemini3(t *testing.T) {
 }
 
 func TestCodexStaticModelsExposesGPT55(t *testing.T) {
-	// Codex CLI has no `models list` subcommand so the catalog is
-	// hand-maintained. Regression guard for multica-ai/multica#2009 —
-	// GPT-5.5 must be selectable, and the badge default must point at
-	// the latest release rather than lagging a version behind.
+	// Codex CLI's selectable catalog comes from `codex debug models`, not a
+	// simple `models list` subcommand, so the static fallback stays
+	// hand-maintained. GPT-5.5 must be selectable, and the badge default must
+	// point at the latest release rather than lagging a version behind.
 	models := codexStaticModels()
 	ids := map[string]Model{}
 	for _, m := range models {
 		ids[m.ID] = m
 	}
 	for _, want := range []string{
-		"gpt-5.5", "gpt-5.5-mini",
-		"gpt-5.4", "gpt-5.4-mini",
-		"gpt-5.3-codex", "gpt-5",
-		"o3", "o3-mini",
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex",
+		"gpt-5.2",
 	} {
 		if _, ok := ids[want]; !ok {
 			t.Errorf("missing expected Codex model %q in: %+v", want, models)
@@ -144,9 +145,9 @@ func TestInferCopilotProvider(t *testing.T) {
 		"raptor-mini":       "",
 		// negative cases: must not be misidentified as OpenAI
 		// reasoning series even though they start with `o`.
-		"opus-fake":         "",
-		"omni":              "",
-		"o":                 "",
+		"opus-fake": "",
+		"omni":      "",
+		"o":         "",
 	}
 	for id, want := range cases {
 		if got := inferCopilotProvider(id); got != want {

@@ -81,22 +81,32 @@ function Ensure-EnvFile {
 
 function Wait-Backend {
     $port = Get-EnvValue -Name "PORT" -Default "8080"
-    $hostAddress = "127.0.0.1"
-    $url = "http://${hostAddress}:$port/health"
+    $hostAddresses = @("127.0.0.1", "localhost")
+    $hostAddresses += Get-NetIPAddress -AddressFamily IPv4 |
+        Where-Object {
+            $_.IPAddress -notlike "127.*" -and
+            $_.IPAddress -notlike "169.254.*" -and
+            $_.PrefixOrigin -ne "WellKnown"
+        } |
+        Sort-Object InterfaceMetric |
+        Select-Object -ExpandProperty IPAddress -Unique
 
     Write-Host "==> Waiting for backend to be ready..."
     for ($i = 0; $i -lt 30; $i++) {
-        try {
-            Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 | Out-Null
-            Write-Host ""
-            Write-Host "Multica is running."
-            Write-Host "  Frontend: http://${hostAddress}:$(Get-EnvValue -Name 'FRONTEND_PORT' -Default '3000')"
-            Write-Host "  Backend:  http://${hostAddress}:$port"
-            return
+        foreach ($hostAddress in $hostAddresses) {
+            $url = "http://${hostAddress}:$port/health"
+            try {
+                Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 | Out-Null
+                Write-Host ""
+                Write-Host "Multica is running."
+                Write-Host "  Frontend: http://${hostAddress}:$(Get-EnvValue -Name 'FRONTEND_PORT' -Default '3000')"
+                Write-Host "  Backend:  http://${hostAddress}:$port"
+                return
+            }
+            catch {
+            }
         }
-        catch {
-            Start-Sleep -Seconds 2
-        }
+        Start-Sleep -Seconds 2
     }
 
     Write-Host ""

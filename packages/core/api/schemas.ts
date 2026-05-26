@@ -3,6 +3,11 @@ import type {
   Agent,
   AgentTemplate,
   AgentTemplateSummary,
+  AIGatewayKey,
+  AIGatewayProviderPreset,
+  AIGatewayRoute,
+  AIGatewayUsage,
+  AIGatewayUsageSummary,
   Attachment,
   CreateAgentFromTemplateResponse,
   GroupedIssuesResponse,
@@ -227,6 +232,136 @@ export const EMPTY_LIST_ISSUES_RESPONSE: ListIssuesResponse = {
   issues: [],
   total: 0,
 };
+
+const AIGatewayKeySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  token_prefix: z.string(),
+  status: z.string(),
+  expires_at: z.string().nullable(),
+  last_used_at: z.string().nullable(),
+  revoked_at: z.string().nullable().optional(),
+  created_at: z.string(),
+}).loose();
+
+export const AIGatewayKeysSchema = z.array(AIGatewayKeySchema);
+
+export const EMPTY_AI_GATEWAY_KEYS: AIGatewayKey[] = [];
+
+const AIGatewayProviderPresetSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  provider: z.string(),
+  base_url: z.string(),
+  api_key_env: z.string(),
+  model: z.string(),
+  upstream_api: z.string(),
+  endpoint_types: z.array(z.string()).default([]),
+  timeout_seconds: z.number().default(60),
+}).loose();
+
+export const AIGatewayProviderPresetsSchema = z.array(AIGatewayProviderPresetSchema);
+
+export const EMPTY_AI_GATEWAY_PROVIDER_PRESETS: AIGatewayProviderPreset[] = [];
+
+const AIGatewayRouteTargetSchema = z.object({
+  id: z.string().optional(),
+  provider: z.string(),
+  base_url: z.string(),
+  api_key_env: z.string(),
+  model: z.string(),
+  upstream_api: z.string(),
+  reasoning_effort: z.string().optional(),
+  organization_env: z.string().optional(),
+  project_env: z.string().optional(),
+  timeout_seconds: z.number().default(60),
+  weight: z.number().default(1),
+  priority: z.number().default(0),
+  enabled: z.boolean().default(true),
+  input_price_per_million_micros: z.number().default(0),
+  output_price_per_million_micros: z.number().default(0),
+}).loose();
+
+const AIGatewayRouteSchema = z.object({
+  id: z.string(),
+  alias: z.string(),
+  strategy: z.string(),
+  enabled: z.boolean(),
+  targets: z.array(AIGatewayRouteTargetSchema).default([]),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const AIGatewayRoutesSchema = z.array(AIGatewayRouteSchema);
+
+export const EMPTY_AI_GATEWAY_ROUTES: AIGatewayRoute[] = [];
+
+const AIGatewayProbeEndpointSchema = z.object({
+  status: z.number().default(0),
+  ok: z.boolean().default(false),
+  supported: z.boolean().default(false),
+  error: z.string().optional(),
+}).loose();
+
+export const AIGatewayProbeResultSchema = z.object({
+  base_url: z.string(),
+  authenticated: z.boolean(),
+  models_endpoint: AIGatewayProbeEndpointSchema,
+  responses: AIGatewayProbeEndpointSchema,
+  chat_completions: AIGatewayProbeEndpointSchema,
+  anthropic_messages: AIGatewayProbeEndpointSchema,
+  models: z.array(z.object({
+    id: z.string(),
+    owned_by: z.string().optional(),
+    supported_endpoint_types: z.array(z.string()).optional(),
+  }).loose()).default([]),
+}).loose();
+
+const AIGatewayUsageSchema = z.object({
+  id: z.string(),
+  key_prefix: z.string().optional(),
+  key_name: z.string().optional(),
+  caller_id: z.string().optional(),
+  request_id: z.string(),
+  endpoint: z.string(),
+  model_alias: z.string(),
+  upstream_provider: z.string(),
+  upstream_model: z.string(),
+  reasoning_effort: z.string().optional(),
+  status_code: z.number(),
+  prompt_tokens: z.number().default(0),
+  completion_tokens: z.number().default(0),
+  total_tokens: z.number().default(0),
+  total_cost_micros: z.number().default(0),
+  latency_ms: z.number().default(0),
+  error: z.string().optional(),
+  created_at: z.string(),
+}).loose();
+
+export const AIGatewayUsageListSchema = z.array(AIGatewayUsageSchema);
+
+export const EMPTY_AI_GATEWAY_USAGE: AIGatewayUsage[] = [];
+
+const AIGatewayUsageSummarySchema = z.object({
+  caller_id: z.string(),
+  key_name: z.string().optional(),
+  key_prefix: z.string().optional(),
+  created_by_name: z.string().optional(),
+  created_by_email: z.string().optional(),
+  request_count: z.number().default(0),
+  success_count: z.number().default(0),
+  error_count: z.number().default(0),
+  prompt_tokens: z.number().default(0),
+  completion_tokens: z.number().default(0),
+  total_tokens: z.number().default(0),
+  total_cost_micros: z.number().default(0),
+  average_latency_ms: z.number().default(0),
+  last_request_at: z.string(),
+}).loose();
+
+export const AIGatewayUsageSummaryListSchema = z.array(AIGatewayUsageSummarySchema);
+
+export const EMPTY_AI_GATEWAY_USAGE_SUMMARY: AIGatewayUsageSummary[] = [];
 
 const UnknownArraySchema = z.array(z.unknown()).catch([]).default([]);
 

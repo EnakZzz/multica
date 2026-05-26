@@ -74,6 +74,12 @@ services:
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AI_GATEWAY_DEFAULT_ALIAS: ${AI_GATEWAY_DEFAULT_ALIAS:-}
+      AI_GATEWAY_DEFAULT_MODEL: ${AI_GATEWAY_DEFAULT_MODEL:-}
+      AI_GATEWAY_ROUTES: ${AI_GATEWAY_ROUTES:-}
       # Public URL the API is reachable at from the open internet, no
       # trailing slash. Used to mint absolute webhook URLs for autopilot
       # webhook triggers. Leave unset behind a same-origin reverse proxy

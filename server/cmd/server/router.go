@@ -196,7 +196,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   origins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Workspace-ID", "X-Workspace-Slug", "X-Request-ID", "X-Agent-ID", "X-Task-ID", "X-CSRF-Token", "X-Client-Platform", "X-Client-Version", "X-Client-OS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Workspace-ID", "X-Workspace-Slug", "X-Request-ID", "X-Agent-ID", "X-Task-ID", "X-CSRF-Token", "X-Client-Platform", "X-Client-Version", "X-Client-OS", "X-Multica-Caller", "X-Multica-User", "X-Codex-User"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
@@ -253,6 +253,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// Public API
 	r.Get("/api/config", h.GetConfig)
+
+	// OpenAI-compatible AI gateway. These routes intentionally do not use
+	// Multica user auth; callers authenticate with workspace-scoped mvk_
+	// virtual keys managed under /api/ai-gateway.
+	r.Route("/v1", func(r chi.Router) {
+		r.Get("/models", h.AIGatewayModels)
+		r.Post("/responses", h.AIGatewayResponses)
+		r.Post("/chat/completions", h.AIGatewayChatCompletions)
+	})
 
 	// Webhook ingress for autopilots. Outside the authenticated group on
 	// purpose: the bearer token in the URL path IS the credential. Workspace
@@ -373,6 +382,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// --- Workspace-scoped routes (all require workspace membership) ---
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
+
+			// AI gateway administration. Owner/admin only because these keys
+			// authorize billable upstream model calls for the whole workspace.
+			r.Route("/api/ai-gateway", func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Get("/keys", h.ListAIGatewayKeys)
+				r.Post("/keys", h.CreateAIGatewayKey)
+				r.Delete("/keys/{id}", h.RevokeAIGatewayKey)
+				r.Get("/provider-presets", h.ListAIGatewayProviderPresets)
+				r.Post("/probe", h.ProbeAIGatewayProvider)
+				r.Get("/routes", h.ListAIGatewayRoutes)
+				r.Post("/routes", h.CreateAIGatewayRoute)
+				r.Put("/routes/{id}", h.UpdateAIGatewayRoute)
+				r.Delete("/routes/{id}", h.DeleteAIGatewayRoute)
+				r.Get("/usage/summary", h.ListAIGatewayUsageSummary)
+				r.Get("/usage", h.ListAIGatewayUsage)
+			})
 
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)

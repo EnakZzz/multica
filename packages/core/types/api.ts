@@ -174,6 +174,142 @@ export interface CreatePersonalAccessTokenResponse extends PersonalAccessToken {
   token: string;
 }
 
+// AI Gateway
+export interface AIGatewayKey {
+  id: string;
+  name: string;
+  token_prefix: string;
+  status: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at?: string | null;
+  created_at: string;
+}
+
+export interface CreateAIGatewayKeyRequest {
+  name: string;
+  expires_in_days?: number;
+}
+
+export interface CreateAIGatewayKeyResponse extends AIGatewayKey {
+  token: string;
+}
+
+export interface AIGatewayProviderPreset {
+  id: string;
+  name: string;
+  provider: string;
+  base_url: string;
+  api_key_env: string;
+  model: string;
+  upstream_api: string;
+  endpoint_types: string[];
+  timeout_seconds: number;
+}
+
+export interface AIGatewayRouteTarget {
+  id?: string;
+  provider: string;
+  base_url: string;
+  api_key_env: string;
+  model: string;
+  upstream_api: string;
+  reasoning_effort?: string;
+  organization_env?: string;
+  project_env?: string;
+  timeout_seconds: number;
+  weight: number;
+  priority: number;
+  enabled: boolean;
+  input_price_per_million_micros: number;
+  output_price_per_million_micros: number;
+}
+
+export interface AIGatewayRoute {
+  id: string;
+  alias: string;
+  strategy: string;
+  enabled: boolean;
+  targets: AIGatewayRouteTarget[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SaveAIGatewayRouteRequest {
+  alias: string;
+  strategy: string;
+  enabled?: boolean;
+  targets: AIGatewayRouteTarget[];
+}
+
+export interface AIGatewayProbeEndpoint {
+  status: number;
+  ok: boolean;
+  supported: boolean;
+  error?: string;
+}
+
+export interface AIGatewayProbeModel {
+  id: string;
+  owned_by?: string;
+  supported_endpoint_types?: string[];
+}
+
+export interface ProbeAIGatewayProviderRequest {
+  base_url: string;
+  api_key_env?: string;
+  api_key?: string;
+  model?: string;
+}
+
+export interface AIGatewayProbeResult {
+  base_url: string;
+  authenticated: boolean;
+  models_endpoint: AIGatewayProbeEndpoint;
+  responses: AIGatewayProbeEndpoint;
+  chat_completions: AIGatewayProbeEndpoint;
+  anthropic_messages: AIGatewayProbeEndpoint;
+  models: AIGatewayProbeModel[];
+}
+
+export interface AIGatewayUsage {
+  id: string;
+  key_prefix?: string;
+  key_name?: string;
+  caller_id?: string;
+  request_id: string;
+  endpoint: string;
+  model_alias: string;
+  upstream_provider: string;
+  upstream_model: string;
+  reasoning_effort?: string;
+  status_code: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost_micros: number;
+  latency_ms: number;
+  error?: string;
+  created_at: string;
+}
+
+export interface AIGatewayUsageSummary {
+  caller_id: string;
+  key_name?: string;
+  key_prefix?: string;
+  created_by_name?: string;
+  created_by_email?: string;
+  request_count: number;
+  success_count: number;
+  error_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost_micros: number;
+  average_latency_ms: number;
+  last_request_at: string;
+}
+
 // Pagination
 export interface PaginationParams {
   limit?: number;

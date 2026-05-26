@@ -194,14 +194,21 @@ func claudeStaticModels() []Model {
 func codexStaticModels() []Model {
 	return []Model{
 		{ID: "gpt-5.5", Label: "GPT-5.5", Provider: "openai", Default: true},
-		{ID: "gpt-5.5-mini", Label: "GPT-5.5 mini", Provider: "openai"},
 		{ID: "gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
 		{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Provider: "openai"},
 		{ID: "gpt-5.3-codex", Label: "GPT-5.3 Codex", Provider: "openai"},
-		{ID: "gpt-5", Label: "GPT-5", Provider: "openai"},
-		{ID: "o3", Label: "o3", Provider: "openai"},
-		{ID: "o3-mini", Label: "o3-mini", Provider: "openai"},
+		{ID: "gpt-5.2", Label: "GPT-5.2", Provider: "openai"},
 	}
+}
+
+// CodexStaticModels exposes the static Codex catalog for other server
+// surfaces that need to behave like Codex even when the Codex CLI cannot list
+// models dynamically.
+func CodexStaticModels() []Model {
+	models := codexStaticModels()
+	out := make([]Model, len(models))
+	copy(out, models)
+	return out
 }
 
 // geminiStaticModels lists the values we pass via `gemini -m`. Gemini
