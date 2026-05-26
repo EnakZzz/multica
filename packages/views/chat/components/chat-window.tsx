@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { Minus, Maximize2, Minimize2, ChevronDown, ChevronRight, Plus, Check, Trash2, Pencil } from "lucide-react";
+import { Minus, Maximize2, Minimize2, ChevronDown, ChevronRight, Plus, Check, Trash2, Pencil, Folder } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
@@ -190,6 +190,7 @@ export function ChatWindow() {
   // outgoing message when focus is on; the anchor persists across sends
   // (focus mode tracks the user's page, not a per-message attachment).
   const { candidate: anchorCandidate } = useRouteAnchorCandidate(wsId);
+  const currentProjectName = anchorCandidate?.type === "project" ? anchorCandidate.label : null;
 
   const { uploadWithToast } = useFileUpload(api);
 
@@ -578,12 +579,28 @@ export function ChatWindow() {
         agentName={activeAgent?.name}
         topSlot={<ContextAnchorCard />}
         leftAdornment={
-          <AgentDropdown
-            agents={availableAgents}
-            activeAgent={activeAgent}
-            userId={user?.id}
-            onSelect={handleSelectAgent}
-          />
+          <>
+            <AgentDropdown
+              agents={availableAgents}
+              activeAgent={activeAgent}
+              userId={user?.id}
+              onSelect={handleSelectAgent}
+            />
+            <div
+              className="flex min-w-0 max-w-48 items-center gap-1.5 rounded-md border border-border/70 bg-background/60 px-2 py-1 text-xs text-muted-foreground"
+              title={
+                currentProjectName
+                  ? t(($) => $.window.current_project_tooltip, { name: currentProjectName })
+                  : t(($) => $.window.no_project_tooltip)
+              }
+            >
+              <Folder className="size-3.5 shrink-0" />
+              <span className="shrink-0">{t(($) => $.window.project_status_label)}</span>
+              <span className="min-w-0 truncate font-medium text-foreground">
+                {currentProjectName ?? t(($) => $.window.no_project)}
+              </span>
+            </div>
+          </>
         }
         rightAdornment={<ContextAnchorButton />}
       />

@@ -59,7 +59,11 @@
     "others": "其他",
     "no_agents": "暂无智能体",
     "active_group": "进行中",
-    "archived_group_other": "{{count}} 条已归档"
+    "archived_group_other": "{{count}} 条已归档",
+    "project_status_label": "项目",
+    "no_project": "无项目",
+    "current_project_tooltip": "当前项目：{{name}}",
+    "no_project_tooltip": "当前未关联项目"
   },
   "empty_state": {
     "first_time_title": "和你的智能体对话",
