@@ -581,6 +581,9 @@ func TestAIGatewayProxyStreamingResponsesRecordsUsage(t *testing.T) {
 		if req["stream"] != true {
 			t.Fatalf("stream flag was not forwarded: %#v", req["stream"])
 		}
+		if got := r.Header.Get("Accept-Encoding"); got != "identity" {
+			t.Fatalf("upstream accept-encoding: want identity, got %q", got)
+		}
 		reasoning, ok := req["reasoning"].(map[string]any)
 		if !ok || reasoning["effort"] != "medium" {
 			t.Fatalf("caller reasoning effort was not forwarded: %#v", req["reasoning"])
@@ -637,6 +640,113 @@ func TestAIGatewayProxyStreamingResponsesRecordsUsage(t *testing.T) {
 	if reasoningEffort != "medium" {
 		t.Fatalf("reasoning_effort: want medium, got %q", reasoningEffort)
 	}
+}
+
+func TestAIGatewayStreamingResponsesDoesNotUseTotalClientTimeout(t *testing.T) {
+	t.Setenv("UPSTREAM_TEST_KEY", "sk-test")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("upstream path: want /responses, got %s", r.URL.Path)
+		}
+		flusher, _ := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: response.output_text.delta\n")
+		fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"slow"}`)
+		fmt.Fprint(w, "\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		time.Sleep(1100 * time.Millisecond)
+		fmt.Fprint(w, "event: response.completed\n")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_test","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)
+		fmt.Fprint(w, "\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	t.Setenv("AI_GATEWAY_ROUTES", fmt.Sprintf(`[
+		{"alias":"team-agent","targets":[{"provider":"test","base_url":%q,"api_key_env":"UPSTREAM_TEST_KEY","model":"real-model","timeout_seconds":1}]}
+	]`, upstream.URL))
+
+	rawToken, keyID := createAIGatewayTestKey(t)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_usage WHERE virtual_key_id = $1`, keyID)
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_virtual_key WHERE id = $1`, keyID)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"team-agent","input":"hello","stream":true}`))
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	testHandler.AIGatewayResponses(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "response.completed") {
+		t.Fatalf("stream was cut before completion: %s", rec.Body.String())
+	}
+
+	var errorText string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COALESCE(error, '')
+		FROM ai_gateway_usage
+		WHERE virtual_key_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, keyID).Scan(&errorText); err != nil {
+		t.Fatalf("load usage row: %v", err)
+	}
+	if errorText != "" {
+		t.Fatalf("stream should not record timeout error, got %q", errorText)
+	}
+}
+
+func TestCopyAIGatewayStreamIgnoresContextCanceledAfterCompleted(t *testing.T) {
+	body := &errorAfterDataReader{
+		data: []byte("event: response.completed\n" +
+			`data: {"type":"response.completed","response":{"id":"resp_test","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}` +
+			"\n\n"),
+		err: context.Canceled,
+	}
+	rec := httptest.NewRecorder()
+
+	_, usage, err := copyAIGatewayStream(rec, body)
+	if err != nil {
+		t.Fatalf("expected completed stream cancellation to be ignored, got %v", err)
+	}
+	if usage.PromptTokens != 1 || usage.CompletionTokens != 2 || usage.TotalTokens != 3 {
+		t.Fatalf("usage mismatch: %+v", usage)
+	}
+}
+
+func TestCopyAIGatewayStreamKeepsContextCanceledBeforeCompleted(t *testing.T) {
+	body := &errorAfterDataReader{
+		data: []byte("event: response.output_text.delta\n" +
+			`data: {"type":"response.output_text.delta","delta":"partial"}` +
+			"\n\n"),
+		err: context.Canceled,
+	}
+	rec := httptest.NewRecorder()
+
+	_, _, err := copyAIGatewayStream(rec, body)
+	if err == nil {
+		t.Fatal("expected context canceled before response.completed to remain an error")
+	}
+}
+
+type errorAfterDataReader struct {
+	data []byte
+	err  error
+	sent bool
+}
+
+func (r *errorAfterDataReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		return copy(p, r.data), nil
+	}
+	return 0, r.err
 }
 
 func createAIGatewayTestKey(t *testing.T) (string, string) {

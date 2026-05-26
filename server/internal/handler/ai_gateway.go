@@ -1764,7 +1764,7 @@ func (h *Handler) forwardAIGatewayRequest(w http.ResponseWriter, r *http.Request
 	if req.Target.TimeoutSeconds > 0 {
 		timeout = time.Duration(req.Target.TimeoutSeconds) * time.Second
 	}
-	client := &http.Client{Timeout: timeout}
+	client := newAIGatewayHTTPClient(timeout, req.Stream)
 	upstreamEndpoint := req.UpstreamEndpoint
 	if upstreamEndpoint == "" {
 		upstreamEndpoint = req.Endpoint
@@ -1787,6 +1787,7 @@ func (h *Handler) forwardAIGatewayRequest(w http.ResponseWriter, r *http.Request
 	}
 	upstreamReq.Header.Set("Authorization", "Bearer "+req.APIKey)
 	upstreamReq.Header.Set("Content-Type", "application/json")
+	upstreamReq.Header.Set("Accept-Encoding", "identity")
 	upstreamReq.Header.Set("Accept", r.Header.Get("Accept"))
 	if upstreamReq.Header.Get("Accept") == "" {
 		upstreamReq.Header.Set("Accept", "application/json")
@@ -1936,6 +1937,15 @@ func (h *Handler) forwardAIGatewayRequest(w http.ResponseWriter, r *http.Request
 	return resp.StatusCode, false, errText
 }
 
+func newAIGatewayHTTPClient(timeout time.Duration, stream bool) *http.Client {
+	if !stream {
+		return &http.Client{Timeout: timeout}
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = timeout
+	return &http.Client{Transport: transport}
+}
+
 func envValue(name string) string {
 	if name == "" {
 		return ""
@@ -1989,6 +1999,9 @@ func copyAIGatewayStream(w http.ResponseWriter, body io.Reader) (int64, aiGatewa
 		if readErr != nil {
 			usageParser.Finish()
 			if errors.Is(readErr, io.EOF) {
+				return written, usageParser.Usage(), nil
+			}
+			if errors.Is(readErr, context.Canceled) && usageParser.Completed() {
 				return written, usageParser.Usage(), nil
 			}
 			return written, usageParser.Usage(), readErr
@@ -2290,8 +2303,9 @@ func parseAIGatewayUsage(data []byte) aiGatewayUsageTokens {
 }
 
 type aiGatewaySSEUsageParser struct {
-	buffer string
-	usage  aiGatewayUsageTokens
+	buffer    string
+	usage     aiGatewayUsageTokens
+	completed bool
 }
 
 func (p *aiGatewaySSEUsageParser) Feed(chunk []byte) {
@@ -2327,10 +2341,19 @@ func (p *aiGatewaySSEUsageParser) Usage() aiGatewayUsageTokens {
 	return p.usage
 }
 
+func (p *aiGatewaySSEUsageParser) Completed() bool {
+	return p.completed
+}
+
 func (p *aiGatewaySSEUsageParser) parseFrame(frame string) {
+	event := ""
 	var dataLines []string
 	for _, line := range strings.Split(frame, "\n") {
 		line = strings.TrimRight(line, "\r")
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
 		if strings.HasPrefix(line, "data:") {
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
@@ -2342,9 +2365,25 @@ func (p *aiGatewaySSEUsageParser) parseFrame(frame string) {
 	if raw == "[DONE]" {
 		return
 	}
+	if event == "response.completed" || isAIGatewayResponseCompletedEvent(raw) {
+		p.completed = true
+	}
 	if usage := parseAIGatewayUsage([]byte(raw)); usage.TotalTokens > 0 {
 		p.usage = usage
 	}
+}
+
+func isAIGatewayResponseCompletedEvent(raw string) bool {
+	var event struct {
+		Type     string `json:"type"`
+		Response struct {
+			Status string `json:"status"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(raw), &event); err != nil {
+		return false
+	}
+	return event.Type == "response.completed" || event.Response.Status == "completed"
 }
 
 type aiGatewayUsageRecord struct {

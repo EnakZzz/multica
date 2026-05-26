@@ -47,6 +47,17 @@ Multica is an AI-native task management platform — like Linear, but with AI ag
 
 **pnpm catalog** — `pnpm-workspace.yaml` defines `catalog:` for version pinning. All shared deps use `catalog:` references to guarantee a single version across all packages. When adding new shared deps (including test deps), add to catalog first.
 
+### AI Gateway Code Map
+
+Use these entry points when tracing AI gateway behavior:
+
+- Public OpenAI-compatible routes (`/v1/models`, `/v1/responses`, `/v1/chat/completions`) and admin routes (`/api/ai-gateway/*`): `server/cmd/server/router.go`.
+- Backend implementation: `server/internal/handler/ai_gateway.go`. Useful anchors: provider presets and key/route CRUD near the top, route loading/normalization (`loadAIGatewayRoutes*`), virtual-key auth (`requireAIGatewayKey`), proxy entry (`proxyAIGateway`), upstream body conversion (`buildAIGatewayUpstreamRequest`), upstream forwarding and stream timeout behavior (`forwardAIGatewayRequest`), stream copying (`copyAIGatewayStream`, `copyChatCompletionStreamAsResponses`), and usage parsing/recording near the bottom.
+- Database schema: `server/migrations/117_ai_gateway.up.sql`, `server/migrations/118_ai_gateway_reasoning_effort.up.sql`, and `server/migrations/119_ai_gateway_usage_reasoning_effort.up.sql`.
+- Backend tests: `server/internal/handler/ai_gateway_test.go`; run `cd server && go test ./internal/handler -run AIGateway`.
+- Frontend/core API surface: `packages/core/api/client.ts` for `/api/ai-gateway/*` methods, `packages/core/api/schemas.ts` for response parsing, and `packages/core/types/api.ts` for shared AI gateway types.
+- Settings UI: `packages/views/settings/components/ai-gateway-tab.tsx`, wired into `packages/views/settings/components/settings-page.tsx`.
+
 ### State Management
 
 The architecture relies on a strict split between server state and client state. Mixing them is the most common way to break it.
