@@ -127,13 +127,11 @@ func TestRecordHeartbeat_NoopStoreAlwaysWritesDB(t *testing.T) {
 	testHandler.LivenessStore = NewNoopLivenessStore()
 	t.Cleanup(func() { testHandler.LivenessStore = orig })
 
-	// Pin last_seen_at to "just now" to ensure the DB-flush condition is not
-	// what's driving the write.
-	setRuntimeLastSeenAt(t, runtimeID, time.Now())
+	// Keep last_seen_at fresh while leaving enough room for DB now() to move
+	// forward on systems where the client and database clocks are not identical.
+	setRuntimeLastSeenAt(t, runtimeID, time.Now().Add(-time.Second))
 	rt := loadRuntime(t, runtimeID)
 	before := rt.LastSeenAt.Time
-
-	time.Sleep(50 * time.Millisecond)
 
 	if err := testHandler.recordHeartbeat(context.Background(), rt); err != nil {
 		t.Fatalf("recordHeartbeat: %v", err)
@@ -256,11 +254,9 @@ func TestRecordHeartbeat_TouchErrorFallsBackToDB(t *testing.T) {
 	testHandler.LivenessStore = fake
 	t.Cleanup(func() { testHandler.LivenessStore = orig })
 
-	setRuntimeLastSeenAt(t, runtimeID, time.Now())
+	setRuntimeLastSeenAt(t, runtimeID, time.Now().Add(-time.Second))
 	rt := loadRuntime(t, runtimeID)
 	before := rt.LastSeenAt.Time
-
-	time.Sleep(50 * time.Millisecond)
 
 	if err := testHandler.recordHeartbeat(context.Background(), rt); err != nil {
 		t.Fatalf("recordHeartbeat: %v", err)
