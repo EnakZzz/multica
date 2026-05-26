@@ -58,6 +58,7 @@ func BuildPrompt(task Task, provider string) string {
 		}
 		fmt.Fprintf(&b, "This issue is a review gate repair. Continue the existing target branch `%s`; do not create a separate repair branch for this work.\n", task.PublishBranchName)
 		fmt.Fprintf(&b, "`multica repo checkout <url>` will default to ref `%s` and `multica repo publish` will push your HEAD back to `%s`. Your final issue comment must include `Branch: %s` and `Status: done` after publish succeeds, then mark the issue `done`.\n", checkoutRef, task.PublishBranchName, task.PublishBranchName)
+		writeWikiDeltaGuidance(&b, false)
 	} else if task.PlanItemExecutionKind == "agent_task" && len(task.UnitTestChecklist) > 0 {
 		b.WriteString("This issue was created from a Plan item with a server-gated unit test checklist. Complete the implementation, run the checklist commands below, and do not mark the issue done or blocked yourself; the server will update status from your final JSON report.\n")
 		if task.PlanItemRequiresGitCommit && strings.TrimSpace(task.PlanItemBranchName) != "" {
@@ -81,6 +82,7 @@ func BuildPrompt(task Task, provider string) string {
 			fmt.Fprintf(&b, "- id=%s %s title=%q command=%q expected=%q\n", check.ID, required, label, check.Command, check.Expected)
 		}
 		b.WriteString("Your final task completion output must be one JSON object and must include `unit_test_report`. If any required check fails, report failed rather than hiding it; the server will requeue this same issue for iteration.\n")
+		writeWikiDeltaJSONGuidance(&b)
 		b.WriteString(`Final JSON shape:
 {
   "unit_test_report": {
@@ -106,8 +108,10 @@ func BuildPrompt(task Task, provider string) string {
 		} else {
 			b.WriteString("This issue was created from a Plan item with `execution_kind=agent_task`; that kind is the execution contract. This Plan item is not expected to produce a git commit unless the issue body or a human comment explicitly changes that. If code changes become necessary, use `multica repo checkout <url>` and publish with `multica repo publish`; never push directly to main or master. Your final issue comment must include `Status: done`, include `Branch: ...` only when a branch was actually published, then mark the issue `done`.\n")
 		}
+		writeWikiDeltaGuidance(&b, false)
 	} else {
 		b.WriteString("For code changes, use `multica repo checkout <url>` and publish the generated work branch with `multica repo publish`. Never push directly to main or master. Your final issue comment must include `Branch: ...` and `Status: ready for review` after publish succeeds.\n")
+		writeWikiDeltaGuidance(&b, false)
 	}
 	return b.String()
 }
@@ -125,13 +129,17 @@ func writeRelevantKnowledgeBlock(b *strings.Builder, task Task) {
 	if len(task.RelevantKnowledge) == 0 {
 		return
 	}
-	b.WriteString("Relevant project knowledge retrieved from prior work:\n")
+	b.WriteString("Project Wiki canonical context:\n")
+	b.WriteString("Use these Wiki pages as the canonical long-term project understanding layer: goals, vocabulary, decisions, workflows, architecture constraints, risks, and recurring verification guidance. They do not override the current issue, current repository state, current diff, or the user's latest explicit instruction.\n")
 	totalChars := 0
 	for i, item := range task.RelevantKnowledge {
 		if i >= 5 || totalChars >= 2500 {
 			break
 		}
 		line := fmt.Sprintf("- kind=%s outcome=%s confidence=%d source=%s", item.Kind, item.Outcome, item.Confidence, item.ID)
+		if item.Slug != "" {
+			line += " slug=" + item.Slug
+		}
 		if item.IssueID != "" {
 			line += " issue=" + item.IssueID
 		}
@@ -152,7 +160,22 @@ func writeRelevantKnowledgeBlock(b *strings.Builder, task Task) {
 			fmt.Fprintf(b, "  summary: %s\n", summary)
 		}
 	}
-	b.WriteString("\nUse this as prior evidence, not as a substitute for inspecting the current issue and repository state.\n\n")
+	b.WriteString("\nUse the Wiki as shared project memory, then verify task-specific facts from the issue, comments, source files, tests, and runtime state before acting.\n\n")
+}
+
+func writeWikiDeltaGuidance(b *strings.Builder, mayWrite bool) {
+	b.WriteString("\nWiki delta guidance:\n")
+	if mayWrite {
+		b.WriteString("- When the conversation produces durable project knowledge, update the active project's Wiki with `multica project wiki upsert ...` if the CLI supports it; otherwise state the proposed Wiki page updates in your reply.\n")
+	} else {
+		b.WriteString("- Do not rewrite broad Wiki pages during ordinary task execution. In your final issue comment or task response, include `Wiki delta: none` when no durable update is needed, or a concise proposed Wiki delta with target page slug(s) when the work changes project understanding.\n")
+	}
+	b.WriteString("- Durable knowledge includes changed requirements, accepted decisions, workflows, vocabulary, architecture constraints, verification guidance, and recurring failure modes.\n")
+	b.WriteString("- Do not record one-off command logs, transient execution details, speculation, or facts that only describe the current run.\n\n")
+}
+
+func writeWikiDeltaJSONGuidance(b *strings.Builder) {
+	b.WriteString("Wiki delta guidance for the JSON report: put `Wiki delta: none` in `notes` when no durable Wiki update is needed; otherwise put a concise proposed Wiki delta with target page slug(s) in `notes`. Durable knowledge means changed requirements, accepted decisions, workflows, vocabulary, architecture constraints, verification guidance, or recurring failure modes. Do not record one-off command logs or speculation.\n")
 }
 
 func buildIssuePlanPrompt(task Task) string {
@@ -321,6 +344,7 @@ func buildIssuePlanPrompt(task Task) string {
 	b.WriteString("- Fill each selected pipeline node with a concrete title, description, optional agent_id override, and dependency keys. Dependency keys should point to prerequisite nodes in the chosen pipeline.\n")
 	b.WriteString("- If no available pipeline fits, fall back to items and split into 2-8 child issues.\n")
 	b.WriteString("- For every direct_issue, item, or selected pipeline node, include a lightweight execution contract: 2-5 acceptance_criteria when possible, suggested_test_commands as exact runnable commands or [], unit_test_checklist as exact runnable unit-test commands or [], context_resources as known files/repos/docs/issues/APIs/URLs, and risk_notes as concrete edge cases or blockers.\n")
+	b.WriteString("- When Project Wiki canonical context is present, treat it as the only long-term project understanding source. Use current issue/spec/user input for immediate requirements, but do not treat memory items or old task logs as canonical. Include relevant Wiki page slugs in context_resources using `wiki:<slug>`.\n")
 	b.WriteString("- unit_test_checklist is only for true unit tests that the assigned agent can run locally, such as `go test ./internal/service -run TestName -count=1` or `pnpm vitest packages/core/foo.test.ts`. If you do not know a real runnable unit test command, use []. Do not put broad build, typecheck, lint, e2e, smoke, or manual verification commands there; keep those in suggested_test_commands.\n")
 	b.WriteString("- Preserve review gate semantics in node_type: use spec_review for spec compliance gates, code_review for blocking code quality gates, manual for human confirmation, check for agent-executable verification, and issue for implementation or ordinary work.\n")
 	b.WriteString("- Plan game and interactive product work as iteration loops first: each iteration must be one playable or integration-testable version slice, then split that loop into implementation, test, review, and human-confirmation items.\n")
@@ -410,6 +434,7 @@ func buildIssuePlanSpecPrompt(task Task) string {
 	b.WriteString("- Include acceptance_scenarios for the main happy path and important edge or failure paths. Use concrete given/when/then statements.\n")
 	b.WriteString("- Include verification_commands only when you know exact runnable commands or clear manual evidence. Use [] instead of inventing commands.\n")
 	b.WriteString("- Include design_decisions for meaningful tradeoffs, architecture choices, data model choices, or boundaries the reviewer should preserve.\n")
+	b.WriteString("- When Project Wiki canonical context is present, treat it as the only long-term project understanding source. Use current user input for immediate requirements, but do not treat memory items or old task logs as canonical; reference relevant Wiki slugs in approach or design_decisions when they materially shape the plan.\n")
 	b.WriteString("- Use built-in methodology pipelines as planning references when relevant: systematic-debugging for bugfix/build/integration failures, test-driven-development for TDD work, and review-gated-feature-development for high-risk feature work.\n")
 	b.WriteString("- Put non-blocking uncertainty in assumptions. Use open_questions only for decisions that would materially change scope, data access, destructive behavior, or execution safety.\n")
 	b.WriteString("- Ask at most 2 open questions. If you can proceed with a reasonable default, write the default as an assumption instead of asking.\n")
@@ -643,6 +668,7 @@ func buildCommentPrompt(task Task, provider string) string {
 	}
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then decide how to proceed.\n\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, read the triggering thread first: `multica issue comment list %s --thread %s --output json` returns the root and every reply in the same thread as the trigger comment. If you still need more context, `multica issue comment list %s --recent 20 --output json` pulls the 20 most recently active threads on the issue (each `--recent` page prints a `Next thread cursor: --before <ts> --before-id <root-id>` line on stderr — pass the same pair back to scroll older threads). Avoid the unfiltered `--output json` form on long-running issues; it dumps the full flat timeline (cap 2000) and wastes context. `--since <RFC3339>` is still available for incremental polling and may combine with `--thread` or `--recent`.\n\n", task.IssueID, task.TriggerCommentID, task.IssueID)
+	writeWikiDeltaGuidance(&b, false)
 	b.WriteString(execenv.BuildCommentReplyInstructions(provider, task.IssueID, task.TriggerCommentID))
 	return b.String()
 }
@@ -653,7 +679,8 @@ func buildChatPrompt(task Task) string {
 	b.WriteString("You are running as a chat assistant for a Multica workspace.\n")
 	b.WriteString("A user is chatting with you directly. Respond to their message.\n\n")
 	writeRelevantKnowledgeBlock(&b, task)
-	b.WriteString("If the message includes `Context: Project \"...\" (id: <project-id>)`, treat that project id as the active project. Project wiki-capable agents may inspect or update its Wiki with `multica project wiki ...` when the conversation produces durable project knowledge.\n\n")
+	b.WriteString("If the message includes `Context: Project \"...\" (id: <project-id>)`, treat that project id as the active project. The Project Wiki is the canonical long-term understanding layer for project goals, vocabulary, decisions, workflows, architecture constraints, risks, and recurring verification guidance. It should be digested and structured, not copied verbatim from raw documents or chat.\n\n")
+	b.WriteString("Project wiki-capable agents may inspect or update the active project's Wiki with `multica project wiki ...` when the conversation produces durable project knowledge.\n\n")
 	fmt.Fprintf(&b, "User message:\n%s\n", task.ChatMessage)
 	// List attachments by id + filename so the agent can fetch them via
 	// the CLI. We deliberately do NOT inline the URL: chat attachments
@@ -672,6 +699,7 @@ func buildChatPrompt(task Task) string {
 		}
 		b.WriteString("Use `multica attachment download <id>` to fetch each file locally before referring to it.\n")
 	}
+	writeWikiDeltaGuidance(&b, true)
 	return b.String()
 }
 
@@ -709,5 +737,6 @@ func buildAutopilotPrompt(task Task) string {
 		b.WriteString("Complete the instructions above.\n")
 	}
 	b.WriteString("Do not run `multica issue get`; this run does not have an issue ID.\n")
+	writeWikiDeltaGuidance(&b, false)
 	return b.String()
 }

@@ -92,6 +92,7 @@ type Task struct {
 type RelevantKnowledgeData struct {
 	TargetType string  `json:"target_type"`
 	ID         string  `json:"id"`
+	Slug       string  `json:"slug,omitempty"`
 	Kind       string  `json:"kind"`
 	Outcome    string  `json:"outcome"`
 	Title      string  `json:"title"`

@@ -92,25 +92,26 @@ func TestBuildPromptIncludesRelevantProjectKnowledge(t *testing.T) {
 		IssueID: "issue-123",
 		RelevantKnowledge: []RelevantKnowledgeData{
 			{
-				TargetType: "memory_item",
-				ID:         "mem-1",
-				Kind:       "successful_fix",
-				Outcome:    "completed",
-				Title:      "Successful fix: restore daemon claim",
-				Summary:    "Previous fix required checking the runtime workspace header before changing the router.",
-				IssueID:    "issue-111",
-				TaskID:     "task-222",
-				Confidence: 72,
+				TargetType: "wiki_page",
+				ID:         "wiki-1",
+				Slug:       "runtime-routing",
+				Kind:       "wiki_page",
+				Outcome:    "reviewed",
+				Title:      "Runtime routing",
+				Summary:    "Runtime task dispatch uses the Project Wiki as the canonical project understanding layer.",
+				Confidence: 90,
 			},
 		},
 	}, "codex")
 
 	mustContain := []string{
-		"Relevant project knowledge retrieved from prior work:",
-		"kind=successful_fix outcome=completed confidence=72 source=mem-1 issue=issue-111 task=task-222",
-		"Successful fix: restore daemon claim",
-		"Previous fix required checking the runtime workspace header",
-		"Use this as prior evidence",
+		"Project Wiki canonical context:",
+		"canonical long-term project understanding layer",
+		"kind=wiki_page outcome=reviewed confidence=90 source=wiki-1 slug=runtime-routing",
+		"Runtime routing",
+		"Project Wiki as the canonical project understanding layer",
+		"Wiki delta guidance:",
+		"Wiki delta: none",
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {
@@ -129,6 +130,8 @@ func TestBuildChatPromptIncludesProjectWikiInstruction(t *testing.T) {
 		`Context: Project "..." (id: <project-id>)`,
 		"active project",
 		"multica project wiki",
+		"canonical long-term understanding layer",
+		"digested and structured, not copied verbatim",
 		"durable project knowledge",
 		`Context: Project "Lost Pet" (id: project-123)`,
 	}

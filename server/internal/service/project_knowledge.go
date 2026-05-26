@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -199,6 +200,7 @@ type KnowledgeSearchResult struct {
 type RelevantKnowledge struct {
 	TargetType string  `json:"target_type"`
 	ID         string  `json:"id"`
+	Slug       string  `json:"slug,omitempty"`
 	Kind       string  `json:"kind"`
 	Outcome    string  `json:"outcome"`
 	Title      string  `json:"title"`
@@ -326,6 +328,37 @@ func (s *ProjectKnowledgeService) ListWikiPages(ctx context.Context, workspaceID
 		WHERE workspace_id = $1 AND project_id = $2
 		ORDER BY updated_at DESC
 	`, workspaceID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []WikiPage{}
+	for rows.Next() {
+		page, err := scanWikiPage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page)
+	}
+	return out, rows.Err()
+}
+
+func (s *ProjectKnowledgeService) ListCanonicalWikiPages(ctx context.Context, workspaceID, projectID pgtype.UUID, limit int32) ([]WikiPage, error) {
+	if limit <= 0 || limit > 20 {
+		limit = 5
+	}
+	tx, err := s.Tx.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		SELECT id, workspace_id, project_id, slug, title, body, source_refs, status, updated_by, reviewed_at, created_at, updated_at
+		FROM project_wiki_page
+		WHERE workspace_id = $1 AND project_id = $2 AND status != 'archived'
+		ORDER BY CASE status WHEN 'reviewed' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END, updated_at DESC
+		LIMIT $3
+	`, workspaceID, projectID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -785,6 +818,102 @@ func (s *ProjectKnowledgeService) RelevantMemoryForIssue(ctx context.Context, is
 	return s.Search(ctx, issue.WorkspaceID, issue.ProjectID, query, limit)
 }
 
+func (s *ProjectKnowledgeService) CanonicalWikiContextForIssue(ctx context.Context, issue db.Issue, limit int32) ([]KnowledgeSearchResult, error) {
+	if !issue.ProjectID.Valid {
+		return []KnowledgeSearchResult{}, nil
+	}
+	query := strings.Join([]string{issue.Title, issue.Description.String}, "\n\n")
+	return s.CanonicalWikiContext(ctx, issue.WorkspaceID, issue.ProjectID, query, limit)
+}
+
+func (s *ProjectKnowledgeService) CanonicalWikiContext(ctx context.Context, workspaceID, projectID pgtype.UUID, query string, limit int32) ([]KnowledgeSearchResult, error) {
+	if limit <= 0 || limit > 20 {
+		limit = 5
+	}
+	results, err := s.Search(ctx, workspaceID, projectID, query, limit*3)
+	if err == nil {
+		wiki := canonicalWikiResultsFromSearch(results, int(limit))
+		if len(wiki) > 0 {
+			return wiki, nil
+		}
+	} else if !errors.Is(err, ErrEmbeddingNotConfigured) {
+		return nil, err
+	}
+
+	pages, fallbackErr := s.ListCanonicalWikiPages(ctx, workspaceID, projectID, limit)
+	if fallbackErr != nil {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fallbackErr
+	}
+	return wikiPagesToSearchResults(pages), nil
+}
+
+func canonicalWikiResultsFromSearch(results []KnowledgeSearchResult, limit int) []KnowledgeSearchResult {
+	if limit <= 0 {
+		limit = len(results)
+	}
+	wiki := make([]KnowledgeSearchResult, 0, len(results))
+	seen := map[string]struct{}{}
+	for _, result := range results {
+		if result.WikiPage == nil || result.WikiPage.Status == "archived" {
+			continue
+		}
+		if _, ok := seen[result.WikiPage.ID]; ok {
+			continue
+		}
+		seen[result.WikiPage.ID] = struct{}{}
+		wiki = append(wiki, result)
+	}
+	sort.SliceStable(wiki, func(i, j int) bool {
+		ri := wikiStatusRank(wiki[i].WikiPage.Status)
+		rj := wikiStatusRank(wiki[j].WikiPage.Status)
+		if ri != rj {
+			return ri < rj
+		}
+		if wiki[i].Score != wiki[j].Score {
+			return wiki[i].Score > wiki[j].Score
+		}
+		return wiki[i].WikiPage.UpdatedAt > wiki[j].WikiPage.UpdatedAt
+	})
+	if len(wiki) > limit {
+		wiki = wiki[:limit]
+	}
+	return wiki
+}
+
+func wikiStatusRank(status string) int {
+	switch strings.TrimSpace(status) {
+	case "reviewed":
+		return 0
+	case "draft":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func wikiPagesToSearchResults(pages []WikiPage) []KnowledgeSearchResult {
+	out := make([]KnowledgeSearchResult, 0, len(pages))
+	for i, page := range pages {
+		page := page
+		score := 1.0 - float64(i)*0.01
+		if score < 0 {
+			score = 0
+		}
+		out = append(out, KnowledgeSearchResult{
+			TargetType: KnowledgeTargetWikiPage,
+			Score:      score,
+			MatchType:  "canonical_fallback",
+			WikiPage:   &page,
+			Snippet:    truncateForSummary(page.Body, 500),
+			SourceRefs: page.SourceRefs,
+		})
+	}
+	return out
+}
+
 func (s *ProjectKnowledgeService) LogRetrieval(ctx context.Context, in RetrievalLogInput) {
 	if s == nil || s.Tx == nil {
 		return
@@ -1100,6 +1229,7 @@ func (s *ProjectKnowledgeService) ToRelevant(results []KnowledgeSearchResult, li
 			out = append(out, RelevantKnowledge{
 				TargetType: r.TargetType,
 				ID:         w.ID,
+				Slug:       w.Slug,
 				Kind:       "wiki_page",
 				Outcome:    w.Status,
 				Title:      w.Title,
@@ -1123,6 +1253,9 @@ func (s *ProjectKnowledgeService) InjectedText(results []KnowledgeSearchResult, 
 			break
 		}
 		fmt.Fprintf(&b, "- kind=%s outcome=%s confidence=%d source=%s", item.Kind, item.Outcome, item.Confidence, item.ID)
+		if item.Slug != "" {
+			fmt.Fprintf(&b, " slug=%s", item.Slug)
+		}
 		if item.IssueID != "" {
 			fmt.Fprintf(&b, " issue=%s", item.IssueID)
 		}

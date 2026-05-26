@@ -476,6 +476,7 @@ export const ProjectKnowledgeSearchResultSchema = z.object({
 export const ProjectRelevantKnowledgeSchema = z.object({
   target_type: z.string().catch("").default(""),
   id: z.string().catch("").default(""),
+  slug: z.string().optional(),
   kind: z.string().catch("").default(""),
   outcome: z.string().catch("").default(""),
   title: z.string().catch("").default(""),

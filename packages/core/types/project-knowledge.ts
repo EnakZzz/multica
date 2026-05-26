@@ -96,6 +96,7 @@ export interface ProjectKnowledgeRetrievalLog {
 export interface ProjectRelevantKnowledge {
   target_type: string;
   id: string;
+  slug?: string;
   kind: string;
   outcome: string;
   title: string;

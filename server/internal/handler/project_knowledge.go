@@ -511,7 +511,7 @@ func (h *Handler) applyRelevantKnowledgeToTaskResponse(ctx context.Context, resp
 		queryContext["review_target_branch"] = resp.ReviewTargetBranchName
 	}
 	query := strings.Join(queryParts, "\n\n")
-	results, err := h.ProjectKnowledge.Search(ctx, issue.WorkspaceID, issue.ProjectID, query, 5)
+	results, err := h.ProjectKnowledge.CanonicalWikiContext(ctx, issue.WorkspaceID, issue.ProjectID, query, 5)
 	if err != nil {
 		slog.Debug("project knowledge retrieval skipped", "issue_id", uuidToString(issue.ID), "project_id", uuidToString(issue.ProjectID), "error", err)
 		h.ProjectKnowledge.LogRetrieval(ctx, service.RetrievalLogInput{
@@ -520,7 +520,7 @@ func (h *Handler) applyRelevantKnowledgeToTaskResponse(ctx context.Context, resp
 			IssueID:      issue.ID,
 			TaskID:       taskID,
 			QueryText:    query,
-			SearchMode:   "hybrid",
+			SearchMode:   "wiki_canonical",
 			QueryContext: queryContext,
 			Status:       "error",
 			Error:        err.Error(),
@@ -540,7 +540,7 @@ func (h *Handler) applyRelevantKnowledgeToTaskResponse(ctx context.Context, resp
 		IssueID:           issue.ID,
 		TaskID:            taskID,
 		QueryText:         query,
-		SearchMode:        "hybrid",
+		SearchMode:        "wiki_canonical",
 		QueryContext:      queryContext,
 		Candidates:        results,
 		SelectedItems:     relevant,
