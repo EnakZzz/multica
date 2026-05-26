@@ -25,6 +25,9 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
+  experimental: {
+    proxyClientMaxBodySize: 100 << 20,
+  },
   turbopack: {
     root: resolve(__dirname, "../.."),
   },

@@ -2,10 +2,11 @@
  * @vitest-environment jsdom
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
+import { projectVisualKeys } from "../project-visuals/queries";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
 vi.mock("../platform/workspace-storage", () => ({
@@ -102,8 +103,8 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (11 workspace-scoped + 1 workspaceKeys.list() = 12 calls)
-    expect(invalidateSpy).toHaveBeenCalledTimes(12);
+    // (12 workspace-scoped + 1 workspaceKeys.list() = 13 calls)
+    expect(invalidateSpy).toHaveBeenCalledTimes(13);
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -118,5 +119,29 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws1 });
 
     expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("invalidates visual boards when a visual node is updated by an agent", () => {
+    vi.useFakeTimers();
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const onAny = vi.mocked(ws.onAny).mock.calls[0]?.[0];
+    if (!onAny) throw new Error("onAny handler was not registered");
+
+    invalidateSpy.mockClear();
+    act(() => {
+      onAny({
+        type: "project_visual:updated",
+        payload: { project_id: "project-1", node_id: "node-1" },
+      });
+      vi.advanceTimersByTime(110);
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: projectVisualKeys.all("ws-1"),
+    });
+    vi.useRealTimers();
   });
 });

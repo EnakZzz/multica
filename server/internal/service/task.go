@@ -344,6 +344,16 @@ func (s *TaskService) taskAnalyticsContext(ctx context.Context, task db.AgentTas
 		tc.UserID = ip.RequesterID
 		tc.Source = analytics.SourceManual
 	}
+	if vc, ok := s.parseVisualNodeGenerateContext(task); ok {
+		tc.WorkspaceID = vc.WorkspaceID
+		tc.UserID = vc.RequesterID
+		tc.Source = analytics.SourceManual
+	}
+	if ve, ok := s.parseVisualBoardExtractContext(task); ok {
+		tc.WorkspaceID = ve.WorkspaceID
+		tc.UserID = ve.RequesterID
+		tc.Source = analytics.SourceManual
+	}
 	s.storeTaskAnalyticsContext(task, tc)
 	return tc
 }
@@ -552,6 +562,38 @@ type IssuePlanContext struct {
 const IssuePlanContextType = "issue_plan"
 const IssuePlanPhaseSpec = "spec"
 const IssuePlanPhaseItems = "items"
+
+const VisualNodeGenerateContextType = "visual_node_generate"
+const VisualBoardExtractContextType = "visual_board_extract"
+
+type VisualNodeGenerateContext struct {
+	Type                   string   `json:"type"`
+	WorkspaceID            string   `json:"workspace_id"`
+	ProjectID              string   `json:"project_id"`
+	NodeID                 string   `json:"node_id"`
+	NodeTitle              string   `json:"node_title"`
+	NodeType               string   `json:"node_type"`
+	NodeDescription        string   `json:"node_description"`
+	Prompt                 string   `json:"prompt"`
+	RequesterID            string   `json:"requester_id"`
+	ReferenceAttachmentIDs []string `json:"reference_attachment_ids"`
+}
+
+type VisualBoardExtractContext struct {
+	Type        string                  `json:"type"`
+	WorkspaceID string                  `json:"workspace_id"`
+	ProjectID   string                  `json:"project_id"`
+	BoardID     string                  `json:"board_id"`
+	RequesterID string                  `json:"requester_id"`
+	WikiPages   []VisualWikiPageContext `json:"wiki_pages"`
+}
+
+type VisualWikiPageContext struct {
+	ID    string `json:"id"`
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
 
 const PlanItemExecutionKindAgentTask = "agent_task"
 const PlanItemExecutionKindHumanConfirmation = "human_confirmation"
@@ -2251,6 +2293,12 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	if ip, ok := s.parseIssuePlanContext(task); ok {
 		return ip.WorkspaceID
 	}
+	if vc, ok := s.parseVisualNodeGenerateContext(task); ok {
+		return vc.WorkspaceID
+	}
+	if ve, ok := s.parseVisualBoardExtractContext(task); ok {
+		return ve.WorkspaceID
+	}
 	return ""
 }
 
@@ -2464,6 +2512,40 @@ func (s *TaskService) parseIssuePlanContext(task db.AgentTaskQueue) (IssuePlanCo
 		return IssuePlanContext{}, false
 	}
 	return ip, true
+}
+
+func (s *TaskService) parseVisualNodeGenerateContext(task db.AgentTaskQueue) (VisualNodeGenerateContext, bool) {
+	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+		return VisualNodeGenerateContext{}, false
+	}
+	if len(task.Context) == 0 {
+		return VisualNodeGenerateContext{}, false
+	}
+	var vc VisualNodeGenerateContext
+	if err := json.Unmarshal(task.Context, &vc); err != nil {
+		return VisualNodeGenerateContext{}, false
+	}
+	if vc.Type != VisualNodeGenerateContextType {
+		return VisualNodeGenerateContext{}, false
+	}
+	return vc, true
+}
+
+func (s *TaskService) parseVisualBoardExtractContext(task db.AgentTaskQueue) (VisualBoardExtractContext, bool) {
+	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+		return VisualBoardExtractContext{}, false
+	}
+	if len(task.Context) == 0 {
+		return VisualBoardExtractContext{}, false
+	}
+	var ve VisualBoardExtractContext
+	if err := json.Unmarshal(task.Context, &ve); err != nil {
+		return VisualBoardExtractContext{}, false
+	}
+	if ve.Type != VisualBoardExtractContextType {
+		return VisualBoardExtractContext{}, false
+	}
+	return ve, true
 }
 
 func (s *TaskService) issuePlanIDFromTask(task db.AgentTaskQueue) (pgtype.UUID, IssuePlanContext, bool) {

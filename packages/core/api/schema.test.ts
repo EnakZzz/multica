@@ -356,6 +356,79 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("getProjectVisualBoard", () => {
+    it("uses safe defaults for malformed visual board fields", async () => {
+      stubFetchJson({
+        id: "board-1",
+        workspace_id: "ws-1",
+        project_id: "project-1",
+        viewport: "not-an-object",
+        metadata: null,
+        nodes: [
+          {
+            id: "node-1",
+            type: "future-node-type",
+            status: "future-status",
+            title: "Hero",
+            position_x: "bad",
+            position_y: 24,
+            source_refs: { wrong: "shape" },
+            reference_attachment_ids: [123],
+            result_attachment_id: 42,
+            result_attachment: { id: 42 },
+          },
+        ],
+        edges: "not-an-array",
+      });
+      const client = new ApiClient("https://api.example.test");
+      const board = await client.getProjectVisualBoard("project-1");
+      expect(board).toMatchObject({
+        id: "board-1",
+        workspace_id: "ws-1",
+        project_id: "project-1",
+        viewport: {},
+        metadata: {},
+        edges: [],
+      });
+      expect(board.nodes[0]).toMatchObject({
+        id: "node-1",
+        type: "reference",
+        status: "draft",
+        title: "Hero",
+        position_x: 0,
+        position_y: 24,
+        source_refs: [],
+        reference_attachment_ids: [],
+        result_attachment_id: null,
+        result_attachment: null,
+      });
+    });
+
+    it("falls back to an empty visual board when the board response is not an object", async () => {
+      stubFetchJson(null);
+      const client = new ApiClient("https://api.example.test");
+      const board = await client.getProjectVisualBoard("project-1");
+      expect(board).toEqual({
+        id: "",
+        workspace_id: "",
+        project_id: "",
+        viewport: {},
+        metadata: {},
+        nodes: [],
+        edges: [],
+        created_at: "",
+        updated_at: "",
+      });
+    });
+
+    it("parses visual node extraction task responses safely", async () => {
+      stubFetchJson({ task_id: 123 });
+      const client = new ApiClient("https://api.example.test");
+      const queued = await client.generateProjectVisualNodes("project-1");
+      expect(queued).toEqual({ task_id: "" });
+    });
+  });
+
   describe("listPipelines", () => {
     it("uses schema defaults for optional pipeline fields", async () => {
       stubFetchJson({

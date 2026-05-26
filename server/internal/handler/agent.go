@@ -206,15 +206,24 @@ type AgentTaskResponse struct {
 	// empty otherwise. The daemon emits both into the brief under
 	// `## Requesting User`; the heading is skipped entirely when description
 	// is empty.
-	RequestingUserName               string             `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string             `json:"requesting_user_profile_description,omitempty"`
-	IssuePlanPrompt                  string             `json:"issue_plan_prompt,omitempty"`   // user's natural-language input for plan tasks
-	IssuePlanID                      string             `json:"issue_plan_id,omitempty"`       // plan row receiving structured output
-	IssuePlanPhase                   string             `json:"issue_plan_phase,omitempty"`    // spec or items for two-stage planning
-	IssuePlanSpec                    service.PlanSpec   `json:"issue_plan_spec,omitempty"`     // approved spec for item-generation tasks
-	AvailableAgents                  []PlanAgentData    `json:"available_agents,omitempty"`    // assignable agents planner may recommend
-	AvailablePipelines               []PlanPipelineData `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
-	Kind                             string             `json:"kind"`                          // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+	RequestingUserName               string                          `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string                          `json:"requesting_user_profile_description,omitempty"`
+	IssuePlanPrompt                  string                          `json:"issue_plan_prompt,omitempty"`   // user's natural-language input for plan tasks
+	IssuePlanID                      string                          `json:"issue_plan_id,omitempty"`       // plan row receiving structured output
+	IssuePlanPhase                   string                          `json:"issue_plan_phase,omitempty"`    // spec or items for two-stage planning
+	IssuePlanSpec                    service.PlanSpec                `json:"issue_plan_spec,omitempty"`     // approved spec for item-generation tasks
+	AvailableAgents                  []PlanAgentData                 `json:"available_agents,omitempty"`    // assignable agents planner may recommend
+	AvailablePipelines               []PlanPipelineData              `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
+	VisualTaskType                   string                          `json:"visual_task_type,omitempty"`
+	VisualNodeID                     string                          `json:"visual_node_id,omitempty"`
+	VisualNodeTitle                  string                          `json:"visual_node_title,omitempty"`
+	VisualNodeType                   string                          `json:"visual_node_type,omitempty"`
+	VisualNodeDescription            string                          `json:"visual_node_description,omitempty"`
+	VisualPrompt                     string                          `json:"visual_prompt,omitempty"`
+	VisualReferenceAttachmentIDs     []string                        `json:"visual_reference_attachment_ids,omitempty"`
+	VisualBoardID                    string                          `json:"visual_board_id,omitempty"`
+	VisualWikiPages                  []service.VisualWikiPageContext `json:"visual_wiki_pages,omitempty"`
+	Kind                             string                          `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
 }
 
 type PlanAgentData struct {
@@ -331,6 +340,9 @@ func computeTaskKind(t db.AgentTaskQueue) string {
 		var payload map[string]any
 		if t.Context != nil && json.Unmarshal(t.Context, &payload) == nil && payload["type"] == service.IssuePlanContextType {
 			return "issue_plan"
+		}
+		if t.Context != nil && json.Unmarshal(t.Context, &payload) == nil && (payload["type"] == service.VisualNodeGenerateContextType || payload["type"] == service.VisualBoardExtractContextType) {
+			return "visual"
 		}
 		return "quick_create"
 	}

@@ -26,6 +26,10 @@ import type {
   ProjectKnowledgeRetrievalLogsResponse,
   ProjectKnowledgeSearchResponse,
   ProjectMemoryItem,
+  ProjectVisualBoard,
+  ProjectVisualEdge,
+  ProjectVisualNode,
+  GenerateProjectVisualNodesResponse,
   ProjectRelevantKnowledge,
   ProjectWikiPage,
   RelatedMemoryResponse,
@@ -459,6 +463,110 @@ export const ListProjectMemoryItemsResponseSchema = z.object({
 export const EMPTY_LIST_PROJECT_MEMORY_ITEMS_RESPONSE = {
   memory_items: [],
   total: 0,
+};
+
+export const ProjectVisualNodeSchema = z.object({
+  id: z.string().catch("").default(""),
+  board_id: z.string().catch("").default(""),
+  workspace_id: z.string().catch("").default(""),
+  project_id: z.string().catch("").default(""),
+  type: z.enum(["character", "scene", "ui_element", "prop", "reference", "gameplay_note", "generated_variant"]).catch("reference").default("reference"),
+  status: z.enum(["draft", "adopted", "rejected", "generating", "failed"]).catch("draft").default("draft"),
+  title: z.string().catch("").default(""),
+  description: z.string().catch("").default(""),
+  prompt: z.string().catch("").default(""),
+  position_x: z.number().catch(0).default(0),
+  position_y: z.number().catch(0).default(0),
+  source_refs: UnknownArraySchema,
+  reference_attachment_ids: z.array(z.string()).catch([]).default([]),
+  result_attachment_id: z.string().nullable().catch(null).default(null),
+  result_attachment: AttachmentResponseSchema.nullable().catch(null).default(null),
+  result_note: z.string().catch("").default(""),
+  generation_agent_id: z.string().nullable().catch(null).default(null),
+  generation_task_id: z.string().nullable().catch(null).default(null),
+  generation_error: z.string().catch("").default(""),
+  created_at: z.string().catch("").default(""),
+  updated_at: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_PROJECT_VISUAL_NODE: ProjectVisualNode = {
+  id: "",
+  board_id: "",
+  workspace_id: "",
+  project_id: "",
+  type: "reference",
+  status: "draft",
+  title: "",
+  description: "",
+  prompt: "",
+  position_x: 0,
+  position_y: 0,
+  source_refs: [],
+  reference_attachment_ids: [],
+  result_attachment_id: null,
+  result_attachment: null,
+  result_note: "",
+  generation_agent_id: null,
+  generation_task_id: null,
+  generation_error: "",
+  created_at: "",
+  updated_at: "",
+};
+
+export const ProjectVisualEdgeSchema = z.object({
+  id: z.string().catch("").default(""),
+  board_id: z.string().catch("").default(""),
+  workspace_id: z.string().catch("").default(""),
+  project_id: z.string().catch("").default(""),
+  source_node_id: z.string().catch("").default(""),
+  target_node_id: z.string().catch("").default(""),
+  relation: z.string().catch("").default(""),
+  created_at: z.string().catch("").default(""),
+  updated_at: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_PROJECT_VISUAL_EDGE: ProjectVisualEdge = {
+  id: "",
+  board_id: "",
+  workspace_id: "",
+  project_id: "",
+  source_node_id: "",
+  target_node_id: "",
+  relation: "",
+  created_at: "",
+  updated_at: "",
+};
+
+export const ProjectVisualBoardSchema = z.object({
+  id: z.string().catch("").default(""),
+  workspace_id: z.string().catch("").default(""),
+  project_id: z.string().catch("").default(""),
+  viewport: z.record(z.string(), z.unknown()).catch({}).default({}),
+  metadata: z.record(z.string(), z.unknown()).catch({}).default({}),
+  nodes: z.array(ProjectVisualNodeSchema).catch([]).default([]),
+  edges: z.array(ProjectVisualEdgeSchema).catch([]).default([]),
+  created_at: z.string().catch("").default(""),
+  updated_at: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_PROJECT_VISUAL_BOARD: ProjectVisualBoard = {
+  id: "",
+  workspace_id: "",
+  project_id: "",
+  viewport: {},
+  metadata: {},
+  nodes: [],
+  edges: [],
+  created_at: "",
+  updated_at: "",
+};
+
+export const GenerateProjectVisualNodesResponseSchema = z.object({
+  task_id: z.string().catch("").optional(),
+}).loose();
+
+export const EMPTY_GENERATE_PROJECT_VISUAL_NODES_RESPONSE: GenerateProjectVisualNodesResponse = {
+  task_id: "",
 };
 
 export const ProjectKnowledgeSearchResultSchema = z.object({

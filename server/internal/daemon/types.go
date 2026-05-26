@@ -79,14 +79,30 @@ type Task struct {
 	// no owner (cloud / system runtimes) or the user hasn't set a description.
 	// Injected into the brief under `## Requesting User`; omitted entirely
 	// when description is empty so the agent doesn't see a useless heading.
-	RequestingUserName               string             `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string             `json:"requesting_user_profile_description,omitempty"`
-	IssuePlanPrompt                  string             `json:"issue_plan_prompt,omitempty"`   // user's natural-language input for plan tasks
-	IssuePlanID                      string             `json:"issue_plan_id,omitempty"`       // plan row receiving the structured output
-	IssuePlanPhase                   string             `json:"issue_plan_phase,omitempty"`    // spec or items for two-stage planning
-	IssuePlanSpec                    PlanSpecData       `json:"issue_plan_spec,omitempty"`     // approved spec for item-generation tasks
-	AvailableAgents                  []PlanAgentData    `json:"available_agents,omitempty"`    // assignable agents planner may recommend
-	AvailablePipelines               []PlanPipelineData `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
+	RequestingUserName               string               `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string               `json:"requesting_user_profile_description,omitempty"`
+	IssuePlanPrompt                  string               `json:"issue_plan_prompt,omitempty"`   // user's natural-language input for plan tasks
+	IssuePlanID                      string               `json:"issue_plan_id,omitempty"`       // plan row receiving the structured output
+	IssuePlanPhase                   string               `json:"issue_plan_phase,omitempty"`    // spec or items for two-stage planning
+	IssuePlanSpec                    PlanSpecData         `json:"issue_plan_spec,omitempty"`     // approved spec for item-generation tasks
+	AvailableAgents                  []PlanAgentData      `json:"available_agents,omitempty"`    // assignable agents planner may recommend
+	AvailablePipelines               []PlanPipelineData   `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
+	VisualTaskType                   string               `json:"visual_task_type,omitempty"`
+	VisualNodeID                     string               `json:"visual_node_id,omitempty"`
+	VisualNodeTitle                  string               `json:"visual_node_title,omitempty"`
+	VisualNodeType                   string               `json:"visual_node_type,omitempty"`
+	VisualNodeDescription            string               `json:"visual_node_description,omitempty"`
+	VisualPrompt                     string               `json:"visual_prompt,omitempty"`
+	VisualReferenceAttachmentIDs     []string             `json:"visual_reference_attachment_ids,omitempty"`
+	VisualBoardID                    string               `json:"visual_board_id,omitempty"`
+	VisualWikiPages                  []VisualWikiPageData `json:"visual_wiki_pages,omitempty"`
+}
+
+type VisualWikiPageData struct {
+	ID    string `json:"id"`
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }
 
 type RelevantKnowledgeData struct {

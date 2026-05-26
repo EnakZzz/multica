@@ -142,6 +142,70 @@ func TestBuildChatPromptIncludesProjectWikiInstruction(t *testing.T) {
 	}
 }
 
+func TestBuildVisualNodePromptRequiresNodeCompletion(t *testing.T) {
+	out := BuildPrompt(Task{
+		VisualTaskType:               "visual_node_generate",
+		ProjectID:                    "project-123",
+		ProjectTitle:                 "Lost Pet",
+		VisualNodeID:                 "node-123",
+		VisualNodeTitle:              "Rainy street corner",
+		VisualNodeType:               "scene",
+		VisualNodeDescription:        "A warm but rainy urban search scene.",
+		VisualPrompt:                 "Cozy rain-soaked street corner, readable missing pet poster.",
+		VisualReferenceAttachmentIDs: []string{"attachment-123"},
+	}, "codex")
+
+	mustContain := []string{
+		"There is no issue for this task",
+		"Visual node ID: node-123",
+		"download with `multica attachment download attachment-123`",
+		"Upload the generated image as an attachment",
+		"multica visual-node complete <node-id> --project <project-id> --attachment <local-image-path>",
+		"multica visual-node complete <node-id> --project <project-id> --error <reason>",
+		"Do not create an issue",
+	}
+
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("BuildPrompt visual node output missing %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
+func TestBuildVisualBoardExtractPromptRequiresStrictJSON(t *testing.T) {
+	out := BuildPrompt(Task{
+		VisualTaskType: "visual_board_extract",
+		ProjectID:      "project-123",
+		ProjectTitle:   "Lost Pet",
+		VisualBoardID:  "board-123",
+		VisualWikiPages: []VisualWikiPageData{
+			{
+				ID:    "wiki-1",
+				Slug:  "visual-brief",
+				Title: "Visual Brief",
+				Body:  "# 角色：Milo\n一只走失宠物。\n# 场景：雨夜街角",
+			},
+		},
+	}, "codex")
+
+	mustContain := []string{
+		"There is no issue for this task",
+		"Visual board ID: board-123",
+		"Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant",
+		"wiki_page id=wiki-1 slug=visual-brief",
+		"Return exactly one JSON object",
+		`"nodes"`,
+		`"edges"`,
+		"no markdown fences",
+	}
+
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("BuildPrompt visual board extract output missing %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
 func TestBuildIssuePlanSpecPromptPreservesUserLanguage(t *testing.T) {
 	out := buildIssuePlanSpecPrompt(Task{
 		IssuePlanPrompt: "实现一个 Web 版多人贪吃蛇，先生成 spec 给我确认",

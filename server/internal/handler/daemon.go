@@ -1746,6 +1746,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// there so the isolation check below has something to compare.
 	hasQuickCreate := false
 	hasIssuePlan := false
+	hasVisualTask := false
 	if task.Context != nil && !task.IssueID.Valid && !task.ChatSessionID.Valid && !task.AutopilotRunID.Valid {
 		var qc service.QuickCreateContext
 		if json.Unmarshal(task.Context, &qc) == nil && qc.Type == service.QuickCreateContextType {
@@ -1834,6 +1835,33 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+
+		if vc, ok := h.visualTaskContextFromTask(*task); ok {
+			hasVisualTask = true
+			resp.Kind = "visual"
+			resp.VisualTaskType = vc.Type
+			resp.VisualBoardID = vc.BoardID
+			resp.VisualNodeID = vc.NodeID
+			resp.VisualNodeTitle = vc.NodeTitle
+			resp.VisualNodeType = vc.NodeType
+			resp.VisualNodeDescription = vc.NodeDescription
+			resp.VisualPrompt = vc.Prompt
+			resp.VisualReferenceAttachmentIDs = vc.ReferenceAttachmentIDs
+			resp.VisualWikiPages = vc.WikiPages
+			resp.WorkspaceID = vc.WorkspaceID
+			resp.ProjectID = vc.ProjectID
+			if projectUUID, err := util.ParseUUID(vc.ProjectID); err == nil {
+				if proj, err := h.Queries.GetProject(r.Context(), projectUUID); err == nil {
+					resp.ProjectTitle = proj.Title
+				}
+			}
+			if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(vc.WorkspaceID)); err == nil && ws.Repos != nil {
+				var repos []RepoData
+				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
+					resp.Repos = repos
+				}
+			}
+		}
 	}
 
 	// Workspace isolation check: the daemon uses this response's workspace_id
@@ -1856,6 +1884,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			"has_autopilot_run", task.AutopilotRunID.Valid,
 			"has_quick_create", hasQuickCreate,
 			"has_issue_plan", hasIssuePlan,
+			"has_visual_task", hasVisualTask,
 		)
 		if _, cerr := h.TaskService.CancelTask(r.Context(), task.ID); cerr != nil {
 			slog.Error("task claim: cancel after workspace check failed",
@@ -2068,6 +2097,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.emitIssueExecutedOnFirstCompletion(r, task)
+	h.applyVisualBoardExtractCompleted(r.Context(), *task, req.Output)
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task))

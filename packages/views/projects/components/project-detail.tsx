@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { BookOpen, Check, ChevronRight, Database, Download, Eye, FileText, Link2, ListTodo, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Plus, Search, Trash2, Upload, UserMinus } from "lucide-react";
+import { BookOpen, Check, ChevronRight, Database, Download, Eye, FileText, Image as ImageIcon, Link2, ListTodo, MoreHorizontal, PanelRight, Pencil, Pin, PinOff, Plus, Search, Trash2, Upload, UserMinus } from "lucide-react";
 import { useMutation, useQuery, type QueryKey } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
@@ -49,6 +49,7 @@ import { AppLink, useNavigation } from "../../navigation";
 import { TitleEditor, ContentEditor, type ContentEditorRef } from "../../editor";
 import { PriorityIcon } from "../../issues/components/priority-icon";
 import { ProjectResourcesSection } from "./project-resources-section";
+import { ProjectVisualCanvas } from "./project-visual-canvas";
 import { IssuesHeader } from "../../issues/components/issues-header";
 import { BoardView } from "../../issues/components/board-view";
 import { ListView } from "../../issues/components/list-view";
@@ -1005,7 +1006,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [progressOpen, setProgressOpen] = useState(true);
   const [descriptionOpen, setDescriptionOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<"issues" | "knowledge">("issues");
+  const [activeTab, setActiveTab] = useState<"issues" | "knowledge" | "visual">("issues");
 
   // Sidebar panel
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -1388,6 +1389,14 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 <BookOpen className="mr-1.5 h-3.5 w-3.5" />
                 Knowledge
               </Button>
+              <Button
+                variant={activeTab === "visual" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setActiveTab("visual")}
+              >
+                <ImageIcon className="mr-1.5 h-3.5 w-3.5" />
+                Visual
+              </Button>
             </div>
             {activeTab === "issues" ? (
               <ViewStoreProvider store={projectViewStore}>
@@ -1397,8 +1406,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                   filter={projectFilter}
                 />
               </ViewStoreProvider>
-            ) : (
+            ) : activeTab === "knowledge" ? (
               <ProjectKnowledgeSurface projectId={projectId} />
+            ) : (
+              <ProjectVisualCanvas projectId={projectId} />
             )}
           </div>
           </div>

@@ -30,6 +30,12 @@ func BuildPrompt(task Task, provider string) string {
 	if task.IssuePlanPrompt != "" {
 		return buildIssuePlanPrompt(task)
 	}
+	if task.VisualTaskType != "" {
+		if task.VisualTaskType == "visual_board_extract" {
+			return buildVisualBoardExtractPrompt(task)
+		}
+		return buildVisualNodePrompt(task)
+	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
@@ -113,6 +119,58 @@ func BuildPrompt(task Task, provider string) string {
 		b.WriteString("For code changes, use `multica repo checkout <url>` and publish the generated work branch with `multica repo publish`. Never push directly to main or master. Your final issue comment must include `Branch: ...` and `Status: ready for review` after publish succeeds.\n")
 		writeWikiDeltaGuidance(&b, false)
 	}
+	return b.String()
+}
+
+func buildVisualNodePrompt(task Task) string {
+	var b strings.Builder
+	b.WriteString("You are running as an art-generation agent for a Multica project visual canvas.\n\n")
+	b.WriteString("There is no issue for this task. Generate or prepare the requested visual asset, upload the image attachment, and write the result back to the visual node.\n\n")
+	if task.ProjectTitle != "" {
+		fmt.Fprintf(&b, "Project: %s (%s)\n\n", task.ProjectTitle, task.ProjectID)
+	}
+	fmt.Fprintf(&b, "Visual node ID: %s\n", task.VisualNodeID)
+	fmt.Fprintf(&b, "Node type: %s\n", task.VisualNodeType)
+	fmt.Fprintf(&b, "Title: %s\n", task.VisualNodeTitle)
+	if strings.TrimSpace(task.VisualNodeDescription) != "" {
+		fmt.Fprintf(&b, "Description:\n%s\n\n", task.VisualNodeDescription)
+	}
+	fmt.Fprintf(&b, "Suggested prompt:\n%s\n\n", task.VisualPrompt)
+	if len(task.VisualReferenceAttachmentIDs) > 0 {
+		b.WriteString("Reference attachments:\n")
+		for _, id := range task.VisualReferenceAttachmentIDs {
+			fmt.Fprintf(&b, "- %s: download with `multica attachment download %s`\n", id, id)
+		}
+		b.WriteString("\n")
+	}
+	writeRelevantKnowledgeBlock(&b, task)
+	b.WriteString("Completion contract:\n")
+	b.WriteString("- Upload the generated image as an attachment through the Multica CLI or API.\n")
+	b.WriteString("- Then run `multica visual-node complete <node-id> --project <project-id> --attachment <local-image-path> --note <short note>`.\n")
+	b.WriteString("- If generation fails, run `multica visual-node complete <node-id> --project <project-id> --error <reason>` so the node shows a failure state.\n")
+	b.WriteString("- Do not create an issue and do not call `multica issue create` for this task.\n")
+	return b.String()
+}
+
+func buildVisualBoardExtractPrompt(task Task) string {
+	var b strings.Builder
+	b.WriteString("You are running as a visual planning agent for a Multica project visual canvas.\n\n")
+	b.WriteString("There is no issue for this task. Read the Project Wiki excerpts and extract the visual board nodes and edges as strict JSON.\n\n")
+	if task.ProjectTitle != "" {
+		fmt.Fprintf(&b, "Project: %s (%s)\n", task.ProjectTitle, task.ProjectID)
+	} else if task.ProjectID != "" {
+		fmt.Fprintf(&b, "Project ID: %s\n", task.ProjectID)
+	}
+	fmt.Fprintf(&b, "Visual board ID: %s\n\n", task.VisualBoardID)
+	b.WriteString("Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant.\n")
+	b.WriteString("Create one node for each distinct visual thing a user should review or generate. Include gameplay_note only for mechanics that affect visual direction.\n")
+	b.WriteString("Nodes start as draft; do not mark anything adopted.\n\n")
+	b.WriteString("Project Wiki input:\n")
+	for _, page := range task.VisualWikiPages {
+		fmt.Fprintf(&b, "\n--- wiki_page id=%s slug=%s title=%q ---\n%s\n", page.ID, page.Slug, page.Title, page.Body)
+	}
+	b.WriteString("\nReturn exactly one JSON object, with no markdown fences and no prose. Schema:\n")
+	b.WriteString(`{"nodes":[{"id":"stable_local_id","type":"character|scene|ui_element|prop|reference|gameplay_note|generated_variant","title":"short title","description":"what this visual node represents","prompt":"suggested image-generation prompt","source_refs":[{"wiki_page_id":"...","wiki_slug":"...","title":"...","snippet":"..."}],"confidence":0.0,"position_x":0,"position_y":0}],"edges":[{"source":"stable_local_id","target":"stable_local_id","relation":"reference|contains|uses|variant_of|supports_gameplay"}]}` + "\n")
 	return b.String()
 }
 

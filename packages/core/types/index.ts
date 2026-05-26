@@ -98,6 +98,18 @@ export type {
   CreateProjectMemoryItemRequest,
   UpdateProjectMemoryItemRequest,
 } from "./project-knowledge";
+export type {
+  ProjectVisualBoard,
+  ProjectVisualNode,
+  ProjectVisualNodeStatus,
+  ProjectVisualNodeType,
+  ProjectVisualEdge,
+  UpdateProjectVisualBoardRequest,
+  GenerateProjectVisualNodesResponse,
+  GenerateProjectVisualNodeRequest,
+  CreateProjectVisualPlanRequest,
+  CreateProjectVisualPlanResponse,
+} from "./project-visual";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   Plan,

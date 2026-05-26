@@ -29,8 +29,8 @@ const (
 	// subscribes by `task:` prefix and invalidates the workspace task
 	// snapshot, so the granularity here is "what does the user want to see
 	// change" — not "every internal status flip".
-	EventTaskQueued    = "task:queued"    // ∅ → queued (enqueue / retry create)
-	EventTaskDispatch  = "task:dispatch"  // queued → dispatched (daemon claim)
+	EventTaskQueued    = "task:queued"   // ∅ → queued (enqueue / retry create)
+	EventTaskDispatch  = "task:dispatch" // queued → dispatched (daemon claim)
 	EventTaskProgress  = "task:progress"
 	EventTaskCompleted = "task:completed" // running → completed
 	EventTaskFailed    = "task:failed"    // running → failed
@@ -78,6 +78,7 @@ const (
 	EventProjectDeleted         = "project:deleted"
 	EventProjectResourceCreated = "project_resource:created"
 	EventProjectResourceDeleted = "project_resource:deleted"
+	EventProjectVisualUpdated   = "project_visual:updated"
 
 	// Label events
 	EventLabelCreated       = "label:created"

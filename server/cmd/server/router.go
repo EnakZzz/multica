@@ -481,6 +481,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/knowledge/search", h.SearchProjectKnowledge)
 					r.Get("/knowledge/retrieval-logs", h.ListProjectKnowledgeRetrievalLogs)
 					r.Patch("/knowledge/retrieval-logs/{logId}/feedback", h.UpdateProjectKnowledgeRetrievalLogFeedback)
+					r.Get("/visual-board", h.GetProjectVisualBoard)
+					r.Put("/visual-board", h.UpdateProjectVisualBoard)
+					r.Post("/visual-board/generate-nodes", h.GenerateProjectVisualNodes)
+					r.Post("/visual-board/create-plan", h.CreatePlanFromProjectVisualBoard)
+					r.Post("/visual-nodes/{nodeId}/generate", h.GenerateProjectVisualNodeImage)
+					r.Post("/visual-nodes/{nodeId}/generation-result", h.CompleteProjectVisualNodeGeneration)
 				})
 			})
 

@@ -58,6 +58,7 @@ export type WSEventType =
   | "project:created"
   | "project:updated"
   | "project:deleted"
+  | "project_visual:updated"
   | "label:created"
   | "label:updated"
   | "label:deleted"

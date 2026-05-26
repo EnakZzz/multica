@@ -88,6 +88,11 @@ import type {
   ProjectKnowledgeSearchResponse,
   ProjectMemoryItem,
   ProjectWikiPage,
+  ProjectVisualBoard,
+  UpdateProjectVisualBoardRequest,
+  GenerateProjectVisualNodesResponse,
+  GenerateProjectVisualNodeRequest,
+  CreateProjectVisualPlanRequest,
   RelatedMemoryResponse,
   UpdateProjectKnowledgeRetrievalLogFeedbackRequest,
   UpdateProjectMemoryItemRequest,
@@ -184,6 +189,8 @@ import {
   EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOGS_RESPONSE,
   EMPTY_PROJECT_KNOWLEDGE_SEARCH_RESPONSE,
   EMPTY_PROJECT_MEMORY_ITEM,
+  EMPTY_PROJECT_VISUAL_BOARD,
+  EMPTY_GENERATE_PROJECT_VISUAL_NODES_RESPONSE,
   EMPTY_PROJECT_WIKI_PAGE,
   EMPTY_QUICK_CREATE_ISSUE_RESPONSE,
   EMPTY_RELATED_MEMORY_RESPONSE,
@@ -210,6 +217,8 @@ import {
   ProjectKnowledgeRetrievalLogsResponseSchema,
   ProjectKnowledgeSearchResponseSchema,
   ProjectMemoryItemSchema,
+  ProjectVisualBoardSchema,
+  GenerateProjectVisualNodesResponseSchema,
   ProjectWikiPageSchema,
   QuickCreateIssueResponseSchema,
   RelatedMemoryResponseSchema,
@@ -1775,6 +1784,61 @@ export class ApiClient {
   ): Promise<void> {
     await this.fetch(`/api/projects/${projectId}/resources/${resourceId}`, {
       method: "DELETE",
+    });
+  }
+
+  // Project visual canvas
+  async getProjectVisualBoard(projectId: string): Promise<ProjectVisualBoard> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-board`);
+    return parseWithFallback(raw, ProjectVisualBoardSchema, EMPTY_PROJECT_VISUAL_BOARD, {
+      endpoint: "GET /api/projects/{id}/visual-board",
+    });
+  }
+
+  async updateProjectVisualBoard(
+    projectId: string,
+    data: UpdateProjectVisualBoardRequest,
+  ): Promise<ProjectVisualBoard> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-board`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ProjectVisualBoardSchema, EMPTY_PROJECT_VISUAL_BOARD, {
+      endpoint: "PUT /api/projects/{id}/visual-board",
+    });
+  }
+
+  async generateProjectVisualNodes(projectId: string): Promise<GenerateProjectVisualNodesResponse> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-board/generate-nodes`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    return parseWithFallback(raw, GenerateProjectVisualNodesResponseSchema, EMPTY_GENERATE_PROJECT_VISUAL_NODES_RESPONSE, {
+      endpoint: "POST /api/projects/{id}/visual-board/generate-nodes",
+    });
+  }
+
+  async generateProjectVisualNodeImage(
+    projectId: string,
+    nodeId: string,
+    data: GenerateProjectVisualNodeRequest,
+  ): Promise<{ task_id?: string }> {
+    return this.fetch(`/api/projects/${projectId}/visual-nodes/${nodeId}/generate`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async createPlanFromProjectVisualBoard(
+    projectId: string,
+    data: CreateProjectVisualPlanRequest,
+  ): Promise<Plan> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-board/create-plan`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, PlanSchema, EMPTY_PLAN, {
+      endpoint: "POST /api/projects/{id}/visual-board/create-plan",
     });
   }
 

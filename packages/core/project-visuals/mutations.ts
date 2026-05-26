@@ -1,0 +1,73 @@
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { api } from "../api";
+import { useWorkspaceId } from "../hooks";
+import type {
+  CreateProjectVisualPlanRequest,
+  GenerateProjectVisualNodeRequest,
+  UpdateProjectVisualBoardRequest,
+} from "../types";
+import { projectVisualKeys } from "./queries";
+
+export function invalidateProjectVisualBoardQueries(
+  qc: QueryClient,
+  wsId: string,
+  projectId: string,
+) {
+  qc.invalidateQueries({ queryKey: projectVisualKeys.board(wsId, projectId) });
+}
+
+export function invalidateProjectVisualPlanQueries(
+  qc: QueryClient,
+  wsId: string,
+  projectId: string,
+) {
+  invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+  qc.invalidateQueries({ queryKey: ["plans", wsId] });
+}
+
+export function useUpdateProjectVisualBoard(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: UpdateProjectVisualBoardRequest) =>
+      api.updateProjectVisualBoard(projectId, data),
+    onSettled: () => {
+      invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+    },
+  });
+}
+
+export function useGenerateProjectVisualNodes(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.generateProjectVisualNodes(projectId),
+    onSettled: () => {
+      invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+    },
+  });
+}
+
+export function useGenerateProjectVisualNodeImage(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeId, ...data }: { nodeId: string } & GenerateProjectVisualNodeRequest) =>
+      api.generateProjectVisualNodeImage(projectId, nodeId, data),
+    onSettled: () => {
+      invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+    },
+  });
+}
+
+export function useCreatePlanFromProjectVisualBoard(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateProjectVisualPlanRequest) =>
+      api.createPlanFromProjectVisualBoard(projectId, data),
+    onSettled: () => {
+      invalidateProjectVisualPlanQueries(qc, wsId, projectId);
+    },
+  });
+}
