@@ -60,6 +60,9 @@ export interface PlanItem {
   required_evidence: string[];
   requires_git_commit: boolean;
   branch_name: string;
+  iteration_index: number;
+  iteration_title: string;
+  iteration_branch_name: string;
   recommended_agent_id: string | null;
   match_score: number;
   match_reason: string;
@@ -121,6 +124,9 @@ export interface UpdatePlanItemRequest {
   required_evidence?: string[];
   requires_git_commit?: boolean;
   branch_name?: string;
+  iteration_index?: number;
+  iteration_title?: string;
+  iteration_branch_name?: string;
   recommended_agent_id?: string | null;
   match_score: number;
   match_reason: string;

@@ -233,7 +233,8 @@ func TestBuildIssuePlanItemsPromptPreservesApprovedSpecLanguage(t *testing.T) {
 		"If the approved spec or user goal is primarily Chinese",
 		"write titles, descriptions, criteria, risk notes, confirmation questions, and confirmation reasons in Chinese",
 		"Keep JSON property names, code identifiers, commands, file paths, API names, and proper nouns unchanged.",
-		"requires_git_commit=true and provide branch_name",
+		"Set iteration_index, iteration_title, and iteration_branch_name on every direct_issue, item, or selected pipeline node.",
+		"The server will force branch_name to the iteration_branch_name for that item.",
 		"Do not use `agent/<agent-role>/<issue>` style names.",
 	}
 	for _, s := range mustContain {

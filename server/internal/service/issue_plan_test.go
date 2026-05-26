@@ -85,6 +85,58 @@ func TestNormalizePlanSpecCleansReviewContractFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeIssuePlanItemIterationsSharesBranchPerIteration(t *testing.T) {
+	yes := true
+	no := false
+	items := normalizeIssuePlanItemIterations("Lost Pet", []issuePlanResultItem{
+		{
+			Title:               "Build playable shell",
+			RequiresGitCommit:   &yes,
+			BranchName:          "feature/item-shell",
+			IterationIndex:      1,
+			IterationTitle:      "Playable shell",
+			IterationBranchName: "feature/lost-pet-loop-1-playable-shell",
+		},
+		{
+			Title:             "Test playable shell",
+			RequiresGitCommit: &yes,
+			BranchName:        "feature/item-tests",
+			IterationIndex:    1,
+		},
+		{
+			Title:             "Confirm playable shell",
+			ExecutionKind:     PlanItemExecutionKindHumanConfirmation,
+			RequiresGitCommit: &no,
+			BranchName:        "feature/should-be-cleared",
+			IterationIndex:    1,
+		},
+		{
+			Title:             "Build memory core",
+			RequiresGitCommit: &yes,
+			IterationIndex:    2,
+		},
+	})
+
+	if got := items[0].BranchName; got != "feature/lost-pet-loop-1-playable-shell" {
+		t.Fatalf("first item branch = %q", got)
+	}
+	if got := items[1].BranchName; got != items[0].BranchName {
+		t.Fatalf("same iteration branch mismatch: %q vs %q", got, items[0].BranchName)
+	}
+	if got := items[2].BranchName; got != "" {
+		t.Fatalf("non-commit branch = %q, want empty", got)
+	}
+	if got := items[2].IterationBranchName; got != items[0].BranchName {
+		t.Fatalf("non-commit iteration branch = %q, want %q", got, items[0].BranchName)
+	}
+	if got := items[3].IterationBranchName; got == "" || got == items[0].BranchName {
+		t.Fatalf("second iteration branch = %q, want generated branch distinct from iteration 1", got)
+	}
+	if got := items[3].BranchName; got != items[3].IterationBranchName {
+		t.Fatalf("second iteration item branch = %q, want %q", got, items[3].IterationBranchName)
+	}
+}
+
 func TestMergeExistingPlanClarificationsPreservesHistory(t *testing.T) {
 	existing, err := json.Marshal(PlanSpec{
 		Summary: "Old",

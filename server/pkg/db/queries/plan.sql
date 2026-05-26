@@ -124,6 +124,7 @@ INSERT INTO plan_item (
     acceptance_criteria, suggested_test_commands, unit_test_checklist, context_resources, risk_notes,
     execution_kind, confirmation_question, confirmation_reason, required_evidence,
     requires_git_commit, branch_name,
+    iteration_index, iteration_title, iteration_branch_name,
     node_type,
     recommended_agent_id,
     match_score, match_reason, missing_capability, depends_on_positions, selected
@@ -132,9 +133,10 @@ INSERT INTO plan_item (
     $5, $6, sqlc.arg('unit_test_checklist')::jsonb, $7, $8,
     $9, $10, $11, $12,
     $13, $14,
-    $20,
+    $15, $16, $17,
+    $18,
     sqlc.narg('recommended_agent_id'),
-    $15, $16, $17, $18, $19
+    $19, $20, $21, $22, $23
 ) RETURNING *;
 
 -- name: ListPlanItems :many

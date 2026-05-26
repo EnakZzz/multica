@@ -168,7 +168,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
   );
 
   const changeItem = (id: string, patch: Partial<PlanItem>) => {
-    setDirtyItems((dirtyItems ?? plan.items).map((item) => (item.id === id ? { ...item, ...patch } : item)));
+    setDirtyItems((current) => (current ?? plan.items).map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };
 
   const save = async () => {
@@ -191,6 +191,9 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
         required_evidence: item.required_evidence,
         requires_git_commit: item.requires_git_commit,
         branch_name: item.branch_name,
+        iteration_index: item.iteration_index,
+        iteration_title: item.iteration_title,
+        iteration_branch_name: item.iteration_branch_name,
         recommended_agent_id: item.recommended_agent_id,
         match_score: item.match_score,
         match_reason: item.match_reason,
@@ -794,7 +797,18 @@ function TasksSection({
   onChangeItem: (id: string, patch: Partial<PlanItem>) => void;
 }) {
   const selectedCount = items.filter((i) => i.selected).length;
+  const iterationGroups = useMemo(() => groupPlanItemsByIteration(items), [items]);
   const paths = useWorkspacePaths();
+
+  const onChangeIterationGroup = (group: PlanIterationGroup, patch: Pick<Partial<PlanItem>, "iteration_title" | "iteration_branch_name">) => {
+    group.items.forEach((item) => {
+      const itemPatch: Partial<PlanItem> = { ...patch };
+      if (patch.iteration_branch_name !== undefined && item.requires_git_commit) {
+        itemPatch.branch_name = patch.iteration_branch_name;
+      }
+      onChangeItem(item.id, itemPatch);
+    });
+  };
 
   return (
     <div>
@@ -820,8 +834,48 @@ function TasksSection({
       </div>
 
       {/* Item list */}
-      <div className="space-y-1.5">
-        {items.map((item, idx) => {
+      <div className="space-y-6">
+        {iterationGroups.map((group) => {
+          const groupDisabled = !editable || group.items.some((item) => !!item.generated_issue_id);
+          return (
+            <section key={group.key} className="space-y-2 border-t border-border/60 pt-4 first:border-t-0 first:pt-0">
+              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
+                <div className="min-w-0">
+                  <div className="mb-1 font-mono text-[9px] font-bold uppercase tracking-widest text-muted-foreground/40">
+                    Iteration {group.index}
+                  </div>
+                  {editable ? (
+                    <Input
+                      value={group.title}
+                      disabled={groupDisabled}
+                      placeholder={`Iteration ${group.index} title`}
+                      className="h-8 text-sm font-medium"
+                      onChange={(e) => onChangeIterationGroup(group, { iteration_title: e.target.value })}
+                    />
+                  ) : (
+                    <div className="truncate text-sm font-medium text-foreground">{group.title || `Iteration ${group.index}`}</div>
+                  )}
+                </div>
+                <label className="min-w-0 grid gap-1.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/40">
+                  <span>Shared Branch</span>
+                  {editable ? (
+                    <Input
+                      value={group.branchName}
+                      disabled={groupDisabled}
+                      placeholder={`feature/plan-iter-${group.index}`}
+                      className="h-8 bg-background text-xs font-normal normal-case tracking-normal text-foreground"
+                      onChange={(e) => onChangeIterationGroup(group, { iteration_branch_name: e.target.value })}
+                    />
+                  ) : (
+                    <span className="truncate rounded border bg-muted/20 px-2 py-1.5 text-xs font-normal normal-case tracking-normal text-foreground">
+                      {group.branchName || "No shared branch"}
+                    </span>
+                  )}
+                </label>
+              </div>
+
+              <div className="space-y-1.5">
+                {group.items.map((item) => {
           const agent = item.recommended_agent_id ? agentsById.get(item.recommended_agent_id) : null;
           const isHuman = item.execution_kind === "human_confirmation";
           const hasGap = !isHuman && (!item.recommended_agent_id || item.match_score < 60);
@@ -855,11 +909,11 @@ function TasksSection({
             >
               <div className="flex items-start">
                 {/* Position ordinal */}
-                <div className="flex w-9 shrink-0 justify-center pt-3.5">
-                  <span className="font-mono text-[10px] font-bold tabular-nums text-muted-foreground/30">
-                    {String(idx + 1).padStart(2, "0")}
-                  </span>
-                </div>
+                  <div className="flex w-9 shrink-0 justify-center pt-3.5">
+                    <span className="font-mono text-[10px] font-bold tabular-nums text-muted-foreground/30">
+                      {String(item.position).padStart(2, "0")}
+                    </span>
+                  </div>
 
                 {/* Checkbox */}
                 <div className="flex shrink-0 items-start pt-3.5 pr-3">
@@ -951,6 +1005,7 @@ function TasksSection({
                   {/* Contract + deps */}
                   <PlanItemContractEditor
                     item={item}
+                    iterationBranchName={group.branchName}
                     disabled={disabled}
                     onChange={(patch) =>
                       onChangeItem(item.id, {
@@ -964,7 +1019,7 @@ function TasksSection({
                               branch_name: "",
                             }
                           : patch.execution_kind === "agent_task"
-                            ? { requires_git_commit: true }
+                            ? { requires_git_commit: true, branch_name: group.branchName }
                           : {}),
                       })
                     }
@@ -1002,6 +1057,10 @@ function TasksSection({
               </div>
             </div>
           );
+                })}
+              </div>
+            </section>
+          );
         })}
       </div>
     </div>
@@ -1012,10 +1071,12 @@ function TasksSection({
 
 function PlanItemContractEditor({
   item,
+  iterationBranchName,
   disabled,
   onChange,
 }: {
   item: PlanItem;
+  iterationBranchName: string;
   disabled: boolean;
   onChange: (patch: Partial<PlanItem>) => void;
 }) {
@@ -1049,20 +1110,13 @@ function PlanItemContractEditor({
             <Checkbox
               checked={item.requires_git_commit}
               disabled={disabled}
-              onCheckedChange={(v) => onChange({ requires_git_commit: v === true, branch_name: v === true ? item.branch_name : "" })}
+              onCheckedChange={(v) => onChange({ requires_git_commit: v === true, branch_name: v === true ? iterationBranchName : "" })}
             />
             <span>Git commit expected</span>
           </label>
-          <label className="grid gap-1.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/40">
-            <span>Branch name</span>
-            <Input
-              value={item.branch_name}
-              disabled={disabled || !item.requires_git_commit}
-              placeholder="feature/module-capability"
-              className="h-8 bg-background text-xs font-normal normal-case tracking-normal text-foreground"
-              onChange={(e) => onChange({ branch_name: e.target.value })}
-            />
-          </label>
+          <div className="truncate font-mono text-[10px] text-muted-foreground/55">
+            Uses iteration branch: {item.requires_git_commit ? iterationBranchName || "not set" : "no commit"}
+          </div>
         </div>
       )}
 
@@ -1317,6 +1371,43 @@ function emptyPlanSpec(): PlanSpec {
     open_questions: [],
     clarifications: [],
   };
+}
+
+type PlanIterationGroup = {
+  key: string;
+  index: number;
+  title: string;
+  branchName: string;
+  items: PlanItem[];
+};
+
+function groupPlanItemsByIteration(items: PlanItem[]): PlanIterationGroup[] {
+  const groups = new Map<number, PlanIterationGroup>();
+  for (const item of items) {
+    const index = item.iteration_index > 0 ? item.iteration_index : 1;
+    let group = groups.get(index);
+    if (!group) {
+      group = {
+        key: `iteration-${index}`,
+        index,
+        title: "",
+        branchName: "",
+        items: [],
+      };
+      groups.set(index, group);
+    }
+    if (!group.title && item.iteration_title) {
+      group.title = item.iteration_title;
+    }
+    if (!group.branchName && item.iteration_branch_name) {
+      group.branchName = item.iteration_branch_name;
+    }
+    if (!group.branchName && item.requires_git_commit && item.branch_name) {
+      group.branchName = item.branch_name;
+    }
+    group.items.push(item);
+  }
+  return Array.from(groups.values()).sort((a, b) => a.index - b.index);
 }
 
 function formatPositions(positions: number[] | undefined) {

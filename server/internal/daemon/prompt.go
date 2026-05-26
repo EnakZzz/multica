@@ -251,6 +251,9 @@ func buildIssuePlanPrompt(task Task) string {
           "required_evidence": ["Evidence the human should inspect before marking confirmation done"],
           "requires_git_commit": true,
           "branch_name": "feature/module-capability-slug, or empty string when requires_git_commit is false",
+          "iteration_index": 1,
+          "iteration_title": "Playable loop name",
+          "iteration_branch_name": "feature/playable-loop-slug",
           "agent_id": "agent uuid or empty string",
           "depends_on_node_keys": ["earlier-node-key"],
           "selected": true
@@ -272,6 +275,9 @@ func buildIssuePlanPrompt(task Task) string {
       "required_evidence": ["Evidence the human should inspect before marking confirmation done"],
       "requires_git_commit": true,
       "branch_name": "feature/module-capability-slug, or empty string when requires_git_commit is false",
+      "iteration_index": 1,
+      "iteration_title": "Playable loop name",
+      "iteration_branch_name": "feature/playable-loop-slug",
       "recommended_agent_id": "agent uuid, null, or empty string",
       "match_score": 0,
       "match_reason": "Why this agent should handle the direct issue",
@@ -293,6 +299,9 @@ func buildIssuePlanPrompt(task Task) string {
         "required_evidence": ["Evidence the human should inspect before marking confirmation done"],
         "requires_git_commit": true,
         "branch_name": "feature/module-capability-slug, or empty string when requires_git_commit is false",
+        "iteration_index": 1,
+        "iteration_title": "Playable loop name",
+        "iteration_branch_name": "feature/playable-loop-slug",
         "recommended_agent_id": "agent uuid or empty string",
         "match_score": 0,
         "match_reason": "Why this agent matches, or why no agent matches",
@@ -314,7 +323,9 @@ func buildIssuePlanPrompt(task Task) string {
 	b.WriteString("- For every direct_issue, item, or selected pipeline node, include a lightweight execution contract: 2-5 acceptance_criteria when possible, suggested_test_commands as exact runnable commands or [], unit_test_checklist as exact runnable unit-test commands or [], context_resources as known files/repos/docs/issues/APIs/URLs, and risk_notes as concrete edge cases or blockers.\n")
 	b.WriteString("- unit_test_checklist is only for true unit tests that the assigned agent can run locally, such as `go test ./internal/service -run TestName -count=1` or `pnpm vitest packages/core/foo.test.ts`. If you do not know a real runnable unit test command, use []. Do not put broad build, typecheck, lint, e2e, smoke, or manual verification commands there; keep those in suggested_test_commands.\n")
 	b.WriteString("- Preserve review gate semantics in node_type: use spec_review for spec compliance gates, code_review for blocking code quality gates, manual for human confirmation, check for agent-executable verification, and issue for implementation or ordinary work.\n")
-	b.WriteString("- For every direct_issue, item, or selected pipeline node that can produce an actual git commit, set requires_git_commit=true and provide branch_name. Branch names must be module/function based, not agent-role based: prefer `feature/<module>-<capability>` for feature work, `fix/<module>-<bug>` for bug fixes, `refactor/<module>-<change>` for refactors, `test/<module>-<coverage>` for test-only work, `docs/<area>-<topic>` for documentation, `ci/<pipeline>-<change>` for CI, or `chore/<area>-<task>` for maintenance. Do not use `agent/<agent-role>/<issue>` style names.\n")
+	b.WriteString("- Plan game and interactive product work as iteration loops first: each iteration must be one playable or integration-testable version slice, then split that loop into implementation, test, review, and human-confirmation items.\n")
+	b.WriteString("- Set iteration_index, iteration_title, and iteration_branch_name on every direct_issue, item, or selected pipeline node. Items in the same playable/integration-testable loop must use the same iteration_index and iteration_branch_name. Use a new iteration_index and a new iteration_branch_name only for the next playable/integration-testable loop.\n")
+	b.WriteString("- For every direct_issue, item, or selected pipeline node that can produce an actual git commit, set requires_git_commit=true. The server will force branch_name to the iteration_branch_name for that item. Branch names must be loop/module/function based, not agent-role based: prefer `feature/<product>-loop-1-playable-shell`, `feature/<product>-loop-2-core-flow`, `fix/<module>-<bug>`, `test/<module>-<coverage>`, or similar. Do not use `agent/<agent-role>/<issue>` style names.\n")
 	b.WriteString("- Only set requires_git_commit=false and branch_name=\"\" when the issue is purely human confirmation, discussion, investigation/reporting, external coordination, or another task that is not expected to create a repository commit.\n")
 	b.WriteString("- Set execution_kind=\"human_confirmation\" only when downstream work depends on a human decision that cannot be safely pre-planned, such as destructive changes, deploy or merge approval, ambiguous product choices, credential/access handoff, external dependency decisions, legal/content approval, or explicit risk acceptance.\n")
 	b.WriteString("- Do not use human_confirmation for ordinary implementation, tests, routine review gates, or agent-executable checks. Use execution_kind=\"agent_task\" for normal agent work.\n")

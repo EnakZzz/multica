@@ -313,7 +313,45 @@ describe("ApiClient schema fallback", () => {
         required_evidence: [],
         requires_git_commit: true,
         branch_name: "",
+        iteration_index: 1,
+        iteration_title: "",
+        iteration_branch_name: "",
         depends_on_positions: [],
+      });
+    });
+
+    it("parses plan item iteration fields", async () => {
+      stubFetchJson({
+        plans: [
+          {
+            id: "plan-1",
+            workspace_id: "ws-1",
+            title: "Plan",
+            prompt: "Build it",
+            status: "ready",
+            planner_agent_id: "agent-1",
+            items: [
+              {
+                id: "item-1",
+                plan_id: "plan-1",
+                position: 1,
+                title: "Build slice",
+                iteration_index: 2,
+                iteration_title: "Memory core",
+                iteration_branch_name: "feature/lost-pet-loop-2-memory-core",
+                branch_name: "feature/lost-pet-loop-2-memory-core",
+              },
+            ],
+          },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPlans();
+      expect(res.plans[0]?.items[0]).toMatchObject({
+        iteration_index: 2,
+        iteration_title: "Memory core",
+        iteration_branch_name: "feature/lost-pet-loop-2-memory-core",
+        branch_name: "feature/lost-pet-loop-2-memory-core",
       });
     });
   });

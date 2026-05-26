@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -60,6 +61,9 @@ type PlanItemResponse struct {
 	RequiredEvidence      []string                `json:"required_evidence"`
 	RequiresGitCommit     bool                    `json:"requires_git_commit"`
 	BranchName            string                  `json:"branch_name"`
+	IterationIndex        int32                   `json:"iteration_index"`
+	IterationTitle        string                  `json:"iteration_title"`
+	IterationBranchName   string                  `json:"iteration_branch_name"`
 	RecommendedAgentID    *string                 `json:"recommended_agent_id"`
 	MatchScore            int32                   `json:"match_score"`
 	MatchReason           string                  `json:"match_reason"`
@@ -115,6 +119,9 @@ type updatePlanItemRequest struct {
 	RequiredEvidence      []string                `json:"required_evidence"`
 	RequiresGitCommit     *bool                   `json:"requires_git_commit"`
 	BranchName            string                  `json:"branch_name"`
+	IterationIndex        int32                   `json:"iteration_index"`
+	IterationTitle        string                  `json:"iteration_title"`
+	IterationBranchName   string                  `json:"iteration_branch_name"`
 	RecommendedAgentID    string                  `json:"recommended_agent_id"`
 	MatchScore            int32                   `json:"match_score"`
 	MatchReason           string                  `json:"match_reason"`
@@ -706,6 +713,7 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 	if err := qtx.DeletePlanItems(r.Context(), plan.ID); err != nil {
 		return err
 	}
+	reqItems = normalizeUpdatePlanItemIterations(plan.Title, reqItems)
 	for i, item := range reqItems {
 		if strings.TrimSpace(item.Title) == "" {
 			return &planValidationError{"plan item title is required"}
@@ -739,7 +747,7 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 		if item.RequiresGitCommit != nil {
 			requiresGitCommit = *item.RequiresGitCommit
 		}
-		branchName := normalizePlanBranchName(item.BranchName, strings.TrimSpace(item.Title))
+		branchName := strings.TrimSpace(item.BranchName)
 		if executionKind == service.PlanItemExecutionKindHumanConfirmation {
 			nodeType = service.PipelineNodeTypeManual
 			if confirmationQuestion == "" {
@@ -782,6 +790,9 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 			RequiredEvidence:      requiredEvidence,
 			RequiresGitCommit:     requiresGitCommit,
 			BranchName:            branchName,
+			IterationIndex:        normalizePlanIterationIndex(item.IterationIndex),
+			IterationTitle:        strings.TrimSpace(item.IterationTitle),
+			IterationBranchName:   normalizeOptionalPlanBranchName(item.IterationBranchName),
 			RecommendedAgentID:    agentID,
 			MatchScore:            score,
 			MatchReason:           strings.TrimSpace(item.MatchReason),
@@ -842,6 +853,114 @@ func normalizePlanItemExecutionKind(kind string) string {
 		return service.PlanItemExecutionKindHumanConfirmation
 	}
 	return service.PlanItemExecutionKindAgentTask
+}
+
+func normalizeUpdatePlanItemIterations(planTitle string, items []updatePlanItemRequest) []updatePlanItemRequest {
+	type iterationGroup struct {
+		index        int32
+		title        string
+		branch       string
+		branchLocked bool
+	}
+	normalized := make([]updatePlanItemRequest, len(items))
+	groups := make(map[int32]*iterationGroup)
+	for i, item := range items {
+		item.IterationIndex = normalizePlanIterationIndex(item.IterationIndex)
+		item.IterationTitle = strings.TrimSpace(item.IterationTitle)
+		item.IterationBranchName = normalizeOptionalPlanBranchName(item.IterationBranchName)
+		item.BranchName = normalizeOptionalPlanBranchName(item.BranchName)
+		normalized[i] = item
+
+		group := groups[item.IterationIndex]
+		if group == nil {
+			group = &iterationGroup{index: item.IterationIndex}
+			groups[item.IterationIndex] = group
+		}
+		if group.title == "" && item.IterationTitle != "" {
+			group.title = item.IterationTitle
+		}
+		if item.IterationBranchName != "" && !group.branchLocked {
+			group.branch = item.IterationBranchName
+			group.branchLocked = true
+		}
+		if updatePlanItemRequiresGitCommit(item) && group.branch == "" && item.BranchName != "" {
+			group.branch = item.BranchName
+		}
+	}
+	for _, group := range groups {
+		if group.branch == "" {
+			group.branch = fallbackPlanIterationBranchName(planTitle, group.index)
+		}
+	}
+	for i, item := range normalized {
+		group := groups[item.IterationIndex]
+		if group == nil {
+			continue
+		}
+		item.IterationTitle = group.title
+		item.IterationBranchName = group.branch
+		if updatePlanItemRequiresGitCommit(item) {
+			item.BranchName = group.branch
+		} else {
+			item.BranchName = ""
+		}
+		normalized[i] = item
+	}
+	return normalized
+}
+
+func updatePlanItemRequiresGitCommit(item updatePlanItemRequest) bool {
+	if normalizePlanItemExecutionKind(item.ExecutionKind) == service.PlanItemExecutionKindHumanConfirmation {
+		return false
+	}
+	if item.RequiresGitCommit == nil {
+		return true
+	}
+	return *item.RequiresGitCommit
+}
+
+func normalizePlanIterationIndex(index int32) int32 {
+	if index <= 0 {
+		return 1
+	}
+	return index
+}
+
+func normalizeOptionalPlanBranchName(raw string) string {
+	branch := strings.ToLower(strings.TrimSpace(raw))
+	branch = strings.ReplaceAll(branch, "\\", "/")
+	if branch == "" {
+		return ""
+	}
+	parts := strings.Split(branch, "/")
+	cleanParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = service.SlugifyPlanBranchSegment(part)
+		if part != "" {
+			cleanParts = append(cleanParts, part)
+		}
+	}
+	branch = strings.Join(cleanParts, "/")
+	if branch == "" {
+		return ""
+	}
+	if !strings.Contains(branch, "/") {
+		branch = "feature/" + branch
+	} else {
+		prefix := strings.SplitN(branch, "/", 2)[0]
+		if !isAllowedPlanBranchPrefix(prefix) {
+			branch = "feature/" + strings.ReplaceAll(branch, "/", "-")
+		}
+	}
+	return strings.Trim(branch, "/")
+}
+
+func fallbackPlanIterationBranchName(planTitle string, iterationIndex int32) string {
+	planSlug := service.SlugifyPlanBranchSegment(planTitle)
+	if planSlug == "" {
+		planSlug = "plan"
+	}
+	return fmt.Sprintf("feature/%s-iter-%d", planSlug, normalizePlanIterationIndex(iterationIndex))
 }
 
 func normalizePlanBranchName(raw, fallbackTitle string) string {
@@ -1017,6 +1136,9 @@ func planItemToResponse(item db.PlanItem) PlanItemResponse {
 		RequiredEvidence:      normalizePlanItemStringList(item.RequiredEvidence),
 		RequiresGitCommit:     item.RequiresGitCommit,
 		BranchName:            strings.TrimSpace(item.BranchName),
+		IterationIndex:        normalizePlanIterationIndex(item.IterationIndex),
+		IterationTitle:        strings.TrimSpace(item.IterationTitle),
+		IterationBranchName:   strings.TrimSpace(item.IterationBranchName),
 		RecommendedAgentID:    agentID,
 		MatchScore:            item.MatchScore,
 		MatchReason:           item.MatchReason,

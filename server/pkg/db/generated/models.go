@@ -536,6 +536,9 @@ type PlanItem struct {
 	RequiredEvidence      []string           `json:"required_evidence"`
 	RequiresGitCommit     bool               `json:"requires_git_commit"`
 	BranchName            string             `json:"branch_name"`
+	IterationIndex        int32              `json:"iteration_index"`
+	IterationTitle        string             `json:"iteration_title"`
+	IterationBranchName   string             `json:"iteration_branch_name"`
 	NodeType              string             `json:"node_type"`
 }
 
