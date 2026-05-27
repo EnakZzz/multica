@@ -391,6 +391,8 @@ func taskErrorType(reason string) string {
 		return "runtime"
 	case "timeout", "codex_semantic_inactivity":
 		return "timeout"
+	case "upstream_malformed_response":
+		return "upstream"
 	case "iteration_limit", "agent_fallback_message":
 		return "agent_output"
 	case "cancelled", "user_cancelled":
@@ -1723,10 +1725,11 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 // etc.) are intentionally excluded — those are real problems that the user
 // should see, not infrastructure flakiness.
 var retryableReasons = map[string]bool{
-	"runtime_offline":           true,
-	"runtime_recovery":          true,
-	"timeout":                   true,
-	"codex_semantic_inactivity": true,
+	"runtime_offline":             true,
+	"runtime_recovery":            true,
+	"timeout":                     true,
+	"codex_semantic_inactivity":   true,
+	"upstream_malformed_response": true,
 }
 
 func resumeUnsafeFailureReason(reason string) bool {

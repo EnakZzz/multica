@@ -172,6 +172,44 @@ func TestClassifyPoisonedError(t *testing.T) {
 	}
 }
 
+func TestClassifyRetryableUpstreamError(t *testing.T) {
+	cases := []struct {
+		name       string
+		errMsg     string
+		wantOK     bool
+		wantReason string
+	}{
+		{
+			name:       "claude proxy returned malformed http 200",
+			errMsg:     "API Error: API returned an empty or malformed response (HTTP 200) — check for a proxy or gateway intercepting the request",
+			wantOK:     true,
+			wantReason: FailureReasonUpstreamMalformed,
+		},
+		{
+			name:   "empty malformed marker without status is too broad",
+			errMsg: "API Error: API returned an empty or malformed response",
+			wantOK: false,
+		},
+		{
+			name:   "ordinary upstream 5xx is handled elsewhere",
+			errMsg: `API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+			wantOK: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, ok := classifyRetryableUpstreamError(tc.errMsg)
+			if ok != tc.wantOK {
+				t.Fatalf("classifyRetryableUpstreamError(%q) ok=%v, want %v", tc.errMsg, ok, tc.wantOK)
+			}
+			if ok && reason != tc.wantReason {
+				t.Fatalf("classifyRetryableUpstreamError(%q) reason=%q, want %q", tc.errMsg, reason, tc.wantReason)
+			}
+		})
+	}
+}
+
 func TestClassifyResumeUnsafeTimeout(t *testing.T) {
 	cases := []struct {
 		name       string

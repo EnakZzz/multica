@@ -2779,6 +2779,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			taskLog.Warn("agent failed with poisoned API error, classifying as blocked",
 				"failure_reason", failureReason,
 			)
+		} else if reason, ok := classifyRetryableUpstreamError(errMsg); ok {
+			failureReason = reason
+			taskLog.Warn("agent failed with retryable upstream API error, classifying as blocked",
+				"failure_reason", failureReason,
+			)
 		}
 		return TaskResult{
 			Status:        "blocked",

@@ -29,6 +29,7 @@ const (
 	FailureReasonAgentFallbackMsg        = "agent_fallback_message"
 	FailureReasonAPIInvalidRequest       = "api_invalid_request"
 	FailureReasonCodexSemanticInactivity = "codex_semantic_inactivity"
+	FailureReasonUpstreamMalformed       = "upstream_malformed_response"
 )
 
 // poisonedOutputMaxLen caps how long an output can be and still be
@@ -104,6 +105,23 @@ func classifyPoisonedError(errMsg string) (string, bool) {
 	// the request body — i.e. the conversation history — is the problem.
 	if strings.Contains(lowered, "invalid_request_error") && strings.Contains(lowered, "400") {
 		return FailureReasonAPIInvalidRequest, true
+	}
+	return "", false
+}
+
+// classifyRetryableUpstreamError reports whether an agent error message is a
+// transient upstream/proxy failure rather than bad task output. These failures
+// should reuse the established session on the queue retry path: the request
+// body was accepted by the CLI, but the provider/proxy returned an unusable
+// transport response.
+func classifyRetryableUpstreamError(errMsg string) (string, bool) {
+	if errMsg == "" {
+		return "", false
+	}
+	lowered := strings.ToLower(errMsg)
+	if strings.Contains(lowered, "api returned an empty or malformed response") &&
+		strings.Contains(lowered, "http 200") {
+		return FailureReasonUpstreamMalformed, true
 	}
 	return "", false
 }
