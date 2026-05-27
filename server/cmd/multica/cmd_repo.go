@@ -170,14 +170,10 @@ func runRepoPublish(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("detect current branch: %w", err)
 	}
 	branch = strings.TrimSpace(branch)
-	if err := validateAgentPublishBranch(branch); err != nil {
-		return err
-	}
 	publishBranch := strings.TrimSpace(os.Getenv("MULTICA_PUBLISH_BRANCH_NAME"))
-	if publishBranch != "" {
-		if err := validateAgentPublishBranch(publishBranch); err != nil {
-			return err
-		}
+	pushBranch, pushRef, err := resolveRepoPublishTarget(branch, publishBranch)
+	if err != nil {
+		return err
 	}
 
 	commit, err := gitOutput(root, "rev-parse", "HEAD")
@@ -189,12 +185,6 @@ func runRepoPublish(cmd *cobra.Command, args []string) error {
 	remote, _ := gitOutput(root, "remote", "get-url", "origin")
 	remote = strings.TrimSpace(remote)
 
-	pushBranch := branch
-	pushRef := branch
-	if publishBranch != "" {
-		pushBranch = publishBranch
-		pushRef = "HEAD:refs/heads/" + publishBranch
-	}
 	push := exec.Command("git", "-C", root, "push", "-u", "origin", pushRef)
 	push.Stdout = os.Stdout
 	push.Stderr = os.Stderr
@@ -215,6 +205,21 @@ func runRepoPublish(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stdout, "Pushed branch %s (%s)\n", pushBranch, shortCommit(commit))
 	return nil
+}
+
+func resolveRepoPublishTarget(currentBranch, publishBranch string) (string, string, error) {
+	currentBranch = strings.TrimSpace(currentBranch)
+	publishBranch = strings.TrimSpace(publishBranch)
+	if publishBranch != "" {
+		if err := validateAgentPublishBranch(publishBranch); err != nil {
+			return "", "", err
+		}
+		return publishBranch, "HEAD:refs/heads/" + publishBranch, nil
+	}
+	if err := validateAgentPublishBranch(currentBranch); err != nil {
+		return "", "", err
+	}
+	return currentBranch, currentBranch, nil
 }
 
 type repoPublishMetadata struct {

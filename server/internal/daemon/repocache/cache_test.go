@@ -530,6 +530,36 @@ func TestCreateWorktreeUsesPlannedBranchName(t *testing.T) {
 	}
 }
 
+func TestResolveWorktreeBaseRefPrefersExistingPlannedBranch(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	defaultBranch := currentBranchName(t, sourceRepo)
+	defaultHead := gitHead(t, sourceRepo)
+	plannedBranch := "feature/lost-pet-app-shell"
+	runGitAuthored(t, sourceRepo, "checkout", "-b", plannedBranch)
+	addEmptyCommit(t, sourceRepo, "planned branch work")
+	plannedHead := gitHead(t, sourceRepo)
+	runGitAuthored(t, sourceRepo, "checkout", defaultBranch)
+
+	cacheRoot := t.TempDir()
+	cache := New(cacheRoot, testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	barePath := cache.Lookup("ws-1", sourceRepo)
+	baseRef, fromPlannedBranch, err := resolveWorktreeBaseRef(barePath, "", plannedBranch)
+	if err != nil {
+		t.Fatalf("resolveWorktreeBaseRef failed: %v", err)
+	}
+	if !fromPlannedBranch {
+		t.Fatal("expected base ref to come from existing planned branch")
+	}
+	if got := gitRefCommit(t, barePath, baseRef); got != plannedHead {
+		t.Fatalf("base ref commit = %s, want planned branch head %s (default was %s)", got, plannedHead, defaultHead)
+	}
+}
+
 func TestNormalizePlannedBranchName(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{

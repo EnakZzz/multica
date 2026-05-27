@@ -411,6 +411,15 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		)
 	}
 
+	// Build branch name. Plan-created issues can carry a module/function branch
+	// such as feature/api-auth-flow; otherwise fall back to the legacy
+	// agent/{agent-slug}/{issue-identifier}-{short-task-id} shape.
+	branchName := normalizePlannedBranchName(params.BranchName)
+	plannedBranch := branchName != ""
+	if branchName == "" {
+		branchName = fmt.Sprintf("agent/%s/%s-%s", sanitizeName(params.AgentName), sanitizeBranchSegment(params.IssueIdentifier), shortID(params.TaskID))
+	}
+
 	// Determine the ref to base the worktree on. By default this is the remote's
 	// default branch (resolved internally via getRemoteDefaultBranch, which walks
 	// origin/HEAD → origin/main, origin/master → bare-HEAD hint into origin/<same>
@@ -418,7 +427,7 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 	// Callers may request a specific branch, tag, or commit so review/QA agents
 	// can inspect the exact revision without trying to mutate the daemon-owned
 	// worktree metadata themselves.
-	baseRef, err := resolveBaseRef(barePath, params.Ref)
+	baseRef, baseIsPlannedBranch, err := resolveWorktreeBaseRef(barePath, params.Ref, branchName)
 	if err != nil {
 		return nil, err
 	}
@@ -433,14 +442,6 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		return nil, fmt.Errorf("cannot resolve default branch for %s: bare cache at %s has no usable refs (origin/* is empty or ambiguous and bare HEAD has no match). The cache may be corrupted; delete it and retry", params.RepoURL, barePath)
 	}
 
-	// Build branch name. Plan-created issues can carry a module/function branch
-	// such as feature/api-auth-flow; otherwise fall back to the legacy
-	// agent/{agent-slug}/{issue-identifier}-{short-task-id} shape.
-	branchName := normalizePlannedBranchName(params.BranchName)
-	if branchName == "" {
-		branchName = fmt.Sprintf("agent/%s/%s-%s", sanitizeName(params.AgentName), sanitizeBranchSegment(params.IssueIdentifier), shortID(params.TaskID))
-	}
-
 	// Derive directory name from repo URL.
 	dirName := repoNameFromURL(params.RepoURL)
 	worktreePath := filepath.Join(params.WorkDir, dirName)
@@ -448,7 +449,7 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 	// If worktree already exists (reused environment from a prior task),
 	// update it to the latest remote code instead of creating a new one.
 	if isGitWorktree(worktreePath) {
-		actualBranch, err := updateExistingWorktree(worktreePath, branchName, baseRef)
+		actualBranch, err := updateExistingWorktree(worktreePath, branchName, baseRef, plannedBranch, baseIsPlannedBranch)
 		if err != nil {
 			return nil, fmt.Errorf("update existing worktree: %w", err)
 		}
@@ -485,7 +486,7 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 
 	// Create a new worktree. createWorktree may rename the branch to avoid
 	// collisions with stale per-task refs left over from previous runs.
-	actualBranch, err := createWorktree(barePath, worktreePath, branchName, baseRef)
+	actualBranch, err := createWorktree(barePath, worktreePath, branchName, baseRef, plannedBranch, baseIsPlannedBranch)
 	if err != nil {
 		return nil, fmt.Errorf("create worktree: %w", err)
 	}
@@ -519,6 +520,20 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 	}, nil
 }
 
+func resolveWorktreeBaseRef(barePath, requestedRef, plannedBranch string) (string, bool, error) {
+	if strings.TrimSpace(requestedRef) != "" {
+		ref, err := resolveBaseRef(barePath, requestedRef)
+		return ref, false, err
+	}
+	if strings.TrimSpace(plannedBranch) != "" {
+		if ref, err := resolveBaseRef(barePath, plannedBranch); err == nil && ref != "" {
+			return ref, true, nil
+		}
+	}
+	ref, err := resolveBaseRef(barePath, "")
+	return ref, false, err
+}
+
 func resolveBaseRef(barePath, requestedRef string) (string, error) {
 	ref := strings.TrimSpace(requestedRef)
 	if ref == "" {
@@ -549,7 +564,7 @@ func gitRefExists(repoPath, ref string) bool {
 // createWorktree creates a git worktree at the given path with a new branch.
 // Returns the actual branch name used — which may differ from the requested
 // branchName if a collision was resolved by appending a timestamp suffix.
-func createWorktree(gitRoot, worktreePath, branchName, baseRef string) (string, error) {
+func createWorktree(gitRoot, worktreePath, branchName, baseRef string, plannedBranch bool, baseIsPlannedBranch bool) (string, error) {
 	// Pre-check: if the worktree path already exists we would get a confusing
 	// "already exists" error from `git worktree add` — which used to be
 	// misclassified as a branch collision, causing the retry to leak branches
@@ -559,7 +574,28 @@ func createWorktree(gitRoot, worktreePath, branchName, baseRef string) (string, 
 		return "", fmt.Errorf("worktree path already exists and is not a valid git worktree: %s", worktreePath)
 	}
 
-	err := runWorktreeAdd(gitRoot, worktreePath, branchName, baseRef)
+	var err error
+	if plannedBranch {
+		if baseIsPlannedBranch {
+			if err := runWorktreeAddDetached(gitRoot, worktreePath, baseRef); err != nil {
+				return "", err
+			}
+			return branchName, nil
+		}
+		err = runWorktreeAddPlannedBranch(gitRoot, worktreePath, branchName, baseRef)
+		if err == nil {
+			return branchName, nil
+		}
+		if isBranchCheckedOutError(err) {
+			if detachErr := runWorktreeAddDetached(gitRoot, worktreePath, baseRef); detachErr != nil {
+				return "", detachErr
+			}
+			return branchName, nil
+		}
+		return "", err
+	}
+
+	err = runWorktreeAdd(gitRoot, worktreePath, branchName, baseRef)
 	if err != nil && isBranchCollisionError(err) {
 		// Branch name collision: append timestamp and retry once.
 		branchName = fmt.Sprintf("%s-%d", branchName, time.Now().Unix())
@@ -580,6 +616,24 @@ func runWorktreeAdd(gitRoot, worktreePath, branchName, baseRef string) error {
 	return nil
 }
 
+func runWorktreeAddPlannedBranch(gitRoot, worktreePath, branchName, baseRef string) error {
+	cmd := exec.Command("git", "-C", gitRoot, "worktree", "add", "-B", branchName, worktreePath, baseRef)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git worktree add -B: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func runWorktreeAddDetached(gitRoot, worktreePath, baseRef string) error {
+	cmd := exec.Command("git", "-C", gitRoot, "worktree", "add", "--detach", worktreePath, baseRef)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git worktree add --detach: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // isBranchCollisionError returns true if err is specifically about a branch
 // name already existing. Git's other "already exists" messages (notably path
 // collisions from `git worktree add`) must NOT be treated as branch
@@ -594,6 +648,14 @@ func isBranchCollisionError(err error) bool {
 	return strings.Contains(msg, "a branch named")
 }
 
+func isBranchCheckedOutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "is already checked out")
+}
+
 // isGitWorktree checks if a path is an existing git worktree.
 // Worktrees have a .git *file* (not directory) that points to the main repo.
 func isGitWorktree(path string) bool {
@@ -605,7 +667,7 @@ func isGitWorktree(path string) bool {
 // new branch from the default branch. The caller is responsible for fetching
 // the bare cache beforehand (worktrees share the same object store).
 // Returns the actual branch name used (may differ from input on collision).
-func updateExistingWorktree(worktreePath, branchName, baseRef string) (string, error) {
+func updateExistingWorktree(worktreePath, branchName, baseRef string, plannedBranch bool, baseIsPlannedBranch bool) (string, error) {
 	// Discard any leftover uncommitted changes from the previous task.
 	resetCmd := exec.Command("git", "-C", worktreePath, "reset", "--hard")
 	if out, err := resetCmd.CombinedOutput(); err != nil {
@@ -623,12 +685,33 @@ func updateExistingWorktree(worktreePath, branchName, baseRef string) (string, e
 	// "refs/remotes/origin/<branch>" but may be "refs/heads/<branch>" on a
 	// legacy/migration-pending cache. Either form is valid as a checkout
 	// startpoint.
-	checkoutCmd := exec.Command("git", "-C", worktreePath, "checkout", "-b", branchName, baseRef)
+	if plannedBranch && baseIsPlannedBranch {
+		detachCmd := exec.Command("git", "-C", worktreePath, "checkout", "--detach", baseRef)
+		if out, err := detachCmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git checkout --detach: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		return branchName, nil
+	}
+	checkoutArgs := []string{"checkout", "-b", branchName, baseRef}
+	if plannedBranch {
+		checkoutArgs = []string{"checkout", "-B", branchName, baseRef}
+	}
+	checkoutCmd := exec.Command("git", append([]string{"-C", worktreePath}, checkoutArgs...)...)
 	out, err := checkoutCmd.CombinedOutput()
 	if err == nil {
 		return branchName, nil
 	}
-	wrapped := fmt.Errorf("git checkout -b: %s: %w", strings.TrimSpace(string(out)), err)
+	wrapped := fmt.Errorf("git %s: %s: %w", strings.Join(checkoutArgs, " "), strings.TrimSpace(string(out)), err)
+	if plannedBranch {
+		if isBranchCheckedOutError(wrapped) {
+			detachCmd := exec.Command("git", "-C", worktreePath, "checkout", "--detach", baseRef)
+			if out2, err2 := detachCmd.CombinedOutput(); err2 != nil {
+				return "", fmt.Errorf("git checkout --detach: %s: %w", strings.TrimSpace(string(out2)), err2)
+			}
+			return branchName, nil
+		}
+		return "", wrapped
+	}
 	if !isBranchCollisionError(wrapped) {
 		return "", wrapped
 	}

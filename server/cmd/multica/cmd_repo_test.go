@@ -61,6 +61,33 @@ func TestValidateAgentPublishBranchDetachedHead(t *testing.T) {
 	}
 }
 
+func TestResolveRepoPublishTargetUsesPlannedBranch(t *testing.T) {
+	t.Parallel()
+
+	branch, ref, err := resolveRepoPublishTarget("agent/backend/LOC-1-deadbeef", "feature/lost-pet-app-shell")
+	if err != nil {
+		t.Fatalf("resolveRepoPublishTarget(): %v", err)
+	}
+	if branch != "feature/lost-pet-app-shell" {
+		t.Fatalf("branch = %q, want planned branch", branch)
+	}
+	if ref != "HEAD:refs/heads/feature/lost-pet-app-shell" {
+		t.Fatalf("ref = %q, want HEAD push to planned branch", ref)
+	}
+}
+
+func TestResolveRepoPublishTargetAllowsDetachedHeadWithPlannedBranch(t *testing.T) {
+	t.Parallel()
+
+	branch, ref, err := resolveRepoPublishTarget("", "feature/lost-pet-app-shell")
+	if err != nil {
+		t.Fatalf("resolveRepoPublishTarget(): %v", err)
+	}
+	if branch != "feature/lost-pet-app-shell" || ref != "HEAD:refs/heads/feature/lost-pet-app-shell" {
+		t.Fatalf("target = (%q, %q), want planned branch HEAD ref", branch, ref)
+	}
+}
+
 func TestSyncRepoContextWritesSkillsAndPipelines(t *testing.T) {
 	const (
 		agentID        = "agent-123"

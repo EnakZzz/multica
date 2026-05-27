@@ -1544,6 +1544,9 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.PlanItemExecutionKind = normalizePlanItemExecutionKind(item.ExecutionKind)
 			resp.PlanItemRequiresGitCommit = item.RequiresGitCommit
 			resp.PlanItemBranchName = strings.TrimSpace(item.BranchName)
+			if resp.PlanItemRequiresGitCommit && resp.PlanItemBranchName != "" {
+				resp.PublishBranchName = resp.PlanItemBranchName
+			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			slog.Warn("failed to load plan item execution contract", "issue_id", uuidToString(task.IssueID), "error", err)
 		}

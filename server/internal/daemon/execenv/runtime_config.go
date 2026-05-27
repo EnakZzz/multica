@@ -344,7 +344,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		if planAgentTask {
 			b.WriteString("This issue was created from a Plan item with `execution_kind=agent_task`. That kind is the execution contract: complete the task directly and do not put it into `in_review` unless the issue or a human comment explicitly asks for a separate review.\n")
 			if ctx.PlanItemRequiresGitCommit && ctx.PlanItemBranchName != "" {
-				fmt.Fprintf(&b, "The Plan item has a planned branch name: `%s`. `multica repo checkout <url>` will create that branch; use that name in the final Branch line after publishing.\n\n", ctx.PlanItemBranchName)
+				fmt.Fprintf(&b, "The Plan item has a planned branch name: `%s`. `multica repo checkout <url>` will use the planned branch when available, and `multica repo publish` will push HEAD back to that planned branch. Use exactly that name in the final Branch line after publishing; do not invent or substitute another branch name.\n\n", ctx.PlanItemBranchName)
 			} else {
 				b.WriteString("The Plan item is not expected to produce a git commit. Do not create or publish a branch unless the issue body or a human comment explicitly changes that.\n\n")
 			}
@@ -353,7 +353,11 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		fmt.Fprintf(&b, "2. Run `multica issue comment list %s --output json` to read the full comment history (returns all comments, capped server-side at 2000) — this is mandatory, not optional. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions. When the flat dump is too large to ingest in one shot, treat `--recent 20 --output json` plus the `--before` / `--before-id` cursor (from the stderr `Next thread cursor:` line) as a paging strategy: keep walking older threads until you have read enough history to satisfy this mandatory step. `--recent` is a way to read the full history page-by-page, not a shortcut that replaces it.\n", ctx.IssueID)
 		fmt.Fprintf(&b, "3. Run `multica issue status %s in_progress`\n", ctx.IssueID)
 		b.WriteString("4. Follow your Skills and Agent Identity to complete the task (write code, investigate, etc.)\n")
-		b.WriteString("5. For code changes, run `multica repo checkout <url>`, commit on the generated work branch, then run `multica repo publish`. The publish command is the required push path and records the branch for review.\n")
+		if planAgentTask && ctx.PlanItemRequiresGitCommit && ctx.PlanItemBranchName != "" {
+			fmt.Fprintf(&b, "5. For code changes, run `multica repo checkout <url>`, commit your changes, then run `multica repo publish`. The publish command is the required push path and records the planned branch `%s` for review.\n", ctx.PlanItemBranchName)
+		} else {
+			b.WriteString("5. For code changes, run `multica repo checkout <url>`, commit on the generated work branch, then run `multica repo publish`. The publish command is the required push path and records the branch for review.\n")
+		}
 		if planAgentTask {
 			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. For code changes the comment must include `Branch: ...` and `Status: done`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
 			fmt.Fprintf(&b, "7. After posting your final result, run `multica issue status %s done`. The platform also treats completed Plan `agent_task` runs as done so downstream dependencies can continue.\n", ctx.IssueID)
