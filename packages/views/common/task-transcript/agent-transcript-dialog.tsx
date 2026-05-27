@@ -181,6 +181,11 @@ export function AgentTranscriptDialog({
   const [agentInfo, setAgentInfo] = useState<Agent | null>(null);
   const [runtimeInfo, setRuntimeInfo] = useState<AgentRuntime | null>(null);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
+  const transcriptLive =
+    isLive &&
+    (task.status === "queued" ||
+      task.status === "dispatched" ||
+      task.status === "running");
   const sortDirection = useTranscriptViewStore((s) => s.sortDirection);
   const setSortDirection = useTranscriptViewStore((s) => s.setSortDirection);
   const eventRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -261,13 +266,13 @@ export function AgentTranscriptDialog({
 
   // Elapsed time for live tasks
   useEffect(() => {
-    if (!isLive || (!task.started_at && !task.dispatched_at)) return;
+    if (!transcriptLive || (!task.started_at && !task.dispatched_at)) return;
     const startRef = task.started_at ?? task.dispatched_at!;
     const update = () => setElapsed(formatElapsedMs(Date.now() - new Date(startRef).getTime()));
     update();
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
-  }, [isLive, task.started_at, task.dispatched_at]);
+  }, [transcriptLive, task.started_at, task.dispatched_at]);
 
   const handleSegmentClick = useCallback((seq: number) => {
     setSelectedSeq(seq);
@@ -308,14 +313,14 @@ export function AgentTranscriptDialog({
   const duration =
     task.started_at && task.completed_at
       ? formatDuration(task.started_at, task.completed_at)
-      : isLive
+      : transcriptLive
         ? elapsed
         : null;
 
   const toolCount = items.filter((i) => i.type === "tool_use").length;
 
   // Status display
-  const statusBadge = isLive ? (
+  const statusBadge = transcriptLive ? (
     <span className="inline-flex items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">
       <Loader2 className="h-3 w-3 animate-spin" />
       {t(($) => $.transcript.status_running)}
@@ -510,7 +515,7 @@ export function AgentTranscriptDialog({
         >
           {displayItems.length === 0 ? (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
-              {isLive ? (
+              {transcriptLive ? (
                 <div className="flex items-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   {t(($) => $.transcript.waiting_events)}
