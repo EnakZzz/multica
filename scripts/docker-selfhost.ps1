@@ -1,6 +1,7 @@
 param(
     [ValidateSet("deploy", "update", "status", "logs", "stop")]
-    [string]$Command = "deploy"
+    [string]$Command = "deploy",
+    [switch]$SkipDaemonUpdate
 )
 
 $ErrorActionPreference = "Stop"
@@ -114,6 +115,179 @@ function Wait-Backend {
     Write-Host "  .\scripts\docker-selfhost.ps1 logs"
 }
 
+function Get-GitValue {
+    param(
+        [string[]]$GitArgs,
+        [string]$Default
+    )
+
+    Push-Location $RepoRoot
+    try {
+        $value = (& git @GitArgs 2>$null | Select-Object -First 1)
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            return $Default
+        }
+        return $value.Trim()
+    }
+    catch {
+        return $Default
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Get-InstalledCliPath {
+    return Join-Path $env:USERPROFILE ".multica\bin\multica.exe"
+}
+
+function Get-SelfhostServerUrl {
+    $port = Get-EnvValue -Name "PORT" -Default "8080"
+    return "http://127.0.0.1:$port"
+}
+
+function Get-SelfhostAppUrl {
+    $port = Get-EnvValue -Name "FRONTEND_PORT" -Default "3000"
+    return "http://127.0.0.1:$port"
+}
+
+function Build-LocalCli {
+    $serverDir = Join-Path $RepoRoot "server"
+    $outputDir = Join-Path $serverDir "bin"
+    $outputPath = Join-Path $outputDir "multica.exe"
+    $version = Get-GitValue -GitArgs @("describe", "--tags", "--always", "--dirty") -Default "dev"
+    $commit = Get-GitValue -GitArgs @("rev-parse", "--short", "HEAD") -Default "unknown"
+    $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+    if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
+        throw "Go is required to build the local Multica CLI, but 'go' was not found in PATH."
+    }
+
+    New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+    Push-Location $serverDir
+    try {
+        Write-Host "==> Building local Multica CLI ($version)..."
+        & go build -ldflags "-X main.version=$version -X main.commit=$commit -X main.date=$date" -o $outputPath ./cmd/multica
+        if ($LASTEXITCODE -ne 0) {
+            throw "go build ./cmd/multica failed with exit code $LASTEXITCODE"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    return $outputPath
+}
+
+function Invoke-CliChecked {
+    param(
+        [string]$CliPath,
+        [string[]]$CommandArgs
+    )
+
+    & $CliPath @CommandArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "multica $($CommandArgs -join ' ') failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Set-CliSelfhostConfig {
+    param([string]$CliPath)
+
+    Invoke-CliChecked -CliPath $CliPath -CommandArgs @("config", "set", "server_url", (Get-SelfhostServerUrl))
+    Invoke-CliChecked -CliPath $CliPath -CommandArgs @("config", "set", "app_url", (Get-SelfhostAppUrl))
+}
+
+function Test-CliAuthenticated {
+    param([string]$CliPath)
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $CliPath auth status 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    return $exitCode -eq 0 -and (($output -join "`n") -match "User:")
+}
+
+function Test-DaemonRunning {
+    param([string]$CliPath)
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $CliPath daemon status 2>&1
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    return ($output -join "`n") -match "running \(pid"
+}
+
+function Install-LocalCli {
+    param(
+        [string]$BuiltCliPath,
+        [bool]$CanStopDaemon
+    )
+
+    $cliPath = Get-InstalledCliPath
+    $binDir = Split-Path $cliPath -Parent
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+    if ((Test-Path $cliPath) -and (Test-DaemonRunning -CliPath $cliPath)) {
+        if (-not $CanStopDaemon) {
+            Write-Warning "Daemon is running but the CLI is not authenticated from disk; leaving it untouched. Run 'multica login', then rerun update."
+            return $false
+        }
+        Write-Host "==> Stopping daemon before replacing CLI..."
+        Invoke-CliChecked -CliPath $cliPath -CommandArgs @("daemon", "stop")
+    }
+
+    if (Test-Path $cliPath) {
+        $backupPath = "$cliPath.bak.before-selfhost-update.$(Get-Date -Format 'yyyyMMddHHmmss')"
+        Copy-Item -LiteralPath $cliPath -Destination $backupPath -Force
+        Write-Host "==> Backed up existing CLI to $backupPath"
+    }
+
+    Copy-Item -LiteralPath $BuiltCliPath -Destination $cliPath -Force
+    Write-Host "==> Installed local CLI to $cliPath"
+    return $true
+}
+
+function Update-LocalDaemonCli {
+    if ($SkipDaemonUpdate) {
+        Write-Host "==> Skipping local CLI/daemon update."
+        return
+    }
+
+    $builtCli = Build-LocalCli
+    $cliPath = Get-InstalledCliPath
+    $authenticated = $false
+
+    if (Test-Path $cliPath) {
+        Set-CliSelfhostConfig -CliPath $cliPath
+        $authenticated = Test-CliAuthenticated -CliPath $cliPath
+    }
+
+    $installed = Install-LocalCli -BuiltCliPath $builtCli -CanStopDaemon $authenticated
+    if (-not $installed) {
+        return
+    }
+
+    Set-CliSelfhostConfig -CliPath $cliPath
+    if (-not $authenticated) {
+        Write-Warning "Local CLI was updated, but no valid login token was found. Run 'multica login', then 'multica daemon start'."
+        return
+    }
+
+    Write-Host "==> Restarting daemon with the updated CLI..."
+    Invoke-CliChecked -CliPath $cliPath -CommandArgs @("daemon", "start")
+    Invoke-CliChecked -CliPath $cliPath -CommandArgs @("daemon", "status")
+}
+
 switch ($Command) {
     "deploy" {
         Ensure-EnvFile
@@ -126,6 +300,7 @@ switch ($Command) {
         Write-Host "==> Rebuilding Docker images from this checkout and restarting Multica..."
         Invoke-DockerCompose -ComposeArgs $ComposeBuild -CommandArgs @("up", "-d", "--build")
         Wait-Backend
+        Update-LocalDaemonCli
     }
     "status" {
         Invoke-DockerCompose -ComposeArgs $ComposeSelfhost -CommandArgs @("ps")
