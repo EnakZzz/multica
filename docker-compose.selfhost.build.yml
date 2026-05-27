@@ -8,6 +8,12 @@ services:
       context: .
       dockerfile: Dockerfile
 
+  ai-gateway:
+    image: multica-backend:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+
   frontend:
     image: multica-web:dev
     build:

@@ -77,6 +77,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AI_GATEWAY_UPSTREAM_URL: ${AI_GATEWAY_UPSTREAM_URL:-http://ai-gateway:9111}
       AI_GATEWAY_DEFAULT_ALIAS: ${AI_GATEWAY_DEFAULT_ALIAS:-}
       AI_GATEWAY_DEFAULT_MODEL: ${AI_GATEWAY_DEFAULT_MODEL:-}
       AI_GATEWAY_ROUTES: ${AI_GATEWAY_ROUTES:-}
@@ -93,6 +94,27 @@ services:
       # Empty default = headers ignored, RemoteAddr used. Set e.g.
       # "127.0.0.1/32" when running behind a same-host reverse proxy.
       MULTICA_TRUSTED_PROXIES: ${MULTICA_TRUSTED_PROXIES:-}
+    restart: unless-stopped
+
+  ai-gateway:
+    profiles:
+      - ai-gateway
+    image: ${MULTICA_BACKEND_IMAGE:-ghcr.io/multica-ai/multica-backend}:${MULTICA_IMAGE_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["./ai-gateway"]
+    ports:
+      - "0.0.0.0:${AI_GATEWAY_PORT:-9111}:9111"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-multica}:${POSTGRES_PASSWORD:-multica}@postgres:5432/${POSTGRES_DB:-multica}?sslmode=disable
+      AI_GATEWAY_PORT: "9111"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AI_GATEWAY_DEFAULT_ALIAS: ${AI_GATEWAY_DEFAULT_ALIAS:-}
+      AI_GATEWAY_DEFAULT_MODEL: ${AI_GATEWAY_DEFAULT_MODEL:-}
+      AI_GATEWAY_ROUTES: ${AI_GATEWAY_ROUTES:-}
     restart: unless-stopped
 
   frontend:
