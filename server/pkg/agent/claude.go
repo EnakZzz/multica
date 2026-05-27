@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -78,11 +78,11 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		cancel()
 		return nil, fmt.Errorf("claude stdin pipe: %w", err)
 	}
+	var closeStdinOnce sync.Once
 	closeStdin := func() {
-		if stdin != nil {
+		closeStdinOnce.Do(func() {
 			_ = stdin.Close()
-			stdin = nil
-		}
+		})
 	}
 	// Capture stderr into both the daemon log (as before) and a bounded tail
 	// buffer so we can include the last few KB in Result.Error when claude
@@ -97,19 +97,6 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		cancel()
 		return nil, fmt.Errorf("start claude: %w", err)
 	}
-	if err := writeClaudeInput(stdin, prompt); err != nil {
-		// claude almost certainly died during startup (broken pipe). The
-		// real reason is sitting in stderrBuf — surface it the same way the
-		// post-handshake error path does, otherwise the daemon log is the
-		// only place that knows whether it was a V8 abort, a missing native
-		// module, or anything else. cmd.Wait() flushes os/exec's stderr
-		// copy goroutine, so stderrBuf.Tail() is safe to read.
-		closeStdin()
-		cancel()
-		_ = cmd.Wait()
-		return nil, errors.New(withAgentStderr(fmt.Sprintf("write claude input: %v", err), "claude", stderrBuf.Tail()))
-	}
-	closeStdin()
 
 	b.cfg.Logger.Info("claude started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
 
@@ -118,6 +105,19 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
+	inputErrCh := make(chan error, 1)
+
+	// Claude Code can emit startup hook/system JSON before reading stdin.
+	// Start draining stdout before writing the prompt so a large startup event
+	// cannot fill stdout and deadlock against a full stdin pipe.
+	go func() {
+		err := writeClaudeInput(stdin, prompt)
+		closeStdin()
+		if err != nil && runCtx.Err() == nil {
+			cancel()
+		}
+		inputErrCh <- err
+	}()
 
 	go func() {
 		defer cancel()
@@ -188,6 +188,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 		// Wait for process exit
 		exitErr := cmd.Wait()
+		inputErr := <-inputErrCh
 		duration := time.Since(startTime)
 
 		if runCtx.Err() == context.DeadlineExceeded {
@@ -196,6 +197,9 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		} else if runCtx.Err() == context.Canceled {
 			finalStatus = "aborted"
 			finalError = "execution cancelled"
+		} else if inputErr != nil {
+			finalStatus = "failed"
+			finalError = fmt.Sprintf("write claude input: %v", inputErr)
 		} else if exitErr != nil && finalStatus == "completed" {
 			finalStatus = "failed"
 			finalError = fmt.Sprintf("claude exited with error: %v", exitErr)

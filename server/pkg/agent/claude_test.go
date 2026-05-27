@@ -595,6 +595,54 @@ func TestClaudeExecuteSurfacesStderrWhenChildExitsEarly(t *testing.T) {
 	}
 }
 
+func TestClaudeExecuteDrainsStartupOutputBeforeWritingInput(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	// Fake claude binary: emit a large startup event before reading stdin.
+	// Claude Code can do this when SessionStart hooks add context. The daemon
+	// must drain stdout concurrently with stdin writes or the two pipes can
+	// deadlock before the first user prompt is accepted.
+	fakePath := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\n" +
+		"printf '{\"type\":\"system\",\"session_id\":\"startup\"}'\n" +
+		"dd if=/dev/zero bs=1024 count=256 2>/dev/null | tr '\\0' 'x'\n" +
+		"printf '\\n'\n" +
+		"cat >/dev/null\n" +
+		"printf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"done\",\"session_id\":\"startup\"}\\n'\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("claude", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new claude backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, strings.Repeat("prompt ", 8192), ExecOptions{Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	select {
+	case result, ok := <-session.Result:
+		if !ok {
+			t.Fatal("result channel closed without a value")
+		}
+		if result.Status != "completed" {
+			t.Fatalf("expected status=completed, got %q (error=%q)", result.Status, result.Error)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for result; stdout/stdin pipes likely deadlocked")
+	}
+}
+
 func mustMarshal(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(v)
