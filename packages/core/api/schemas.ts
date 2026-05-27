@@ -565,10 +565,14 @@ export const EMPTY_PROJECT_VISUAL_BOARD: ProjectVisualBoard = {
 
 export const GenerateProjectVisualNodesResponseSchema = z.object({
   task_id: z.string().catch("").optional(),
+  issue_id: z.string().catch("").optional(),
+  issue_identifier: z.string().catch("").optional(),
 }).loose();
 
 export const EMPTY_GENERATE_PROJECT_VISUAL_NODES_RESPONSE: GenerateProjectVisualNodesResponse = {
   task_id: "",
+  issue_id: "",
+  issue_identifier: "",
 };
 
 export const ProjectKnowledgeSearchResultSchema = z.object({

@@ -290,7 +290,41 @@ func (h *Handler) GenerateProjectVisualNodes(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to prepare visual extraction task")
 		return
 	}
-	task, err := h.Queries.CreateContextTask(r.Context(), db.CreateContextTaskParams{
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to queue visual extraction task")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	issueNumber, err := qtx.IncrementIssueCounter(r.Context(), project.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to allocate issue number")
+		return
+	}
+	issueTitle := "Generate visual nodes from Project Wiki"
+	issue, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
+		WorkspaceID:   project.WorkspaceID,
+		Title:         issueTitle,
+		Description:   strOrNullText(visualBoardExtractIssueDescription(project.Title, board.ID)),
+		Status:        "todo",
+		Priority:      "none",
+		AssigneeType:  pgtype.Text{String: "agent", Valid: true},
+		AssigneeID:    agent.ID,
+		CreatorType:   "member",
+		CreatorID:     parseUUID(userID),
+		ParentIssueID: pgtype.UUID{},
+		Position:      0,
+		Number:        issueNumber,
+		ProjectID:     project.ID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create visual extraction issue")
+		return
+	}
+	task, err := qtx.CreateContextTask(r.Context(), db.CreateContextTaskParams{
 		AgentID:           agent.ID,
 		RuntimeID:         agent.RuntimeID,
 		Priority:          80,
@@ -301,8 +335,28 @@ func (h *Handler) GenerateProjectVisualNodes(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to queue visual extraction task")
 		return
 	}
+	if err := qtx.LinkTaskToIssue(r.Context(), db.LinkTaskToIssueParams{ID: task.ID, IssueID: issue.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to link visual extraction issue")
+		return
+	}
+	task, err = qtx.GetAgentTask(r.Context(), task.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual extraction task")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to queue visual extraction task")
+		return
+	}
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	issueResp := issueToResponse(issue, prefix)
+	h.publish(protocol.EventIssueCreated, uuidToString(issue.WorkspaceID), "member", userID, map[string]any{"issue": issueResp})
 	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
-	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": uuidToString(task.ID)})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"task_id":          uuidToString(task.ID),
+		"issue_id":         uuidToString(issue.ID),
+		"issue_identifier": issueResp.Identifier,
+	})
 }
 
 func (h *Handler) GenerateProjectVisualNodeImage(w http.ResponseWriter, r *http.Request) {
@@ -361,7 +415,40 @@ func (h *Handler) GenerateProjectVisualNodeImage(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "failed to create visual task")
 		return
 	}
-	task, err := h.Queries.CreateContextTask(r.Context(), db.CreateContextTaskParams{
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to queue visual task")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	issueNumber, err := qtx.IncrementIssueCounter(r.Context(), project.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to allocate issue number")
+		return
+	}
+	issueTitle := "Generate visual asset: " + node.Title
+	issue, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
+		WorkspaceID:   project.WorkspaceID,
+		Title:         truncateRunes(issueTitle, 180),
+		Description:   strOrNullText(visualNodeGenerateIssueDescription(project.Title, node)),
+		Status:        "todo",
+		Priority:      "none",
+		AssigneeType:  pgtype.Text{String: "agent", Valid: true},
+		AssigneeID:    agent.ID,
+		CreatorType:   "member",
+		CreatorID:     parseUUID(userID),
+		ParentIssueID: pgtype.UUID{},
+		Position:      0,
+		Number:        issueNumber,
+		ProjectID:     project.ID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create visual generation issue")
+		return
+	}
+	task, err := qtx.CreateContextTask(r.Context(), db.CreateContextTaskParams{
 		AgentID:           agentID,
 		RuntimeID:         agent.RuntimeID,
 		Priority:          80,
@@ -372,7 +459,11 @@ func (h *Handler) GenerateProjectVisualNodeImage(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "failed to enqueue visual task")
 		return
 	}
-	_, err = h.DB.Exec(r.Context(), `
+	if err := qtx.LinkTaskToIssue(r.Context(), db.LinkTaskToIssueParams{ID: task.ID, IssueID: issue.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to link visual generation issue")
+		return
+	}
+	_, err = tx.Exec(r.Context(), `
 		UPDATE project_visual_node
 		SET status = 'generating', generation_agent_id = $1, generation_task_id = $2,
 		    generation_error = '', updated_at = now()
@@ -382,8 +473,24 @@ func (h *Handler) GenerateProjectVisualNodeImage(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "failed to update visual node")
 		return
 	}
+	task, err = qtx.GetAgentTask(r.Context(), task.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual task")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to queue visual task")
+		return
+	}
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	issueResp := issueToResponse(issue, prefix)
+	h.publish(protocol.EventIssueCreated, uuidToString(issue.WorkspaceID), "member", userID, map[string]any{"issue": issueResp})
 	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
-	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": uuidToString(task.ID)})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"task_id":          uuidToString(task.ID),
+		"issue_id":         uuidToString(issue.ID),
+		"issue_identifier": issueResp.Identifier,
+	})
 }
 
 func (h *Handler) CompleteProjectVisualNodeGeneration(w http.ResponseWriter, r *http.Request) {
@@ -711,16 +818,23 @@ type visualBoardExtractResult struct {
 }
 
 type visualBoardExtractNode struct {
-	ID          string          `json:"id"`
-	ClientID    string          `json:"client_id"`
-	Type        string          `json:"type"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Prompt      string          `json:"prompt"`
-	SourceRefs  json.RawMessage `json:"source_refs"`
-	Confidence  float64         `json:"confidence"`
-	PositionX   float64         `json:"position_x"`
-	PositionY   float64         `json:"position_y"`
+	ID                 string          `json:"id"`
+	ClientID           string          `json:"client_id"`
+	Type               string          `json:"type"`
+	NodeType           string          `json:"node_type"`
+	Title              string          `json:"title"`
+	Description        string          `json:"description"`
+	VisualBrief        string          `json:"visual_brief"`
+	Prompt             string          `json:"prompt"`
+	SourceRefs         json.RawMessage `json:"source_refs"`
+	SourceSlugs        []string        `json:"source_slugs"`
+	ExtractedFacts     []string        `json:"extracted_facts"`
+	MustInclude        []string        `json:"must_include"`
+	MustAvoid          []string        `json:"must_avoid"`
+	AcceptanceCriteria []string        `json:"acceptance_criteria"`
+	Confidence         float64         `json:"confidence"`
+	PositionX          float64         `json:"position_x"`
+	PositionY          float64         `json:"position_y"`
 }
 
 type visualBoardExtractEdge struct {
@@ -804,6 +918,46 @@ func makeVisualNodeCandidate(nodeType, title, section string, page service.WikiP
 	}
 }
 
+func visualBoardExtractIssueDescription(projectTitle string, boardID pgtype.UUID) string {
+	title := strings.TrimSpace(projectTitle)
+	if title == "" {
+		title = "this project"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Extract reviewable visual nodes from the Project Wiki for %s.", title),
+		"",
+		"Expected output:",
+		"- Read the Project Wiki excerpts attached to this task.",
+		"- Return the strict visual board extraction JSON requested by the runtime prompt.",
+		"- Do not create or edit implementation issues from this task.",
+		"",
+		fmt.Sprintf("Visual board ID: %s", uuidToString(boardID)),
+	}, "\n")
+}
+
+func visualNodeGenerateIssueDescription(projectTitle string, node visualNodeRow) string {
+	title := strings.TrimSpace(projectTitle)
+	if title == "" {
+		title = "this project"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Generate a visual asset for %s.", title),
+		"",
+		"Visual node:",
+		fmt.Sprintf("- ID: %s", uuidToString(node.ID)),
+		fmt.Sprintf("- Type: %s", node.Type),
+		fmt.Sprintf("- Title: %s", node.Title),
+		"",
+		"Prompt:",
+		strings.TrimSpace(node.Prompt),
+		"",
+		"Expected output:",
+		"- Create or obtain a usable image asset for this visual node.",
+		"- Upload the generated image through `multica visual-node complete`.",
+		"- If generation fails, complete the visual node with an explicit error.",
+	}, "\n")
+}
+
 func visualWikiPageContexts(pages []service.WikiPage) []service.VisualWikiPageContext {
 	out := make([]service.VisualWikiPageContext, 0, len(pages))
 	for _, page := range pages {
@@ -838,7 +992,7 @@ func parseVisualBoardExtractOutput(output string) (visualBoardExtractResult, err
 	raw = raw[start : end+1]
 	var result visualBoardExtractResult
 	if err := json.Unmarshal([]byte(raw), &result); err == nil && len(result.Nodes) > 0 {
-		return result, nil
+		return normalizeVisualBoardExtractResult(result), nil
 	}
 	var wrapped struct {
 		VisualBoardExtract visualBoardExtractResult `json:"visual_board_extract"`
@@ -849,7 +1003,70 @@ func parseVisualBoardExtractOutput(output string) (visualBoardExtractResult, err
 	if len(wrapped.VisualBoardExtract.Nodes) == 0 {
 		return visualBoardExtractResult{}, fmt.Errorf("visual_board_extract output has no nodes")
 	}
-	return wrapped.VisualBoardExtract, nil
+	return normalizeVisualBoardExtractResult(wrapped.VisualBoardExtract), nil
+}
+
+func normalizeVisualBoardExtractResult(result visualBoardExtractResult) visualBoardExtractResult {
+	for i := range result.Nodes {
+		node := &result.Nodes[i]
+		if strings.TrimSpace(node.Type) == "" {
+			node.Type = strings.TrimSpace(node.NodeType)
+		}
+		node.Type = normalizeVisualNodeType(strings.TrimSpace(node.Type))
+		if strings.TrimSpace(node.Description) == "" {
+			node.Description = visualExtractDescriptionFallback(*node)
+		}
+		if strings.TrimSpace(node.Prompt) == "" && strings.TrimSpace(node.VisualBrief) != "" {
+			node.Prompt = strings.TrimSpace(node.VisualBrief)
+		}
+		if len(node.SourceRefs) == 0 && len(node.SourceSlugs) > 0 {
+			refs := make([]map[string]string, 0, len(node.SourceSlugs))
+			for _, slug := range node.SourceSlugs {
+				slug = strings.TrimSpace(slug)
+				if slug == "" {
+					continue
+				}
+				refs = append(refs, map[string]string{"wiki_slug": slug})
+			}
+			if len(refs) > 0 {
+				if data, err := json.Marshal(refs); err == nil {
+					node.SourceRefs = data
+				}
+			}
+		}
+	}
+	return result
+}
+
+func visualExtractDescriptionFallback(node visualBoardExtractNode) string {
+	parts := make([]string, 0, 5)
+	if brief := strings.TrimSpace(node.VisualBrief); brief != "" {
+		parts = append(parts, brief)
+	}
+	if facts := compactStringList(node.ExtractedFacts); len(facts) > 0 {
+		parts = append(parts, "Facts: "+strings.Join(facts, "; "))
+	}
+	if includes := compactStringList(node.MustInclude); len(includes) > 0 {
+		parts = append(parts, "Must include: "+strings.Join(includes, "; "))
+	}
+	if avoids := compactStringList(node.MustAvoid); len(avoids) > 0 {
+		parts = append(parts, "Must avoid: "+strings.Join(avoids, "; "))
+	}
+	if criteria := compactStringList(node.AcceptanceCriteria); len(criteria) > 0 {
+		parts = append(parts, "Acceptance: "+strings.Join(criteria, "; "))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func compactStringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func (h *Handler) applyVisualBoardExtractCompleted(ctx context.Context, task db.AgentTaskQueue, output string) {
@@ -858,6 +1075,12 @@ func (h *Handler) applyVisualBoardExtractCompleted(ctx context.Context, task db.
 		return
 	}
 	result, err := parseVisualBoardExtractOutput(output)
+	if err != nil {
+		commentOutput, commentErr := h.latestVisualBoardExtractCommentOutput(ctx, task, visualCtx)
+		if commentErr == nil {
+			result, err = parseVisualBoardExtractOutput(commentOutput)
+		}
+	}
 	if err != nil {
 		slog.Warn("visual board extract completion: invalid output", "task_id", uuidToString(task.ID), "error", err)
 		h.markVisualBoardExtractFailed(ctx, visualCtx, err.Error())
@@ -961,6 +1184,45 @@ func (h *Handler) applyVisualBoardExtractCompleted(ctx context.Context, task db.
 	h.publishProjectVisualBoardUpdated(workspaceID, projectID, "extracted")
 }
 
+func (h *Handler) latestVisualBoardExtractCommentOutput(ctx context.Context, task db.AgentTaskQueue, visualCtx visualTaskContext) (string, error) {
+	if !task.IssueID.Valid {
+		return "", fmt.Errorf("visual extract task has no issue comments")
+	}
+	workspaceID, err := util.ParseUUID(visualCtx.WorkspaceID)
+	if err != nil {
+		return "", err
+	}
+	since := task.StartedAt
+	if !since.Valid {
+		since = task.CreatedAt
+	}
+	comments, err := h.Queries.ListCommentsSinceForIssue(ctx, db.ListCommentsSinceForIssueParams{
+		IssueID:     task.IssueID,
+		WorkspaceID: workspaceID,
+		CreatedAt:   since,
+		Limit:       50,
+	})
+	if err != nil {
+		return "", err
+	}
+	var parseErr error
+	for i := len(comments) - 1; i >= 0; i-- {
+		comment := comments[i]
+		if comment.AuthorType != "agent" || uuidToString(comment.AuthorID) != uuidToString(task.AgentID) {
+			continue
+		}
+		if _, err := parseVisualBoardExtractOutput(comment.Content); err == nil {
+			return comment.Content, nil
+		} else {
+			parseErr = err
+		}
+	}
+	if parseErr != nil {
+		return "", parseErr
+	}
+	return "", fmt.Errorf("no agent comment contained visual board extraction JSON")
+}
+
 func (h *Handler) markVisualBoardExtractFailed(ctx context.Context, visualCtx visualTaskContext, message string) {
 	workspaceID, err := util.ParseUUID(visualCtx.WorkspaceID)
 	if err != nil {
@@ -1021,6 +1283,18 @@ func normalizeVisualNodeType(value string) string {
 	switch value {
 	case "character", "scene", "ui_element", "prop", "reference", "gameplay_note", "generated_variant":
 		return value
+	case "character_concept":
+		return "character"
+	case "environment_concept", "scene_concept":
+		return "scene"
+	case "ui_concept", "ui_element_concept":
+		return "ui_element"
+	case "prop_concept":
+		return "prop"
+	case "reference_concept":
+		return "reference"
+	case "gameplay_note_concept", "mechanic_visual_note":
+		return "gameplay_note"
 	default:
 		return "reference"
 	}

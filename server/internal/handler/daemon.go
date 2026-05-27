@@ -2234,6 +2234,9 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if vc, ok := h.visualTaskContextFromTask(*task); ok && vc.Type == visualTaskTypeExtract {
+		h.markVisualBoardExtractFailed(r.Context(), vc, req.Error)
+	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
 	writeJSON(w, http.StatusOK, taskToResponse(*task))

@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
+import { issueKeys } from "../issues/queries";
 import type {
   CreateProjectVisualPlanRequest,
   GenerateProjectVisualNodeRequest,
@@ -44,6 +45,10 @@ export function useGenerateProjectVisualNodes(projectId: string) {
     mutationFn: () => api.generateProjectVisualNodes(projectId),
     onSettled: () => {
       invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+      qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.projectGanttAll(wsId) });
     },
   });
 }
@@ -56,6 +61,10 @@ export function useGenerateProjectVisualNodeImage(projectId: string) {
       api.generateProjectVisualNodeImage(projectId, nodeId, data),
     onSettled: () => {
       invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+      qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.projectGanttAll(wsId) });
     },
   });
 }

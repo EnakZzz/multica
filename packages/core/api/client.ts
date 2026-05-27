@@ -90,6 +90,7 @@ import type {
   ProjectWikiPage,
   ProjectVisualBoard,
   UpdateProjectVisualBoardRequest,
+  GenerateProjectVisualNodeImageResponse,
   GenerateProjectVisualNodesResponse,
   GenerateProjectVisualNodeRequest,
   CreateProjectVisualPlanRequest,
@@ -1822,10 +1823,13 @@ export class ApiClient {
     projectId: string,
     nodeId: string,
     data: GenerateProjectVisualNodeRequest,
-  ): Promise<{ task_id?: string }> {
-    return this.fetch(`/api/projects/${projectId}/visual-nodes/${nodeId}/generate`, {
+  ): Promise<GenerateProjectVisualNodeImageResponse> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-nodes/${nodeId}/generate`, {
       method: "POST",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, GenerateProjectVisualNodesResponseSchema, EMPTY_GENERATE_PROJECT_VISUAL_NODES_RESPONSE, {
+      endpoint: "POST /api/projects/{id}/visual-nodes/{nodeId}/generate",
     });
   }
 

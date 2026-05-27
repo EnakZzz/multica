@@ -78,7 +78,11 @@ export interface GenerateProjectVisualNodeRequest {
 
 export interface GenerateProjectVisualNodesResponse {
   task_id?: string;
+  issue_id?: string;
+  issue_identifier?: string;
 }
+
+export type GenerateProjectVisualNodeImageResponse = GenerateProjectVisualNodesResponse;
 
 export interface CreateProjectVisualPlanRequest {
   gameplay_notes?: string;

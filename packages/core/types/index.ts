@@ -105,6 +105,7 @@ export type {
   ProjectVisualNodeType,
   ProjectVisualEdge,
   UpdateProjectVisualBoardRequest,
+  GenerateProjectVisualNodeImageResponse,
   GenerateProjectVisualNodesResponse,
   GenerateProjectVisualNodeRequest,
   CreateProjectVisualPlanRequest,

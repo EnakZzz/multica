@@ -2546,7 +2546,7 @@ func (s *TaskService) parseIssuePlanContext(task db.AgentTaskQueue) (IssuePlanCo
 }
 
 func (s *TaskService) parseVisualNodeGenerateContext(task db.AgentTaskQueue) (VisualNodeGenerateContext, bool) {
-	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+	if task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
 		return VisualNodeGenerateContext{}, false
 	}
 	if len(task.Context) == 0 {
@@ -2563,7 +2563,7 @@ func (s *TaskService) parseVisualNodeGenerateContext(task db.AgentTaskQueue) (Vi
 }
 
 func (s *TaskService) parseVisualBoardExtractContext(task db.AgentTaskQueue) (VisualBoardExtractContext, bool) {
-	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+	if task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
 		return VisualBoardExtractContext{}, false
 	}
 	if len(task.Context) == 0 {

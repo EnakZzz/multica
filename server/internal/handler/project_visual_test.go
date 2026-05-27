@@ -50,18 +50,29 @@ func TestProjectVisualGenerateNodesFromWikiCreatesBoardNodes(t *testing.T) {
 	if queued.TaskID == "" {
 		t.Fatal("GenerateProjectVisualNodes should return task_id")
 	}
-	var issueIDIsNull bool
+	var issueID string
 	var contextJSON []byte
 	var agentID string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT issue_id IS NULL, context, agent_id::text
+		SELECT issue_id::text, context, agent_id::text
 		FROM agent_task_queue
 		WHERE id = $1
-	`, queued.TaskID).Scan(&issueIDIsNull, &contextJSON, &agentID); err != nil {
+	`, queued.TaskID).Scan(&issueID, &contextJSON, &agentID); err != nil {
 		t.Fatalf("load visual extract task: %v", err)
 	}
-	if !issueIDIsNull || agentID != plannerID {
-		t.Fatalf("visual extract task issue_null=%v agent=%s planner=%s", issueIDIsNull, agentID, plannerID)
+	if issueID == "" || agentID != plannerID {
+		t.Fatalf("visual extract task issue_id=%q agent=%s planner=%s", issueID, agentID, plannerID)
+	}
+	var issueTitle, issueProjectID, assigneeType, assigneeID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT title, project_id::text, assignee_type, assignee_id::text
+		FROM issue
+		WHERE id = $1
+	`, issueID).Scan(&issueTitle, &issueProjectID, &assigneeType, &assigneeID); err != nil {
+		t.Fatalf("load visual extract issue: %v", err)
+	}
+	if issueTitle != "Generate visual nodes from Project Wiki" || issueProjectID != project.ID || assigneeType != "agent" || assigneeID != plannerID {
+		t.Fatalf("visual extract issue title=%q project=%s assignee=%s:%s planner=%s", issueTitle, issueProjectID, assigneeType, assigneeID, plannerID)
 	}
 	var taskContext map[string]any
 	if err := json.Unmarshal(contextJSON, &taskContext); err != nil {
@@ -142,6 +153,50 @@ func TestProjectVisualGenerateNodesFromWikiCreatesBoardNodes(t *testing.T) {
 	}
 }
 
+func TestParseVisualBoardExtractOutputAcceptsCommentArtifactAliases(t *testing.T) {
+	output := `{
+  "artifact_type": "visual_board_extraction",
+  "nodes": [
+    {
+      "id": "vb-lost-pet-protagonist",
+      "title": "Lost Pet 小动物主角",
+      "node_type": "character_concept",
+      "source_slugs": ["glossary"],
+      "extracted_facts": ["玩家扮演刚离世的小动物。"],
+      "visual_brief": "A gentle fantasy small-animal protagonist.",
+      "must_include": ["Small animal identity"],
+      "must_avoid": ["Horror death imagery"],
+      "acceptance_criteria": ["Reviewer can identify the lost pet character."],
+      "confidence": 0.88
+    }
+  ],
+  "edges": []
+}`
+
+	got, err := parseVisualBoardExtractOutput(output)
+	if err != nil {
+		t.Fatalf("parseVisualBoardExtractOutput: %v", err)
+	}
+	if len(got.Nodes) != 1 {
+		t.Fatalf("expected one node, got %d", len(got.Nodes))
+	}
+	node := got.Nodes[0]
+	if node.Type != "character" {
+		t.Fatalf("expected node_type alias to populate Type, got %q", node.Type)
+	}
+	if !strings.Contains(node.Description, "A gentle fantasy small-animal protagonist.") ||
+		!strings.Contains(node.Description, "玩家扮演刚离世的小动物。") ||
+		!strings.Contains(node.Description, "Horror death imagery") {
+		t.Fatalf("description did not preserve artifact details: %q", node.Description)
+	}
+	if node.Prompt != "A gentle fantasy small-animal protagonist." {
+		t.Fatalf("expected visual_brief prompt fallback, got %q", node.Prompt)
+	}
+	if !strings.Contains(string(node.SourceRefs), "glossary") {
+		t.Fatalf("expected source_slugs alias to populate source refs, got %s", string(node.SourceRefs))
+	}
+}
+
 func TestProjectVisualGenerateImageValidatesAgentWorkspaceAndRuntime(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -173,13 +228,18 @@ func TestProjectVisualGenerateImageValidatesAgentWorkspaceAndRuntime(t *testing.
 	}
 
 	var resp struct {
-		TaskID string `json:"task_id"`
+		TaskID          string `json:"task_id"`
+		IssueID         string `json:"issue_id"`
+		IssueIdentifier string `json:"issue_identifier"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode generate response: %v", err)
 	}
 	if resp.TaskID == "" {
 		t.Fatal("generate response should include task_id")
+	}
+	if resp.IssueID == "" || resp.IssueIdentifier == "" {
+		t.Fatalf("generate response should include issue details: %#v", resp)
 	}
 
 	var status, generationAgentID, generationTaskID string
@@ -194,17 +254,28 @@ func TestProjectVisualGenerateImageValidatesAgentWorkspaceAndRuntime(t *testing.
 		t.Fatalf("node generation state = status %q agent %s task %s", status, generationAgentID, generationTaskID)
 	}
 
-	var issueIDIsNull bool
+	var issueID string
 	var contextJSON []byte
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT issue_id IS NULL, context
+		SELECT issue_id::text, context
 		FROM agent_task_queue
 		WHERE id = $1
-	`, resp.TaskID).Scan(&issueIDIsNull, &contextJSON); err != nil {
+	`, resp.TaskID).Scan(&issueID, &contextJSON); err != nil {
 		t.Fatalf("load visual task: %v", err)
 	}
-	if !issueIDIsNull {
-		t.Fatal("visual generation task should not create or link an issue")
+	if issueID != resp.IssueID {
+		t.Fatalf("visual generation task issue_id = %q, response issue_id = %q", issueID, resp.IssueID)
+	}
+	var issueTitle, issueProjectID, assigneeType, assigneeID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT title, project_id::text, assignee_type, assignee_id::text
+		FROM issue
+		WHERE id = $1
+	`, issueID).Scan(&issueTitle, &issueProjectID, &assigneeType, &assigneeID); err != nil {
+		t.Fatalf("load visual generation issue: %v", err)
+	}
+	if issueTitle != "Generate visual asset: Milo portrait" || issueProjectID != project.ID || assigneeType != "agent" || assigneeID != artAgentID {
+		t.Fatalf("visual generation issue title=%q project=%s assignee=%s:%s artAgent=%s", issueTitle, issueProjectID, assigneeType, assigneeID, artAgentID)
 	}
 	var taskContext map[string]any
 	if err := json.Unmarshal(contextJSON, &taskContext); err != nil {

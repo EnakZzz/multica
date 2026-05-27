@@ -155,7 +155,15 @@ func buildVisualNodePrompt(task Task) string {
 func buildVisualBoardExtractPrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("You are running as a visual planning agent for a Multica project visual canvas.\n\n")
-	b.WriteString("There is no issue for this task. Read the Project Wiki excerpts and extract the visual board nodes and edges as strict JSON.\n\n")
+	if task.IssueID != "" {
+		fmt.Fprintf(&b, "Tracking issue: %s", task.IssueID)
+		if task.IssueIdentifier != "" {
+			fmt.Fprintf(&b, " (%s)", task.IssueIdentifier)
+		}
+		b.WriteString(". Use comments only for human-visible notes if needed; the final task output must still be the raw JSON object below.\n\n")
+	} else {
+		b.WriteString("There is no issue for this task. Read the Project Wiki excerpts and extract the visual board nodes and edges as strict JSON.\n\n")
+	}
 	if task.ProjectTitle != "" {
 		fmt.Fprintf(&b, "Project: %s (%s)\n", task.ProjectTitle, task.ProjectID)
 	} else if task.ProjectID != "" {
@@ -169,7 +177,11 @@ func buildVisualBoardExtractPrompt(task Task) string {
 	for _, page := range task.VisualWikiPages {
 		fmt.Fprintf(&b, "\n--- wiki_page id=%s slug=%s title=%q ---\n%s\n", page.ID, page.Slug, page.Title, page.Body)
 	}
-	b.WriteString("\nReturn exactly one JSON object, with no markdown fences and no prose. Schema:\n")
+	b.WriteString("\nCompletion contract:\n")
+	b.WriteString("- Return exactly one JSON object as the final task output, with no markdown fences and no prose.\n")
+	b.WriteString("- Do not finish with a summary that points to an issue comment or a local artifact; the backend parses only the final JSON object to populate the visual board.\n")
+	b.WriteString("- Do not create implementation issues, planning artifacts, or branches from this extraction task.\n")
+	b.WriteString("\nSchema:\n")
 	b.WriteString(`{"nodes":[{"id":"stable_local_id","type":"character|scene|ui_element|prop|reference|gameplay_note|generated_variant","title":"short title","description":"what this visual node represents","prompt":"suggested image-generation prompt","source_refs":[{"wiki_page_id":"...","wiki_slug":"...","title":"...","snippet":"..."}],"confidence":0.0,"position_x":0,"position_y":0}],"edges":[{"source":"stable_local_id","target":"stable_local_id","relation":"reference|contains|uses|variant_of|supports_gameplay"}]}` + "\n")
 	return b.String()
 }

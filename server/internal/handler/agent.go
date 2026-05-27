@@ -330,6 +330,12 @@ func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
 // (no linked source — the agent is producing a saved plan) / direct
 // (assignee-driven task on an existing issue).
 func computeTaskKind(t db.AgentTaskQueue) string {
+	if t.Context != nil {
+		var payload map[string]any
+		if json.Unmarshal(t.Context, &payload) == nil && (payload["type"] == service.VisualNodeGenerateContextType || payload["type"] == service.VisualBoardExtractContextType) {
+			return "visual"
+		}
+	}
 	if uuidToString(t.ChatSessionID) != "" {
 		return "chat"
 	}
@@ -340,9 +346,6 @@ func computeTaskKind(t db.AgentTaskQueue) string {
 		var payload map[string]any
 		if t.Context != nil && json.Unmarshal(t.Context, &payload) == nil && payload["type"] == service.IssuePlanContextType {
 			return "issue_plan"
-		}
-		if t.Context != nil && json.Unmarshal(t.Context, &payload) == nil && (payload["type"] == service.VisualNodeGenerateContextType || payload["type"] == service.VisualBoardExtractContextType) {
-			return "visual"
 		}
 		return "quick_create"
 	}

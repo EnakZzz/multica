@@ -206,6 +206,29 @@ func TestBuildVisualBoardExtractPromptRequiresStrictJSON(t *testing.T) {
 	}
 }
 
+func TestBuildVisualBoardExtractPromptWithIssueStillRequiresFinalJSON(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID:         "issue-123",
+		IssueIdentifier: "LOC-62",
+		VisualTaskType:  "visual_board_extract",
+		ProjectID:       "project-123",
+		VisualBoardID:   "board-123",
+	}, "codex")
+
+	mustContain := []string{
+		"Tracking issue: issue-123 (LOC-62)",
+		"final task output must still be the raw JSON object",
+		"backend parses only the final JSON object",
+		"Do not create implementation issues",
+	}
+
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("BuildPrompt visual board issue output missing %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
 func TestBuildIssuePlanSpecPromptPreservesUserLanguage(t *testing.T) {
 	out := buildIssuePlanSpecPrompt(Task{
 		IssuePlanPrompt: "实现一个 Web 版多人贪吃蛇，先生成 spec 给我确认",

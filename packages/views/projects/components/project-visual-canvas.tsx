@@ -170,7 +170,10 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
     generateImage.mutate(
       { nodeId: node.id, agent_id: selectedArtAgentId },
       {
-        onSuccess: () => toast.success("Generation task queued"),
+        onSuccess: (result) => {
+          const issueLabel = result.issue_identifier || result.issue_id;
+          toast.success(issueLabel ? `Generation issue queued: ${issueLabel}` : "Generation issue queued");
+        },
         onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to queue generation"),
       },
     );
@@ -206,7 +209,10 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
             variant="outline"
             disabled={generateNodes.isPending}
             onClick={() => generateNodes.mutate(undefined, {
-              onSuccess: () => toast.success("Visual extraction task queued"),
+              onSuccess: (result) => {
+                const issueLabel = result.issue_identifier || result.issue_id;
+                toast.success(issueLabel ? `Visual extraction issue queued: ${issueLabel}` : "Visual extraction issue queued");
+              },
               onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to generate nodes"),
             })}
           >
