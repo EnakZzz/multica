@@ -311,9 +311,8 @@ func TestProjectVisualCreatePlanIncludesOnlyAdoptedNodes(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := newRequest(http.MethodPost, "/api/projects/"+project.ID+"/visual-board/create-plan", map[string]any{
-		"planner_agent_id": plannerID,
-		"gameplay_notes":   "Use the adopted hero as art direction for stealth gameplay.",
-		"title":            "Visual canvas implementation plan",
+		"gameplay_notes": "Use the adopted hero as art direction for stealth gameplay.",
+		"title":          "Visual canvas implementation plan",
 	})
 	req = withURLParam(req, "id", project.ID)
 	testHandler.CreatePlanFromProjectVisualBoard(w, req)
@@ -327,6 +326,9 @@ func TestProjectVisualCreatePlanIncludesOnlyAdoptedNodes(t *testing.T) {
 	}
 	if plan.ProjectID == nil || *plan.ProjectID != project.ID {
 		t.Fatalf("plan project_id = %v, want %s", plan.ProjectID, project.ID)
+	}
+	if plan.PlannerAgentID != plannerID {
+		t.Fatalf("plan planner_agent_id = %s, want internal planner %s", plan.PlannerAgentID, plannerID)
 	}
 	if !strings.Contains(plan.Prompt, "Adopted Hero") || !strings.Contains(plan.Prompt, attachmentID) {
 		t.Fatalf("plan prompt missing adopted node or attachment: %s", plan.Prompt)

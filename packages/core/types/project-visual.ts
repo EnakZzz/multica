@@ -81,7 +81,6 @@ export interface GenerateProjectVisualNodesResponse {
 }
 
 export interface CreateProjectVisualPlanRequest {
-  planner_agent_id: string;
   gameplay_notes?: string;
   title?: string;
 }

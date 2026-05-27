@@ -155,9 +155,8 @@ type visualGenerationResultRequest struct {
 }
 
 type createVisualPlanRequest struct {
-	PlannerAgentID string `json:"planner_agent_id"`
-	GameplayNotes  string `json:"gameplay_notes"`
-	Title          string `json:"title"`
+	GameplayNotes string `json:"gameplay_notes"`
+	Title         string `json:"title"`
 }
 
 type visualTaskContext struct {
@@ -274,17 +273,8 @@ func (h *Handler) GenerateProjectVisualNodes(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "project wiki has no pages to extract")
 		return
 	}
-	agent, err := h.Queries.GetInternalPlannerAgent(r.Context(), project.WorkspaceID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "internal planner agent is not available")
-		return
-	}
-	if agent.ArchivedAt.Valid {
-		writeError(w, http.StatusBadRequest, "internal planner agent is archived")
-		return
-	}
-	if !agent.RuntimeID.Valid {
-		writeError(w, http.StatusBadRequest, "internal planner agent has no runtime")
+	agent, ok := h.loadInternalPlannerAgent(w, r, project.WorkspaceID)
+	if !ok {
 		return
 	}
 	payload := visualTaskContext{
@@ -468,12 +458,8 @@ func (h *Handler) CreatePlanFromProjectVisualBoard(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	plannerAgentID, ok := parseUUIDOrBadRequest(w, req.PlannerAgentID, "planner_agent_id")
+	plannerAgent, ok := h.loadInternalPlannerAgent(w, r, project.WorkspaceID)
 	if !ok {
-		return
-	}
-	if status, msg := h.validatePlanAgent(r, plannerAgentID, project.WorkspaceID); status != 0 {
-		writeError(w, status, msg)
 		return
 	}
 	nodes, err := h.listVisualNodes(r, project.WorkspaceID, project.ID)
@@ -500,7 +486,7 @@ func (h *Handler) CreatePlanFromProjectVisualBoard(w http.ResponseWriter, r *htt
 		WorkspaceID:    project.WorkspaceID,
 		Title:          title,
 		Prompt:         prompt,
-		PlannerAgentID: plannerAgentID,
+		PlannerAgentID: plannerAgent.ID,
 		CreatedBy:      parseUUID(userID),
 		ProjectID:      project.ID,
 	})
@@ -508,7 +494,7 @@ func (h *Handler) CreatePlanFromProjectVisualBoard(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusInternalServerError, "failed to create plan")
 		return
 	}
-	task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), project.WorkspaceID, parseUUID(userID), plan.ID, plannerAgentID, prompt, project.ID, service.IssuePlanPhaseSpec, service.PlanSpec{})
+	task, err := h.TaskService.EnqueueIssuePlanTask(r.Context(), project.WorkspaceID, parseUUID(userID), plan.ID, plannerAgent.ID, prompt, project.ID, service.IssuePlanPhaseSpec, service.PlanSpec{})
 	if err != nil {
 		h.Queries.MarkPlanFailed(r.Context(), db.MarkPlanFailedParams{ID: plan.ID, Error: pgtype.Text{String: err.Error(), Valid: true}})
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -520,6 +506,23 @@ func (h *Handler) CreatePlanFromProjectVisualBoard(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, http.StatusCreated, planToResponse(plan, nil))
+}
+
+func (h *Handler) loadInternalPlannerAgent(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID) (db.Agent, bool) {
+	agent, err := h.Queries.GetInternalPlannerAgent(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "internal planner agent is not available")
+		return db.Agent{}, false
+	}
+	if agent.ArchivedAt.Valid {
+		writeError(w, http.StatusBadRequest, "internal planner agent is archived")
+		return db.Agent{}, false
+	}
+	if !agent.RuntimeID.Valid {
+		writeError(w, http.StatusBadRequest, "internal planner agent has no runtime")
+		return db.Agent{}, false
+	}
+	return agent, true
 }
 
 func (h *Handler) ensureVisualBoard(r *http.Request, workspaceID, projectID pgtype.UUID) (visualBoardRow, error) {

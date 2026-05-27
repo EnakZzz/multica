@@ -66,11 +66,14 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   const [selectedId, setSelectedId] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [gameplayNotes, setGameplayNotes] = useState("");
-  const [plannerAgentId, setPlannerAgentId] = useState("");
 
-  const runnableAgents = useMemo(
-    () => agents.filter((agent) => !agent.archived_at && agent.runtime_id),
+  const artAgents = useMemo(
+    () => agents.filter((agent) => !agent.archived_at && agent.runtime_id && !agent.is_internal),
     [agents],
+  );
+  const selectedArtAgentId = useMemo(
+    () => artAgents.some((agent) => agent.id === selectedAgentId) ? selectedAgentId : "",
+    [artAgents, selectedAgentId],
   );
 
   const selectedNode = useMemo(
@@ -94,7 +97,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
         },
       }));
     });
-  }, [board, selectedAgentId]);
+  }, [board, selectedArtAgentId]);
 
   useEffect(() => {
     syncBoardToFlow();
@@ -160,12 +163,12 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
 
   function handleGenerateRequest(node: ProjectVisualNode) {
     setSelectedFromNode(node);
-    if (!selectedAgentId) {
+    if (!selectedArtAgentId) {
       toast.message("Select an art agent first.");
       return;
     }
     generateImage.mutate(
-      { nodeId: node.id, agent_id: selectedAgentId },
+      { nodeId: node.id, agent_id: selectedArtAgentId },
       {
         onSuccess: () => toast.success("Generation task queued"),
         onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to queue generation"),
@@ -215,21 +218,11 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
             Save
           </Button>
           <div className="ml-auto flex items-center gap-2">
-            <select
-              className="h-8 rounded-md border bg-background px-2 text-xs"
-              value={plannerAgentId}
-              onChange={(event) => setPlannerAgentId(event.target.value)}
-            >
-              <option value="">Planner agent</option>
-              {runnableAgents.map((agent) => (
-                <option key={agent.id} value={agent.id}>{agent.name}</option>
-              ))}
-            </select>
             <Button
               size="sm"
-              disabled={!plannerAgentId || adoptedCount === 0 || createPlan.isPending}
+              disabled={adoptedCount === 0 || createPlan.isPending}
               onClick={() => createPlan.mutate(
-                { planner_agent_id: plannerAgentId, gameplay_notes: gameplayNotes },
+                { gameplay_notes: gameplayNotes },
                 {
                   onSuccess: (plan) => toast.success(`Plan created: ${plan.title}`),
                   onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to create plan"),
@@ -277,7 +270,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
             onChange={(event) => setSelectedAgentId(event.target.value)}
           >
             <option value="">Select agent</option>
-            {runnableAgents.map((agent: Agent) => (
+            {artAgents.map((agent: Agent) => (
               <option key={agent.id} value={agent.id}>{agent.name}</option>
             ))}
           </select>
@@ -307,7 +300,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
                 <Button variant="outline" size="sm" onClick={() => handleStatusChange(selectedNode, "adopted")}>Adopt</Button>
                 <Button variant="outline" size="sm" onClick={() => handleStatusChange(selectedNode, "rejected")}>Reject</Button>
               </div>
-              <Button size="sm" disabled={!selectedAgentId || generateImage.isPending} onClick={() => handleGenerateRequest(selectedNode)}>
+              <Button size="sm" disabled={!selectedArtAgentId || generateImage.isPending} onClick={() => handleGenerateRequest(selectedNode)}>
                 <Image className="mr-1.5 h-3.5 w-3.5" />
                 Generate Image
               </Button>

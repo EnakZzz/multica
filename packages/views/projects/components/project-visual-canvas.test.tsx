@@ -259,7 +259,19 @@ describe("ProjectVisualCanvas", () => {
     );
   });
 
-  it("disables create-plan until adopted nodes and a planner are available", async () => {
+  it("hides internal planner agents from the art agent selector", async () => {
+    visualMocks.agents = [
+      makeAgent(),
+      makeAgent({ id: "planner-1", name: "规划Agent", is_internal: true }),
+    ];
+    renderCanvas();
+
+    await screen.findByRole("option", { name: "Art Agent" });
+    expect(screen.queryByRole("option", { name: "规划Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Planner agent")).not.toBeInTheDocument();
+  });
+
+  it("disables create-plan until adopted nodes are available", async () => {
     visualMocks.board = makeBoard([
       makeNode({ id: "node-draft", title: "Draft Forest", status: "draft" }),
       makeNode({ id: "node-rejected", title: "Rejected Lantern", status: "rejected" }),
@@ -270,19 +282,17 @@ describe("ProjectVisualCanvas", () => {
     expect(createButton).toBeDisabled();
   });
 
-  it("creates a plan from adopted visual context after planner selection", async () => {
+  it("creates a plan from adopted visual context without planner selection", async () => {
     renderCanvas();
 
     await screen.findByText("Adopted Hero");
-    const plannerSelect = screen.getByDisplayValue("Planner agent");
-    fireEvent.change(plannerSelect, { target: { value: "agent-1" } });
     fireEvent.change(screen.getByLabelText("Gameplay notes for Plan"), {
       target: { value: "Use adopted nodes only." },
     });
     fireEvent.click(screen.getByRole("button", { name: /Create Plan from Adopted/i }));
 
     expect(visualMocks.createPlanMutate).toHaveBeenCalledWith(
-      { planner_agent_id: "agent-1", gameplay_notes: "Use adopted nodes only." },
+      { gameplay_notes: "Use adopted nodes only." },
       expect.objectContaining({
         onSuccess: expect.any(Function),
         onError: expect.any(Function),
