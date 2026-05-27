@@ -18,20 +18,21 @@ import (
 )
 
 type CommentResponse struct {
-	ID             string               `json:"id"`
-	IssueID        string               `json:"issue_id"`
-	AuthorType     string               `json:"author_type"`
-	AuthorID       string               `json:"author_id"`
-	Content        string               `json:"content"`
-	Type           string               `json:"type"`
-	ParentID       *string              `json:"parent_id"`
-	CreatedAt      string               `json:"created_at"`
-	UpdatedAt      string               `json:"updated_at"`
-	ResolvedAt     *string              `json:"resolved_at"`
-	ResolvedByType *string              `json:"resolved_by_type"`
-	ResolvedByID   *string              `json:"resolved_by_id"`
-	Reactions      []ReactionResponse   `json:"reactions"`
-	Attachments    []AttachmentResponse `json:"attachments"`
+	ID               string               `json:"id"`
+	IssueID          string               `json:"issue_id"`
+	AuthorType       string               `json:"author_type"`
+	AuthorID         string               `json:"author_id"`
+	Content          string               `json:"content"`
+	DisplayContentZh *string              `json:"display_content_zh,omitempty"`
+	Type             string               `json:"type"`
+	ParentID         *string              `json:"parent_id"`
+	CreatedAt        string               `json:"created_at"`
+	UpdatedAt        string               `json:"updated_at"`
+	ResolvedAt       *string              `json:"resolved_at"`
+	ResolvedByType   *string              `json:"resolved_by_type"`
+	ResolvedByID     *string              `json:"resolved_by_id"`
+	Reactions        []ReactionResponse   `json:"reactions"`
+	Attachments      []AttachmentResponse `json:"attachments"`
 }
 
 func commentToResponse(c db.Comment, reactions []ReactionResponse, attachments []AttachmentResponse) CommentResponse {
@@ -42,20 +43,21 @@ func commentToResponse(c db.Comment, reactions []ReactionResponse, attachments [
 		attachments = []AttachmentResponse{}
 	}
 	return CommentResponse{
-		ID:             uuidToString(c.ID),
-		IssueID:        uuidToString(c.IssueID),
-		AuthorType:     c.AuthorType,
-		AuthorID:       uuidToString(c.AuthorID),
-		Content:        c.Content,
-		Type:           c.Type,
-		ParentID:       uuidToPtr(c.ParentID),
-		CreatedAt:      timestampToString(c.CreatedAt),
-		UpdatedAt:      timestampToString(c.UpdatedAt),
-		ResolvedAt:     timestampToPtr(c.ResolvedAt),
-		ResolvedByType: textToPtr(c.ResolvedByType),
-		ResolvedByID:   uuidToPtr(c.ResolvedByID),
-		Reactions:      reactions,
-		Attachments:    attachments,
+		ID:               uuidToString(c.ID),
+		IssueID:          uuidToString(c.IssueID),
+		AuthorType:       c.AuthorType,
+		AuthorID:         uuidToString(c.AuthorID),
+		Content:          c.Content,
+		DisplayContentZh: textToPtr(c.DisplayContentZh),
+		Type:             c.Type,
+		ParentID:         uuidToPtr(c.ParentID),
+		CreatedAt:        timestampToString(c.CreatedAt),
+		UpdatedAt:        timestampToString(c.UpdatedAt),
+		ResolvedAt:       timestampToPtr(c.ResolvedAt),
+		ResolvedByType:   textToPtr(c.ResolvedByType),
+		ResolvedByID:     uuidToPtr(c.ResolvedByID),
+		Reactions:        reactions,
+		Attachments:      attachments,
 	}
 }
 
@@ -301,19 +303,20 @@ func (h *Handler) fetchCommentsForList(ctx context.Context, args fetchCommentsAr
 				continue
 			}
 			out = append(out, db.Comment{
-				ID:             r.ID,
-				IssueID:        r.IssueID,
-				AuthorType:     r.AuthorType,
-				AuthorID:       r.AuthorID,
-				Content:        r.Content,
-				Type:           r.Type,
-				CreatedAt:      r.CreatedAt,
-				UpdatedAt:      r.UpdatedAt,
-				ParentID:       r.ParentID,
-				WorkspaceID:    r.WorkspaceID,
-				ResolvedAt:     r.ResolvedAt,
-				ResolvedByType: r.ResolvedByType,
-				ResolvedByID:   r.ResolvedByID,
+				ID:               r.ID,
+				IssueID:          r.IssueID,
+				AuthorType:       r.AuthorType,
+				AuthorID:         r.AuthorID,
+				Content:          r.Content,
+				DisplayContentZh: r.DisplayContentZh,
+				Type:             r.Type,
+				CreatedAt:        r.CreatedAt,
+				UpdatedAt:        r.UpdatedAt,
+				ParentID:         r.ParentID,
+				WorkspaceID:      r.WorkspaceID,
+				ResolvedAt:       r.ResolvedAt,
+				ResolvedByType:   r.ResolvedByType,
+				ResolvedByID:     r.ResolvedByID,
 			})
 		}
 		return fetchCommentsResult{Comments: out}, nil
@@ -362,19 +365,20 @@ func (h *Handler) fetchCommentsForList(ctx context.Context, args fetchCommentsAr
 				continue
 			}
 			comments = append(comments, db.Comment{
-				ID:             r.ID,
-				IssueID:        r.IssueID,
-				AuthorType:     r.AuthorType,
-				AuthorID:       r.AuthorID,
-				Content:        r.Content,
-				Type:           r.Type,
-				CreatedAt:      r.CreatedAt,
-				UpdatedAt:      r.UpdatedAt,
-				ParentID:       r.ParentID,
-				WorkspaceID:    r.WorkspaceID,
-				ResolvedAt:     r.ResolvedAt,
-				ResolvedByType: r.ResolvedByType,
-				ResolvedByID:   r.ResolvedByID,
+				ID:               r.ID,
+				IssueID:          r.IssueID,
+				AuthorType:       r.AuthorType,
+				AuthorID:         r.AuthorID,
+				Content:          r.Content,
+				DisplayContentZh: r.DisplayContentZh,
+				Type:             r.Type,
+				CreatedAt:        r.CreatedAt,
+				UpdatedAt:        r.UpdatedAt,
+				ParentID:         r.ParentID,
+				WorkspaceID:      r.WorkspaceID,
+				ResolvedAt:       r.ResolvedAt,
+				ResolvedByType:   r.ResolvedByType,
+				ResolvedByID:     r.ResolvedByID,
 			})
 		}
 
@@ -516,13 +520,14 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// source. See issue #1303 / discussion in MUL-1119, MUL-1125.
 
 	comment, err := h.Queries.CreateComment(r.Context(), db.CreateCommentParams{
-		IssueID:     issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-		AuthorType:  authorType,
-		AuthorID:    parseUUID(authorID),
-		Content:     req.Content,
-		Type:        req.Type,
-		ParentID:    parentID,
+		IssueID:          issue.ID,
+		WorkspaceID:      issue.WorkspaceID,
+		AuthorType:       authorType,
+		AuthorID:         parseUUID(authorID),
+		Content:          req.Content,
+		DisplayContentZh: pgtype.Text{},
+		Type:             req.Type,
+		ParentID:         parentID,
 	})
 	if err != nil {
 		slog.Warn("create comment failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)

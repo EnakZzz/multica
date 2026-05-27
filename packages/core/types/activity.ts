@@ -18,6 +18,7 @@ export interface TimelineEntry {
   details?: Record<string, unknown>;
   // Comment fields
   content?: string;
+  display_content_zh?: string | null;
   parent_id?: string | null;
   updated_at?: string;
   comment_type?: string;

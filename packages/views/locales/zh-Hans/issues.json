@@ -258,6 +258,8 @@
     "save_action": "保存",
     "cancel_edit": "取消",
     "copy_action": "复制",
+    "show_original_action": "显示原文",
+    "original_title": "原文",
     "copied_toast": "已复制",
     "edit_action": "编辑",
     "update_failed": "更新评论失败",

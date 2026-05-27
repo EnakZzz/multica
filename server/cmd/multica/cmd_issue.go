@@ -1004,6 +1004,9 @@ func runIssueCommentList(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("list comments: %w", err)
 	}
+	for _, c := range comments {
+		delete(c, "display_content_zh")
+	}
 	fmt.Fprintf(os.Stderr, "Showing %d comments.\n", len(comments))
 	// Under --recent the server emits a thread cursor in headers when there
 	// is likely an older page. Surface it on stderr so an operator (and the

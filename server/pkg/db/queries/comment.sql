@@ -38,20 +38,20 @@ descendants AS (
     -- Start from the root, then keep adding any comment whose parent is
     -- already in the set. Cycle-safe under PK constraint (a comment cannot
     -- be its own ancestor).
-    SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
+    SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.display_content_zh, c.type,
            c.created_at, c.updated_at, c.parent_id, c.workspace_id,
            c.resolved_at, c.resolved_by_type, c.resolved_by_id
     FROM comment c
     JOIN thread_root tr ON c.id = tr.id
     UNION
-    SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
+    SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.display_content_zh, c.type,
            c.created_at, c.updated_at, c.parent_id, c.workspace_id,
            c.resolved_at, c.resolved_by_type, c.resolved_by_id
     FROM comment c
     JOIN descendants d ON c.parent_id = d.id
     WHERE c.issue_id = @issue_id AND c.workspace_id = @workspace_id
 )
-SELECT id, issue_id, author_type, author_id, content, type,
+SELECT id, issue_id, author_type, author_id, content, display_content_zh, type,
        created_at, updated_at, parent_id, workspace_id,
        resolved_at, resolved_by_type, resolved_by_id
 FROM descendants
@@ -115,7 +115,7 @@ picked AS (
     ORDER BY ts.last_activity_at DESC, ts.root_id DESC
     LIMIT @thread_limit
 )
-SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
+SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.display_content_zh, c.type,
        c.created_at, c.updated_at, c.parent_id, c.workspace_id,
        c.resolved_at, c.resolved_by_type, c.resolved_by_id,
        p.root_id AS thread_root_id,
@@ -138,8 +138,23 @@ SELECT * FROM comment
 WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateComment :one
-INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id)
-VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(parent_id))
+INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, display_content_zh, type, parent_id)
+VALUES (
+    sqlc.arg(issue_id),
+    sqlc.arg(workspace_id),
+    sqlc.arg(author_type),
+    sqlc.arg(author_id),
+    sqlc.arg(content),
+    sqlc.narg(display_content_zh),
+    sqlc.arg(type),
+    sqlc.narg(parent_id)
+)
+RETURNING *;
+
+-- name: UpdateCommentDisplayContentZh :one
+UPDATE comment SET
+    display_content_zh = $2
+WHERE id = $1
 RETURNING *;
 
 -- name: UpdateComment :one

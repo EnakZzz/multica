@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useRef, useState } from "react";
-import { CheckCircle2, ChevronRight, Copy, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCircle2, ChevronRight, Copy, Eye, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
@@ -23,6 +23,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@multica/ui/components/ui/dialog";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@multica/ui/components/ui/collapsible";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
@@ -38,6 +44,10 @@ import { ReplyInput } from "./reply-input";
 import type { TimelineEntry, Attachment } from "@multica/core/types";
 import { useCommentCollapseStore, useCommentDraftStore } from "@multica/core/issues/stores";
 import { useT } from "../../i18n";
+import {
+  ReviewGateCommentContent,
+  getReviewGatePresentation,
+} from "./review-gate-comment";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -114,6 +124,43 @@ function DeleteCommentDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+function OriginalCommentDialog({
+  open,
+  onOpenChange,
+  content,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  content: string;
+}) {
+  const { t } = useT("issues");
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t(($) => $.comment.original_title)}</DialogTitle>
+        </DialogHeader>
+        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted/40 p-3 text-xs text-muted-foreground whitespace-pre-wrap break-words">
+          {content}
+        </pre>
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              copyMarkdown(content);
+              toast.success(t(($) => $.comment.copied_toast));
+            }}
+          >
+            <Copy className="h-3.5 w-3.5" />
+            {t(($) => $.comment.copy_action)}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -225,6 +272,9 @@ function CommentRow({
   const canDeleteEntry = isOwn || canModerate;
   const isTemp = entry.id.startsWith("temp-");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
+  const reviewGatePresentation = getReviewGatePresentation(entry.content ?? "", entry.display_content_zh);
+  const hasReviewGatePresentation = reviewGatePresentation !== null;
 
   const startEdit = () => {
     cancelledRef.current = false;
@@ -307,12 +357,18 @@ function CommentRow({
             />
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => {
-                copyMarkdown(entry.content ?? "");
+                copyMarkdown(reviewGatePresentation?.markdown ?? entry.content ?? "");
                 toast.success(t(($) => $.comment.copied_toast));
               }}>
                 <Copy className="h-3.5 w-3.5" />
                 {t(($) => $.comment.copy_action)}
               </DropdownMenuItem>
+              {hasReviewGatePresentation && (
+                <DropdownMenuItem onClick={() => setShowOriginal(true)}>
+                  <Eye className="h-3.5 w-3.5" />
+                  {t(($) => $.comment.show_original_action)}
+                </DropdownMenuItem>
+              )}
               {(canEditEntry || canDeleteEntry) && (
                 <>
                   <DropdownMenuSeparator />
@@ -337,6 +393,11 @@ function CommentRow({
             open={confirmDelete}
             onOpenChange={setConfirmDelete}
             onConfirm={() => onDelete(entry.id)}
+          />
+          <OriginalCommentDialog
+            open={showOriginal}
+            onOpenChange={setShowOriginal}
+            content={entry.content ?? ""}
           />
           </div>
         )}
@@ -379,7 +440,15 @@ function CommentRow({
       ) : (
         <>
           <div className="mt-1.5 pl-8 text-sm leading-relaxed text-foreground/85">
-            <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
+            {hasReviewGatePresentation ? (
+              <ReviewGateCommentContent
+                content={entry.content ?? ""}
+                displayContentZh={entry.display_content_zh}
+                attachments={entry.attachments}
+              />
+            ) : (
+              <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
+            )}
           </div>
           <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5 pl-8" />
           {!isTemp && (
@@ -511,6 +580,9 @@ function CommentCardImpl({
   const reactions = entry.reactions ?? [];
   const contentText = entry.content ?? "";
   const isLongContent = contentText.length > 500 || contentText.split("\n").length > 8;
+  const [showOriginal, setShowOriginal] = useState(false);
+  const reviewGatePresentation = getReviewGatePresentation(entry.content ?? "", entry.display_content_zh);
+  const hasReviewGatePresentation = reviewGatePresentation !== null;
 
   const isHighlighted = highlightedCommentId === entry.id;
 
@@ -581,12 +653,18 @@ function CommentCardImpl({
                 />
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem onClick={() => {
-                    copyMarkdown(entry.content ?? "");
+                    copyMarkdown(reviewGatePresentation?.markdown ?? entry.content ?? "");
                     toast.success(t(($) => $.comment.copied_toast));
                   }}>
                     <Copy className="h-3.5 w-3.5" />
                     {t(($) => $.comment.copy_action)}
                   </DropdownMenuItem>
+                  {hasReviewGatePresentation && (
+                    <DropdownMenuItem onClick={() => setShowOriginal(true)}>
+                      <Eye className="h-3.5 w-3.5" />
+                      {t(($) => $.comment.show_original_action)}
+                    </DropdownMenuItem>
+                  )}
                   {onResolveToggle && (
                     <>
                       <DropdownMenuSeparator />
@@ -630,6 +708,11 @@ function CommentCardImpl({
                 onOpenChange={setConfirmDelete}
                 onConfirm={() => onDelete(entry.id)}
                 hasReplies
+              />
+              <OriginalCommentDialog
+                open={showOriginal}
+                onOpenChange={setShowOriginal}
+                content={entry.content ?? ""}
               />
               </div>
             )}
@@ -677,7 +760,15 @@ function CommentCardImpl({
             ) : (
               <>
                 <div className="pl-10 text-sm leading-relaxed text-foreground/85">
-                  <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
+                  {hasReviewGatePresentation ? (
+                    <ReviewGateCommentContent
+                      content={entry.content ?? ""}
+                      displayContentZh={entry.display_content_zh}
+                      attachments={entry.attachments}
+                    />
+                  ) : (
+                    <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
+                  )}
                 </div>
                 <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5 pl-10" />
                 {!isTemp && (

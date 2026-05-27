@@ -259,6 +259,8 @@
     "save_action": "Save",
     "cancel_edit": "Cancel",
     "copy_action": "Copy",
+    "show_original_action": "Show original",
+    "original_title": "Original",
     "copied_toast": "Copied",
     "edit_action": "Edit",
     "update_failed": "Failed to update comment",

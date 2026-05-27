@@ -55,7 +55,7 @@ func BuildPrompt(task Task, provider string) string {
 			}
 			b.WriteString(". When checking out the repository, pass this branch as the ref; do not review an older upstream implementation branch unless the repair branch cannot be fetched.\n")
 		}
-		b.WriteString("You must return the structured `review_gate` JSON required by the issue body. If you post a final issue comment, make that comment a single JSON object containing `review_gate` only: no markdown, no prose before or after it, and no natural-language PASS/FAIL as the automation contract. Your task completion output must also be that same JSON object.\n")
+		b.WriteString("You must return the structured `review_gate` JSON required by the issue body. If you post a final issue comment, make that comment a single JSON object containing `review_gate` only: no markdown, no prose before or after it, and no natural-language PASS/FAIL as the automation contract. Your task completion output must be one JSON object containing the English `review_gate` plus `human_display_zh` with Chinese summary/findings for the human issue-detail UI.\n")
 		b.WriteString("Use `review_gate.status=\"pass\"` only when downstream work can continue. Use `review_gate.status=\"fail\"` when blocking findings require implementation repair.\n")
 	} else if strings.TrimSpace(task.PublishBranchName) != "" {
 		checkoutRef := strings.TrimSpace(task.RepoCheckoutRef)

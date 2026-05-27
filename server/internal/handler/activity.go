@@ -25,15 +25,16 @@ type TimelineEntry struct {
 	Details json.RawMessage `json:"details,omitempty"`
 
 	// Comment-only fields
-	Content        *string              `json:"content,omitempty"`
-	ParentID       *string              `json:"parent_id,omitempty"`
-	UpdatedAt      *string              `json:"updated_at,omitempty"`
-	CommentType    *string              `json:"comment_type,omitempty"`
-	Reactions      []ReactionResponse   `json:"reactions,omitempty"`
-	Attachments    []AttachmentResponse `json:"attachments,omitempty"`
-	ResolvedAt     *string              `json:"resolved_at,omitempty"`
-	ResolvedByType *string              `json:"resolved_by_type,omitempty"`
-	ResolvedByID   *string              `json:"resolved_by_id,omitempty"`
+	Content          *string              `json:"content,omitempty"`
+	DisplayContentZh *string              `json:"display_content_zh,omitempty"`
+	ParentID         *string              `json:"parent_id,omitempty"`
+	UpdatedAt        *string              `json:"updated_at,omitempty"`
+	CommentType      *string              `json:"comment_type,omitempty"`
+	Reactions        []ReactionResponse   `json:"reactions,omitempty"`
+	Attachments      []AttachmentResponse `json:"attachments,omitempty"`
+	ResolvedAt       *string              `json:"resolved_at,omitempty"`
+	ResolvedByType   *string              `json:"resolved_by_type,omitempty"`
+	ResolvedByID     *string              `json:"resolved_by_id,omitempty"`
 }
 
 // timelineHardCap bounds the per-issue timeline payload. Sized as a defensive
@@ -170,24 +171,26 @@ func (h *Handler) commentsToEntries(r *http.Request, comments []db.Comment) []Ti
 	out := make([]TimelineEntry, len(comments))
 	for i, c := range comments {
 		content := c.Content
+		displayContentZh := textToPtr(c.DisplayContentZh)
 		commentType := c.Type
 		updatedAt := timestampToString(c.UpdatedAt)
 		cid := uuidToString(c.ID)
 		out[i] = TimelineEntry{
-			Type:           "comment",
-			ID:             cid,
-			ActorType:      c.AuthorType,
-			ActorID:        uuidToString(c.AuthorID),
-			Content:        &content,
-			CommentType:    &commentType,
-			ParentID:       uuidToPtr(c.ParentID),
-			CreatedAt:      timestampToString(c.CreatedAt),
-			UpdatedAt:      &updatedAt,
-			Reactions:      reactions[cid],
-			Attachments:    attachments[cid],
-			ResolvedAt:     timestampToPtr(c.ResolvedAt),
-			ResolvedByType: textToPtr(c.ResolvedByType),
-			ResolvedByID:   uuidToPtr(c.ResolvedByID),
+			Type:             "comment",
+			ID:               cid,
+			ActorType:        c.AuthorType,
+			ActorID:          uuidToString(c.AuthorID),
+			Content:          &content,
+			DisplayContentZh: displayContentZh,
+			CommentType:      &commentType,
+			ParentID:         uuidToPtr(c.ParentID),
+			CreatedAt:        timestampToString(c.CreatedAt),
+			UpdatedAt:        &updatedAt,
+			Reactions:        reactions[cid],
+			Attachments:      attachments[cid],
+			ResolvedAt:       timestampToPtr(c.ResolvedAt),
+			ResolvedByType:   textToPtr(c.ResolvedByType),
+			ResolvedByID:     uuidToPtr(c.ResolvedByID),
 		}
 	}
 	return out

@@ -17,6 +17,7 @@ export interface Comment {
   author_type: CommentAuthorType;
   author_id: string;
   content: string;
+  display_content_zh?: string | null;
   type: CommentType;
   parent_id: string | null;
   reactions: Reaction[];

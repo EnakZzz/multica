@@ -64,6 +64,11 @@ const (
 )
 
 type reviewGateOutput struct {
+	ReviewGate     reviewGateResult       `json:"review_gate"`
+	HumanDisplayZh reviewGateHumanDisplay `json:"human_display_zh"`
+}
+
+type reviewGateCanonicalOutput struct {
 	ReviewGate reviewGateResult `json:"review_gate"`
 }
 
@@ -78,6 +83,17 @@ type reviewGateFinding struct {
 	Severity string `json:"severity"`
 	Title    string `json:"title"`
 	Details  string `json:"details"`
+}
+
+type reviewGateHumanDisplay struct {
+	Summary  string              `json:"summary"`
+	Findings []reviewGateFinding `json:"findings"`
+}
+
+type parsedReviewGateOutput struct {
+	Review          reviewGateResult
+	HumanDisplayZh  reviewGateHumanDisplay
+	SourceCommentID pgtype.UUID
 }
 
 // truncateForSummary returns s shortened to maxRunes, with a trailing
@@ -2353,9 +2369,15 @@ func (s *TaskService) getIssuePrefix(workspaceID pgtype.UUID) string {
 	return ws.IssuePrefix
 }
 
-func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID pgtype.UUID, content, commentType string, parentID pgtype.UUID) {
+func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID pgtype.UUID, content, commentType string, parentID pgtype.UUID, displayContentZh ...string) {
 	if content == "" {
 		return
+	}
+	var displayText pgtype.Text
+	if len(displayContentZh) > 0 {
+		if trimmed := strings.TrimSpace(displayContentZh[0]); trimmed != "" {
+			displayText = pgtype.Text{String: trimmed, Valid: true}
+		}
 	}
 	// Look up issue to get workspace ID for mention expansion and broadcasting.
 	issue, err := s.Queries.GetIssue(ctx, issueID)
@@ -2382,16 +2404,21 @@ func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID p
 	// Expand bare issue identifiers (e.g. MUL-117) into mention links.
 	content = mention.ExpandIssueIdentifiers(ctx, s.Queries, issue.WorkspaceID, content)
 	comment, err := s.Queries.CreateComment(ctx, db.CreateCommentParams{
-		IssueID:     issueID,
-		WorkspaceID: issue.WorkspaceID,
-		AuthorType:  "agent",
-		AuthorID:    agentID,
-		Content:     content,
-		Type:        commentType,
-		ParentID:    parentID,
+		IssueID:          issueID,
+		WorkspaceID:      issue.WorkspaceID,
+		AuthorType:       "agent",
+		AuthorID:         agentID,
+		Content:          content,
+		DisplayContentZh: displayText,
+		Type:             commentType,
+		ParentID:         parentID,
 	})
 	if err != nil {
 		return
+	}
+	var displayContentZhPtr *string
+	if comment.DisplayContentZh.Valid {
+		displayContentZhPtr = &comment.DisplayContentZh.String
 	}
 	s.Bus.Publish(events.Event{
 		Type:        protocol.EventCommentCreated,
@@ -2400,14 +2427,15 @@ func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID p
 		ActorID:     util.UUIDToString(agentID),
 		Payload: map[string]any{
 			"comment": map[string]any{
-				"id":          util.UUIDToString(comment.ID),
-				"issue_id":    util.UUIDToString(comment.IssueID),
-				"author_type": comment.AuthorType,
-				"author_id":   util.UUIDToString(comment.AuthorID),
-				"content":     comment.Content,
-				"type":        comment.Type,
-				"parent_id":   util.UUIDToPtr(comment.ParentID),
-				"created_at":  comment.CreatedAt.Time.Format("2006-01-02T15:04:05Z"),
+				"id":                 util.UUIDToString(comment.ID),
+				"issue_id":           util.UUIDToString(comment.IssueID),
+				"author_type":        comment.AuthorType,
+				"author_id":          util.UUIDToString(comment.AuthorID),
+				"content":            comment.Content,
+				"display_content_zh": displayContentZhPtr,
+				"type":               comment.Type,
+				"parent_id":          util.UUIDToPtr(comment.ParentID),
+				"created_at":         comment.CreatedAt.Time.Format("2006-01-02T15:04:05Z"),
 			},
 			"issue_title":  issue.Title,
 			"issue_status": issue.Status,
@@ -2903,15 +2931,18 @@ func (s *TaskService) applyReviewGateCompleted(ctx context.Context, task db.Agen
 		return true
 	}
 
-	review, parseErr := s.parseReviewGateResultForTask(ctx, task, issue, result)
+	parsed, parseErr := s.parseReviewGateResultForTask(ctx, task, issue, result)
+	review := parsed.Review
 	nextStatus := "blocked"
 	commentType := "comment"
 	comment := ""
+	displayContentZh := ""
 	if parseErr != nil {
 		commentType = "system"
 		comment = formatInvalidReviewGateComment(nodeType, parseErr)
 	} else {
-		comment = formatReviewGateComment(nodeType, review)
+		comment = formatReviewGateCanonicalComment(review)
+		displayContentZh = formatReviewGateDisplayZh(nodeType, review, parsed.HumanDisplayZh)
 		if review.Status == reviewGateStatusPass {
 			nextStatus = "done"
 		}
@@ -2923,7 +2954,9 @@ func (s *TaskService) applyReviewGateCompleted(ctx context.Context, task db.Agen
 		Since:    task.StartedAt,
 	})
 	if !agentCommented {
-		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(comment), commentType, task.TriggerCommentID)
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(comment), commentType, task.TriggerCommentID, displayContentZh)
+	} else if displayContentZh != "" {
+		s.setLatestReviewGateAgentCommentDisplay(ctx, task, issue, displayContentZh)
 	}
 
 	issue, err = s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
@@ -2946,9 +2979,9 @@ func (s *TaskService) applyReviewGateCompleted(ctx context.Context, task db.Agen
 	return true
 }
 
-func (s *TaskService) parseReviewGateResultForTask(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, result []byte) (reviewGateResult, error) {
+func (s *TaskService) parseReviewGateResultForTask(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, result []byte) (parsedReviewGateOutput, error) {
 	output := taskCompletedOutput(result)
-	review, outputErr := parseReviewGateOutput(output)
+	review, outputErr := parseReviewGateOutputWithDisplay(output)
 	if outputErr == nil {
 		return review, nil
 	}
@@ -2956,10 +2989,10 @@ func (s *TaskService) parseReviewGateResultForTask(ctx context.Context, task db.
 	if commentErr == nil {
 		return review, nil
 	}
-	return reviewGateResult{}, outputErr
+	return parsedReviewGateOutput{}, outputErr
 }
 
-func (s *TaskService) parseReviewGateResultFromAgentComment(ctx context.Context, task db.AgentTaskQueue, issue db.Issue) (reviewGateResult, error) {
+func (s *TaskService) parseReviewGateResultFromAgentComment(ctx context.Context, task db.AgentTaskQueue, issue db.Issue) (parsedReviewGateOutput, error) {
 	since := task.StartedAt
 	if !since.Valid {
 		since = task.CreatedAt
@@ -2971,7 +3004,7 @@ func (s *TaskService) parseReviewGateResultFromAgentComment(ctx context.Context,
 		Limit:       50,
 	})
 	if err != nil {
-		return reviewGateResult{}, err
+		return parsedReviewGateOutput{}, err
 	}
 
 	var parseErr error
@@ -2983,16 +3016,50 @@ func (s *TaskService) parseReviewGateResultFromAgentComment(ctx context.Context,
 		if !strings.Contains(strings.ToLower(comment.Content), "review_gate") {
 			continue
 		}
-		review, err := parseReviewGateOutput(comment.Content)
+		review, err := parseReviewGateOutputWithDisplay(comment.Content)
 		if err == nil {
+			review.SourceCommentID = comment.ID
 			return review, nil
 		}
 		parseErr = err
 	}
 	if parseErr != nil {
-		return reviewGateResult{}, parseErr
+		return parsedReviewGateOutput{}, parseErr
 	}
-	return reviewGateResult{}, fmt.Errorf("no agent comment contained review_gate JSON")
+	return parsedReviewGateOutput{}, fmt.Errorf("no agent comment contained review_gate JSON")
+}
+
+func (s *TaskService) setLatestReviewGateAgentCommentDisplay(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, displayContentZh string) {
+	since := task.StartedAt
+	if !since.Valid {
+		since = task.CreatedAt
+	}
+	comments, err := s.Queries.ListCommentsSinceForIssue(ctx, db.ListCommentsSinceForIssueParams{
+		IssueID:     task.IssueID,
+		WorkspaceID: issue.WorkspaceID,
+		CreatedAt:   since,
+		Limit:       50,
+	})
+	if err != nil {
+		return
+	}
+	for i := len(comments) - 1; i >= 0; i-- {
+		comment := comments[i]
+		if comment.AuthorType != "agent" || util.UUIDToString(comment.AuthorID) != util.UUIDToString(task.AgentID) {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(comment.Content), "review_gate") {
+			continue
+		}
+		if _, err := parseReviewGateOutput(comment.Content); err != nil {
+			continue
+		}
+		_, _ = s.Queries.UpdateCommentDisplayContentZh(ctx, db.UpdateCommentDisplayContentZhParams{
+			ID:               comment.ID,
+			DisplayContentZh: serviceStrOrNullText(displayContentZh),
+		})
+		return
+	}
 }
 
 func (s *TaskService) reviewGateNodeTypeForIssue(ctx context.Context, issueID pgtype.UUID) (string, bool) {
@@ -3381,7 +3448,15 @@ func taskCompletedOutput(result []byte) string {
 }
 
 func parseReviewGateOutput(output string) (reviewGateResult, error) {
-	var empty reviewGateResult
+	parsed, err := parseReviewGateOutputWithDisplay(output)
+	if err != nil {
+		return reviewGateResult{}, err
+	}
+	return parsed.Review, nil
+}
+
+func parseReviewGateOutputWithDisplay(output string) (parsedReviewGateOutput, error) {
+	var empty parsedReviewGateOutput
 	if strings.TrimSpace(output) == "" {
 		return empty, fmt.Errorf("review gate returned empty output")
 	}
@@ -3398,7 +3473,14 @@ func parseReviewGateOutput(output string) (reviewGateResult, error) {
 				review = normalizeReviewGateResult(review)
 				switch review.Status {
 				case reviewGateStatusPass, reviewGateStatusFail:
-					return review, nil
+					var display reviewGateHumanDisplay
+					if displayRaw, ok := raw["human_display_zh"]; ok {
+						if err := json.Unmarshal(displayRaw, &display); err != nil {
+							return empty, fmt.Errorf("human_display_zh JSON is invalid: %v", err)
+						}
+						display = normalizeReviewGateHumanDisplay(display)
+					}
+					return parsedReviewGateOutput{Review: review, HumanDisplayZh: display}, nil
 				default:
 					return empty, fmt.Errorf("review_gate.status must be pass or fail")
 				}
@@ -3438,20 +3520,59 @@ func normalizeReviewGateResult(review reviewGateResult) reviewGateResult {
 	return review
 }
 
-func formatReviewGateComment(nodeType string, review reviewGateResult) string {
-	label := reviewGateLabel(nodeType)
-	status := "failed"
+func normalizeReviewGateHumanDisplay(display reviewGateHumanDisplay) reviewGateHumanDisplay {
+	display.Summary = strings.TrimSpace(display.Summary)
+	findings := make([]reviewGateFinding, 0, len(display.Findings))
+	for _, finding := range display.Findings {
+		severity := strings.ToLower(strings.TrimSpace(finding.Severity))
+		if severity != "blocker" && severity != "major" && severity != "minor" {
+			severity = "major"
+		}
+		title := strings.TrimSpace(finding.Title)
+		details := strings.TrimSpace(finding.Details)
+		if title == "" && details == "" {
+			continue
+		}
+		findings = append(findings, reviewGateFinding{
+			Severity: severity,
+			Title:    title,
+			Details:  details,
+		})
+	}
+	display.Findings = findings
+	return display
+}
+
+func formatReviewGateCanonicalComment(review reviewGateResult) string {
+	body, err := json.MarshalIndent(reviewGateCanonicalOutput{ReviewGate: review}, "", "  ")
+	if err != nil {
+		return "{}"
+	}
+	return string(body)
+}
+
+func formatReviewGateDisplayZh(nodeType string, review reviewGateResult, display reviewGateHumanDisplay) string {
+	label := reviewGateDisplayLabelZh(nodeType)
+	status := "未通过"
 	if review.Status == reviewGateStatusPass {
-		status = "passed"
+		status = "已通过"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s %s.", label, status)
-	if review.Summary != "" {
-		fmt.Fprintf(&b, "\n\n%s", review.Summary)
+	fmt.Fprintf(&b, "%s%s。", label, status)
+	summary := display.Summary
+	if summary == "" {
+		summary = review.Summary
 	}
-	if len(review.Findings) > 0 {
-		b.WriteString("\n\nFindings:")
-		for _, finding := range review.Findings {
+	if summary != "" {
+		fmt.Fprintf(&b, "\n\n%s", summary)
+	}
+	findings := display.Findings
+	if len(findings) == 0 {
+		findings = review.Findings
+	}
+	if len(findings) > 0 {
+		b.WriteString("\n\n发现：")
+		for _, finding := range findings {
 			title := finding.Title
 			if title == "" {
 				title = finding.Details
@@ -3462,13 +3583,18 @@ func formatReviewGateComment(nodeType string, review reviewGateResult) string {
 			}
 		}
 	}
-	if len(review.CheckedAgainst) > 0 {
-		b.WriteString("\n\nChecked against:")
-		for _, item := range review.CheckedAgainst {
-			fmt.Fprintf(&b, "\n- %s", item)
-		}
-	}
 	return strings.TrimSpace(b.String())
+}
+
+func reviewGateDisplayLabelZh(nodeType string) string {
+	switch nodeType {
+	case PipelineNodeTypeSpecReview:
+		return "规格评审"
+	case PipelineNodeTypeCodeReview:
+		return "代码评审"
+	default:
+		return "评审关卡"
+	}
 }
 
 func formatInvalidReviewGateComment(nodeType string, err error) string {
@@ -4402,10 +4528,17 @@ Return a final JSON object with this exact shape:
       { "severity": "blocker" | "major" | "minor", "title": "Finding title", "details": "Finding details" }
     ],
     "checked_against": ["Spec, issue, plan, or requirement checked"]
+  },
+  "human_display_zh": {
+    "summary": "面向人的中文规格符合性评审摘要。",
+    "findings": [
+      { "severity": "blocker" | "major" | "minor", "title": "中文问题标题", "details": "中文问题详情" }
+    ]
   }
 }
 
-Use "pass" only when the implementation satisfies the requested spec. Use "fail" when downstream work must stay blocked.`
+Use "pass" only when the implementation satisfies the requested spec. Use "fail" when downstream work must stay blocked.
+Keep review_gate in English for automation and agent-to-agent handoff. Write human_display_zh in Chinese for the human issue-detail UI.`
 	case PipelineNodeTypeCodeReview:
 		return `Review gate output contract:
 Return a final JSON object with this exact shape:
@@ -4417,10 +4550,17 @@ Return a final JSON object with this exact shape:
       { "severity": "blocker" | "major" | "minor", "title": "Finding title", "details": "Finding details" }
     ],
     "checked_against": ["Diff, tests, architecture, or risk area checked"]
+  },
+  "human_display_zh": {
+    "summary": "面向人的中文代码质量评审摘要。",
+    "findings": [
+      { "severity": "blocker" | "major" | "minor", "title": "中文问题标题", "details": "中文问题详情" }
+    ]
   }
 }
 
-Use "pass" only when the code quality review has no blocking findings. Use "fail" when downstream work must stay blocked.`
+Use "pass" only when the code quality review has no blocking findings. Use "fail" when downstream work must stay blocked.
+Keep review_gate in English for automation and agent-to-agent handoff. Write human_display_zh in Chinese for the human issue-detail UI.`
 	default:
 		return ""
 	}
@@ -4698,13 +4838,14 @@ func (s *TaskService) writePlannerIssueComment(ctx context.Context, issueID, age
 		return
 	}
 	comment, err := s.Queries.CreateComment(ctx, db.CreateCommentParams{
-		IssueID:     issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-		AuthorType:  "agent",
-		AuthorID:    agentID,
-		Content:     content,
-		Type:        "comment",
-		ParentID:    pgtype.UUID{},
+		IssueID:          issue.ID,
+		WorkspaceID:      issue.WorkspaceID,
+		AuthorType:       "agent",
+		AuthorID:         agentID,
+		Content:          content,
+		DisplayContentZh: pgtype.Text{},
+		Type:             "comment",
+		ParentID:         pgtype.UUID{},
 	})
 	if err != nil {
 		slog.Warn("planner issue comment: failed to create comment", "issue_id", util.UUIDToString(issueID), "error", err)

@@ -413,7 +413,8 @@ func TestBuildPromptReviewGateUsesJSONContract(t *testing.T) {
 		"agent/backend-engineer/LOC-9-repair",
 		"abc123",
 		"review_gate",
-		"task completion output must also be that same JSON object",
+		"human_display_zh",
+		"task completion output must be one JSON object",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q\n---\n%s", want, prompt)
