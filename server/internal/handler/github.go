@@ -22,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -478,6 +479,124 @@ func (h *Handler) ListPullRequestsForIssue(w http.ResponseWriter, r *http.Reques
 		out = append(out, issuePullRequestRowToResponse(row))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pull_requests": out})
+}
+
+type LinkPullRequestRequest struct {
+	RepoOwner       string  `json:"repo_owner"`
+	RepoName        string  `json:"repo_name"`
+	Number          int32   `json:"number"`
+	Title           string  `json:"title"`
+	State           string  `json:"state"`
+	HTMLURL         string  `json:"html_url"`
+	Branch          *string `json:"branch,omitempty"`
+	AuthorLogin     *string `json:"author_login,omitempty"`
+	AuthorAvatarURL *string `json:"author_avatar_url,omitempty"`
+	HeadSHA         *string `json:"head_sha,omitempty"`
+	MergeableState  *string `json:"mergeable_state,omitempty"`
+	Additions       int32   `json:"additions,omitempty"`
+	Deletions       int32   `json:"deletions,omitempty"`
+	ChangedFiles    int32   `json:"changed_files,omitempty"`
+}
+
+func (h *Handler) LinkPullRequestForIssue(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+
+	var req LinkPullRequestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.RepoOwner = strings.TrimSpace(req.RepoOwner)
+	req.RepoName = strings.TrimSpace(req.RepoName)
+	req.Title = strings.TrimSpace(req.Title)
+	req.State = strings.TrimSpace(req.State)
+	req.HTMLURL = strings.TrimSpace(req.HTMLURL)
+	if req.RepoOwner == "" || req.RepoName == "" {
+		writeError(w, http.StatusBadRequest, "repo_owner and repo_name are required")
+		return
+	}
+	if req.Number <= 0 {
+		writeError(w, http.StatusBadRequest, "number is required")
+		return
+	}
+	if req.HTMLURL == "" {
+		writeError(w, http.StatusBadRequest, "html_url is required")
+		return
+	}
+	if req.Title == "" {
+		req.Title = fmt.Sprintf("%s#%d", req.RepoName, req.Number)
+	}
+	if req.State == "" {
+		req.State = "open"
+	}
+	switch req.State {
+	case "open", "closed", "merged", "draft":
+	default:
+		writeError(w, http.StatusBadRequest, "state must be open, closed, merged, or draft")
+		return
+	}
+
+	now := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	var mergedAt pgtype.Timestamptz
+	var closedAt pgtype.Timestamptz
+	if req.State == "merged" {
+		mergedAt = now
+	}
+	if req.State == "closed" || req.State == "merged" {
+		closedAt = now
+	}
+	headSHA := ""
+	if req.HeadSHA != nil {
+		headSHA = strings.TrimSpace(*req.HeadSHA)
+	}
+	pr, err := h.Queries.UpsertGitHubPullRequest(r.Context(), db.UpsertGitHubPullRequestParams{
+		WorkspaceID:         issue.WorkspaceID,
+		InstallationID:      0,
+		RepoOwner:           req.RepoOwner,
+		RepoName:            req.RepoName,
+		PrNumber:            req.Number,
+		Title:               req.Title,
+		State:               req.State,
+		HtmlUrl:             req.HTMLURL,
+		Branch:              ptrToText(req.Branch),
+		AuthorLogin:         ptrToText(req.AuthorLogin),
+		AuthorAvatarUrl:     ptrToText(req.AuthorAvatarURL),
+		MergedAt:            mergedAt,
+		ClosedAt:            closedAt,
+		PrCreatedAt:         now,
+		PrUpdatedAt:         now,
+		HeadSha:             headSHA,
+		MergeableState:      ptrToText(req.MergeableState),
+		ClearMergeableState: pgtype.Bool{Bool: req.MergeableState == nil, Valid: true},
+		Additions:           req.Additions,
+		Deletions:           req.Deletions,
+		ChangedFiles:        req.ChangedFiles,
+	})
+	if err != nil {
+		slog.Warn("link pull request upsert failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to upsert pull request")
+		return
+	}
+	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(issue.WorkspaceID))
+	if err := h.Queries.LinkIssueToPullRequest(r.Context(), db.LinkIssueToPullRequestParams{
+		IssueID:       issue.ID,
+		PullRequestID: pr.ID,
+		LinkedByType:  strToText(actorType),
+		LinkedByID:    parseUUID(actorID),
+	}); err != nil {
+		slog.Warn("link pull request failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to link pull request")
+		return
+	}
+	resp := githubPullRequestToResponse(pr)
+	h.publish(protocol.EventPullRequestLinked, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{
+		"issue_id":     uuidToString(issue.ID),
+		"pull_request": resp,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"pull_request": resp})
 }
 
 // ── Webhook ─────────────────────────────────────────────────────────────────
