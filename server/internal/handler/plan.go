@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -704,6 +705,8 @@ func (h *Handler) parseOptionalProjectID(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []updatePlanItemRequest) error {
+	h.ensureBuiltInAgentsForWorkspace(r.Context(), plan.WorkspaceID)
+
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		return err
@@ -713,7 +716,8 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 	if err := qtx.DeletePlanItems(r.Context(), plan.ID); err != nil {
 		return err
 	}
-	reqItems = normalizeUpdatePlanItemIterations(plan.Title, reqItems)
+	mergeAgentID := h.builtInMergeAgentIDString(r.Context(), qtx, plan.WorkspaceID)
+	reqItems = normalizeUpdatePlanItemIterations(plan.Title, reqItems, mergeAgentID)
 	for i, item := range reqItems {
 		if strings.TrimSpace(item.Title) == "" {
 			return &planValidationError{"plan item title is required"}
@@ -763,6 +767,12 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 			score = 0
 			requiresGitCommit = false
 			branchName = ""
+		} else if nodeType == service.PipelineNodeTypeMerge {
+			requiresGitCommit = false
+			branchName = ""
+			confirmationQuestion = ""
+			confirmationReason = ""
+			requiredEvidence = []string{}
 		} else {
 			confirmationQuestion = ""
 			confirmationReason = ""
@@ -804,6 +814,20 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 		}
 	}
 	return tx.Commit(r.Context())
+}
+
+func (h *Handler) builtInMergeAgentIDString(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID) string {
+	if !workspaceID.Valid {
+		return ""
+	}
+	agent, err := qtx.GetBuiltInAgentByKey(ctx, db.GetBuiltInAgentByKeyParams{
+		WorkspaceID: workspaceID,
+		BuiltinKey:  pgtype.Text{String: "multica/merge-agent", Valid: true},
+	})
+	if err != nil || agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
+		return ""
+	}
+	return uuidToString(agent.ID)
 }
 
 type planValidationError struct {
@@ -855,16 +879,11 @@ func normalizePlanItemExecutionKind(kind string) string {
 	return service.PlanItemExecutionKindAgentTask
 }
 
-func normalizeUpdatePlanItemIterations(planTitle string, items []updatePlanItemRequest) []updatePlanItemRequest {
-	type iterationGroup struct {
-		index        int32
-		title        string
-		branch       string
-		branchLocked bool
-	}
+func normalizeUpdatePlanItemIterations(planTitle string, items []updatePlanItemRequest, mergeAgentID string) []updatePlanItemRequest {
 	normalized := make([]updatePlanItemRequest, len(items))
-	groups := make(map[int32]*iterationGroup)
+	groups := make(map[int32]*updatePlanIterationGroup)
 	for i, item := range items {
+		item.NodeType = service.NormalizePlanItemNodeType(item.NodeType)
 		item.IterationIndex = normalizePlanIterationIndex(item.IterationIndex)
 		item.IterationTitle = strings.TrimSpace(item.IterationTitle)
 		item.IterationBranchName = normalizeOptionalPlanBranchName(item.IterationBranchName)
@@ -873,8 +892,11 @@ func normalizeUpdatePlanItemIterations(planTitle string, items []updatePlanItemR
 
 		group := groups[item.IterationIndex]
 		if group == nil {
-			group = &iterationGroup{index: item.IterationIndex}
+			group = &updatePlanIterationGroup{index: item.IterationIndex, firstOldPos: int32(i + 1)}
 			groups[item.IterationIndex] = group
+		}
+		if item.NodeType != service.PipelineNodeTypeMerge {
+			group.lastOldPos = int32(i + 1)
 		}
 		if group.title == "" && item.IterationTitle != "" {
 			group.title = item.IterationTitle
@@ -885,6 +907,12 @@ func normalizeUpdatePlanItemIterations(planTitle string, items []updatePlanItemR
 		}
 		if updatePlanItemRequiresGitCommit(item) && group.branch == "" && item.BranchName != "" {
 			group.branch = item.BranchName
+		}
+		if item.Selected && item.NodeType != service.PipelineNodeTypeMerge && normalizePlanItemExecutionKind(item.ExecutionKind) != service.PlanItemExecutionKindHumanConfirmation {
+			group.workOldPos = append(group.workOldPos, int32(i+1))
+			if updatePlanItemRequiresGitCommit(item) {
+				group.gitWorkOldPos = append(group.gitWorkOldPos, int32(i+1))
+			}
 		}
 	}
 	for _, group := range groups {
@@ -906,11 +934,191 @@ func normalizeUpdatePlanItemIterations(planTitle string, items []updatePlanItemR
 		}
 		normalized[i] = item
 	}
-	return normalized
+	return ensureUpdatePlanIterationGates(normalized, groups, mergeAgentID)
+}
+
+type updatePlanIterationGroup struct {
+	index         int32
+	title         string
+	branch        string
+	branchLocked  bool
+	firstOldPos   int32
+	lastOldPos    int32
+	workOldPos    []int32
+	gitWorkOldPos []int32
+}
+
+func ensureUpdatePlanIterationGates(items []updatePlanItemRequest, groups map[int32]*updatePlanIterationGroup, mergeAgentID string) []updatePlanItemRequest {
+	if len(items) == 0 {
+		return items
+	}
+	out := make([]updatePlanItemRequest, 0, len(items)+len(groups)*2)
+	oldToNew := make(map[int32]int32, len(items))
+	var previousBoundaryNewPos int32
+	for i, item := range items {
+		oldPos := int32(i + 1)
+		group := groups[item.IterationIndex]
+		item.DependsOnPositions = remapUpdatePlanDependsOnPositions(item.DependsOnPositions, oldToNew)
+		if service.NormalizePlanItemNodeType(item.NodeType) == service.PipelineNodeTypeMerge {
+			continue
+		}
+		if previousBoundaryNewPos > 0 && item.Selected && normalizePlanItemExecutionKind(item.ExecutionKind) != service.PlanItemExecutionKindHumanConfirmation {
+			item.DependsOnPositions = appendUniquePlanPosition(item.DependsOnPositions, previousBoundaryNewPos)
+		}
+		isExistingFinalGate := group != nil && group.lastOldPos == oldPos && normalizePlanItemExecutionKind(item.ExecutionKind) == service.PlanItemExecutionKindHumanConfirmation
+		if isExistingFinalGate {
+			item.DependsOnPositions = appendUniquePlanPosition(item.DependsOnPositions, remappedPlanPositions(group.workOldPos, oldToNew)...)
+		}
+		out = append(out, item)
+		newPos := int32(len(out))
+		oldToNew[oldPos] = newPos
+		if group == nil || group.lastOldPos != oldPos {
+			continue
+		}
+		if len(group.workOldPos) == 0 {
+			continue
+		}
+		var gateNewPos int32
+		if isExistingFinalGate {
+			gateNewPos = newPos
+		} else {
+			gate := updatePlanIterationGateItem(*group, remappedPlanPositions(group.workOldPos, oldToNew))
+			out = append(out, gate)
+			gateNewPos = int32(len(out))
+		}
+		previousBoundaryNewPos = gateNewPos
+		if len(group.gitWorkOldPos) == 0 {
+			continue
+		}
+		merge := updatePlanIterationMergeItem(*group, mergeAgentID, []int32{gateNewPos})
+		out = append(out, merge)
+		previousBoundaryNewPos = int32(len(out))
+	}
+	return out
+}
+
+func updatePlanIterationGateItem(group updatePlanIterationGroup, dependsOn []int32) updatePlanItemRequest {
+	no := false
+	title := strings.TrimSpace(group.title)
+	if title == "" {
+		title = fmt.Sprintf("Iteration %d", group.index)
+	}
+	return updatePlanItemRequest{
+		Title:                "迭代验收 / Iteration Gate: " + title,
+		Description:          "Human confirms this iteration's deliverables, verification evidence, and residual risk before the next iteration proceeds.",
+		NodeType:             service.PipelineNodeTypeManual,
+		ExecutionKind:        service.PlanItemExecutionKindHumanConfirmation,
+		ConfirmationQuestion: fmt.Sprintf("是否接受本轮交付并允许进入下一轮？ / Accept iteration %d and allow the next iteration to proceed?", group.index),
+		ConfirmationReason:   "Iteration boundaries should stop downstream work until a human accepts the delivered behavior, evidence, and remaining risks.",
+		RequiredEvidence: []string{
+			"本轮选中的交付项已完成 / Selected iteration deliverables are complete",
+			"验证、测试或评审证据已记录 / Verification, test, or review evidence is recorded",
+			"剩余风险已接受或转成后续任务 / Residual risks are accepted or converted into follow-up work",
+		},
+		RequiresGitCommit:   &no,
+		BranchName:          "",
+		IterationIndex:      group.index,
+		IterationTitle:      group.title,
+		IterationBranchName: group.branch,
+		MatchScore:          0,
+		MatchReason:         "Waiting for human iteration acceptance.",
+		DependsOnPositions:  dependsOn,
+		Selected:            true,
+	}
+}
+
+func updatePlanIterationMergeItem(group updatePlanIterationGroup, mergeAgentID string, dependsOn []int32) updatePlanItemRequest {
+	no := false
+	title := strings.TrimSpace(group.title)
+	if title == "" {
+		title = fmt.Sprintf("Iteration %d", group.index)
+	}
+	score := int32(0)
+	matchReason := "Merge work is gated by the iteration human confirmation."
+	if strings.TrimSpace(mergeAgentID) != "" {
+		score = 100
+		matchReason = "Built-in Merge Agent handles PR-first branch integration after human confirmation."
+	}
+	return updatePlanItemRequest{
+		Title:       "合入 / 集成 · Merge / Integrate: " + title,
+		Description: mergePlanItemDescription(group.branch),
+		AcceptanceCriteria: []string{
+			"Source branch, target branch, and integration mode are recorded.",
+			"PR URL or merge commit is recorded.",
+			"Test result is recorded.",
+			"Final status is recorded as merged, pr_created, or failed.",
+			"Failure reason and conflict files are recorded when integration fails.",
+		},
+		NodeType:            service.PipelineNodeTypeMerge,
+		ExecutionKind:       service.PlanItemExecutionKindAgentTask,
+		RequiresGitCommit:   &no,
+		BranchName:          "",
+		IterationIndex:      group.index,
+		IterationTitle:      group.title,
+		IterationBranchName: group.branch,
+		RecommendedAgentID:  strings.TrimSpace(mergeAgentID),
+		MatchScore:          score,
+		MatchReason:         matchReason,
+		DependsOnPositions:  dependsOn,
+		Selected:            true,
+	}
+}
+
+func mergePlanItemDescription(sourceBranch string) string {
+	sourceBranch = strings.TrimSpace(sourceBranch)
+	if sourceBranch == "" {
+		sourceBranch = "<iteration branch>"
+	}
+	return fmt.Sprintf("Integrate the confirmed iteration branch using PR-first behavior. Source branch: %s. Target branch defaults to the project repo default_branch_hint, or main when no hint exists. Record source branch, target branch, PR URL or merge commit, test result, success or failure status, and conflict files on failure.", sourceBranch)
+}
+
+func remapUpdatePlanDependsOnPositions(raw []int32, oldToNew map[int32]int32) []int32 {
+	if len(raw) == 0 {
+		return []int32{}
+	}
+	out := make([]int32, 0, len(raw))
+	for _, old := range raw {
+		if next, ok := oldToNew[old]; ok {
+			out = appendUniquePlanPosition(out, next)
+		}
+	}
+	return out
+}
+
+func remappedPlanPositions(raw []int32, oldToNew map[int32]int32) []int32 {
+	out := make([]int32, 0, len(raw))
+	for _, old := range raw {
+		if next, ok := oldToNew[old]; ok {
+			out = appendUniquePlanPosition(out, next)
+		}
+	}
+	return out
+}
+
+func appendUniquePlanPosition(out []int32, values ...int32) []int32 {
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		exists := false
+		for _, existing := range out {
+			if existing == value {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func updatePlanItemRequiresGitCommit(item updatePlanItemRequest) bool {
 	if normalizePlanItemExecutionKind(item.ExecutionKind) == service.PlanItemExecutionKindHumanConfirmation {
+		return false
+	}
+	if service.NormalizePlanItemNodeType(item.NodeType) == service.PipelineNodeTypeMerge {
 		return false
 	}
 	if item.RequiresGitCommit == nil {

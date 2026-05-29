@@ -11,7 +11,7 @@ import {
   applyNodeChanges,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Bot, CheckCircle2, User } from "lucide-react";
+import { Bot, CheckCircle2, GitMerge, User } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useTheme } from "@multica/ui/components/common/theme-provider";
 import type { Issue, PlanItem } from "@multica/core/types";
@@ -24,6 +24,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 type PlanItemNodeData = {
   position: number;
   title: string;
+  nodeType: PlanItem["node_type"];
   executionKind: "agent_task" | "human_confirmation";
   agentName: string | null;
   selected: boolean;
@@ -184,8 +185,11 @@ export function PlanningFlowSkeleton() {
 function PlanItemNode({ data }: NodeProps<PlanItemFlowNode>) {
   const paths = useWorkspacePaths();
   const isHuman = data.executionKind === "human_confirmation";
+  const isMerge = data.nodeType === "merge";
   const accentClass = isHuman
     ? "bg-amber-400"
+    : isMerge
+      ? "bg-cyan-500"
     : data.hasGap
       ? "bg-rose-400"
       : "bg-indigo-500";
@@ -222,6 +226,11 @@ function PlanItemNode({ data }: NodeProps<PlanItemFlowNode>) {
               <User className="h-3 w-3 shrink-0" />
               <span>Human confirmation</span>
             </>
+          ) : isMerge ? (
+            <>
+              <GitMerge className="h-3 w-3 shrink-0" />
+              <span className="truncate">{data.agentName ?? "Merge Agent"}</span>
+            </>
           ) : (
             <>
               <Bot className="h-3 w-3 shrink-0" />
@@ -237,12 +246,14 @@ function PlanItemNode({ data }: NodeProps<PlanItemFlowNode>) {
               "rounded-sm px-1.5 py-0.5 text-[9px] font-medium",
               isHuman
                 ? "bg-amber-500/10 text-amber-600"
+                : isMerge
+                  ? "bg-cyan-500/10 text-cyan-700"
                 : data.hasGap
                   ? "bg-rose-500/10 text-rose-600"
                   : "bg-indigo-500/10 text-indigo-600",
             )}
           >
-            {isHuman ? "human" : data.hasGap ? `gap ${data.matchScore}%` : `${data.matchScore}%`}
+            {isHuman ? "human" : isMerge ? "merge" : data.hasGap ? `gap ${data.matchScore}%` : `${data.matchScore}%`}
           </span>
 
           {data.isCommitted && data.issue && (
@@ -292,6 +303,7 @@ function planItemsToFlow(
       data: {
         position: item.position,
         title: item.title,
+        nodeType: item.node_type,
         executionKind: item.execution_kind,
         agentName: agent?.name ?? null,
         selected: item.selected,

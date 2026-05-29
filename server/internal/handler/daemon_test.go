@@ -18,6 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -166,15 +167,65 @@ func TestDaemonRegister_CreatesInternalPlannerAgent(t *testing.T) {
 	if agent.Name != internalPlannerAgentName {
 		t.Fatalf("internal planner name = %q, want %q", agent.Name, internalPlannerAgentName)
 	}
+	if !agent.DisplayName.Valid || agent.DisplayName.String != "规划 Agent" {
+		t.Fatalf("internal planner display_name = %q, want 规划 Agent", agent.DisplayName.String)
+	}
 	if !agent.IsInternal {
 		t.Fatalf("internal planner should be marked internal")
 	}
 	if !agent.RuntimeID.Valid {
 		t.Fatalf("internal planner should be bound to the registered runtime")
 	}
+
+	expectedBuiltInDisplayNames := map[string]string{
+		"multica/planner":         "规划 Agent",
+		"multica/plan-writer":     "计划撰写 Agent",
+		"multica/verifier":        "验证 Agent",
+		"multica/code-reviewer":   "代码评审 Agent",
+		"multica/debugging-agent": "调试 Agent",
+		"multica/merge-agent":     "合入 Agent",
+	}
+	rows, err := testPool.Query(ctx, `
+		SELECT builtin_key, display_name
+		FROM agent
+		WHERE workspace_id = $1
+		  AND builtin_key IN (
+		    'multica/planner',
+		    'multica/plan-writer',
+		    'multica/verifier',
+		    'multica/code-reviewer',
+		    'multica/debugging-agent',
+		    'multica/merge-agent'
+		  )
+	`, testWorkspaceID)
+	if err != nil {
+		t.Fatalf("query built-in agents: %v", err)
+	}
+	defer rows.Close()
+
+	actualBuiltInDisplayNames := map[string]string{}
+	for rows.Next() {
+		var key string
+		var displayName *string
+		if err := rows.Scan(&key, &displayName); err != nil {
+			t.Fatalf("scan built-in agent: %v", err)
+		}
+		if displayName == nil {
+			t.Fatalf("built-in agent %s has NULL display_name", key)
+		}
+		actualBuiltInDisplayNames[key] = *displayName
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate built-in agents: %v", err)
+	}
+	for key, wantDisplayName := range expectedBuiltInDisplayNames {
+		if actualBuiltInDisplayNames[key] != wantDisplayName {
+			t.Fatalf("built-in agent %s display_name = %q, want %q", key, actualBuiltInDisplayNames[key], wantDisplayName)
+		}
+	}
 }
 
-func TestDaemonRegister_ConvertsLegacyAIPlannerAndClearsSkills(t *testing.T) {
+func TestDaemonRegister_ConvertsLegacyAIPlannerAndKeepsBuiltInSkills(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -254,12 +305,28 @@ func TestDaemonRegister_ConvertsLegacyAIPlannerAndClearsSkills(t *testing.T) {
 	if agent.Visibility != "workspace" {
 		t.Fatalf("converted planner visibility = %q, want workspace", agent.Visibility)
 	}
+	if !agent.IsInternal {
+		t.Fatalf("converted planner should be marked internal")
+	}
+	if !agent.BuiltinKey.Valid || agent.BuiltinKey.String != "multica/planner" {
+		t.Fatalf("converted planner builtin_key = %q, want multica/planner", agent.BuiltinKey.String)
+	}
+	if !agent.DisplayName.Valid || agent.DisplayName.String != "规划 Agent" {
+		t.Fatalf("converted planner display_name = %q, want 规划 Agent", agent.DisplayName.String)
+	}
 	var skillCount int
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_skill WHERE agent_id = $1`, agent.ID).Scan(&skillCount); err != nil {
 		t.Fatalf("count planner skills: %v", err)
 	}
-	if skillCount != 0 {
-		t.Fatalf("converted planner skill count = %d, want 0", skillCount)
+	if skillCount < 7 {
+		t.Fatalf("converted planner skill count = %d, want legacy skill plus built-in planner skills", skillCount)
+	}
+	var legacyAttached bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_skill WHERE agent_id = $1 AND skill_id = $2)`, agent.ID, skillID).Scan(&legacyAttached); err != nil {
+		t.Fatalf("check legacy skill attachment: %v", err)
+	}
+	if !legacyAttached {
+		t.Fatalf("converted planner should keep the existing legacy skill attachment")
 	}
 }
 
@@ -1781,6 +1848,164 @@ func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 	}
 	if len(resp.Task.Repos) != 1 || !strings.HasSuffix(resp.Task.Repos[0].URL, "workspace-fallback") {
 		t.Fatalf("expected workspace fallback repo, got %+v", resp.Task.Repos)
+	}
+}
+
+func TestClaimTask_IssuePlanInjectsProjectWikiContext(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id
+	`, testWorkspaceID, "Issue plan wiki context").Scan(&projectID); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+
+	const projectRepoURL = "https://github.com/example/issue-plan-project-repo"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO project_resource (
+			project_id, workspace_id, resource_type, resource_ref, position
+		) VALUES ($1, $2, 'git_repo', $3::jsonb, 0)
+	`, projectID, testWorkspaceID, `{"url":"`+projectRepoURL+`"}`); err != nil {
+		t.Fatalf("create project resource: %v", err)
+	}
+
+	const wikiSlug = "07-engineering/prototype-tech-stack"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO project_wiki_page (
+			workspace_id, project_id, slug, title, body, status, updated_by, reviewed_at
+		) VALUES ($1, $2, $3, 'Prototype tech stack', $4, 'reviewed', $5, now())
+	`, testWorkspaceID, projectID, wikiSlug, `Use Vite, React, TypeScript, Tailwind CSS, Framer Motion, and Zustand. The target runtime is the Web/Desktop shared UI; this is not a Unity implementation. Start with pnpm dev:web.`, testUserID); err != nil {
+		t.Fatalf("create wiki page: %v", err)
+	}
+
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, last_seen_at
+		)
+		VALUES (
+			$1,
+			'issue-plan-wiki-' || gen_random_uuid()::text,
+			'Issue plan wiki runtime',
+			'local',
+			'codex',
+			'online',
+			'{}',
+			'{"capabilities":["issue_plan"]}'::jsonb,
+			$2,
+			now()
+		)
+		RETURNING id::text
+	`, testWorkspaceID, testUserID).Scan(&runtimeID); err != nil {
+		t.Fatalf("insert runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID) })
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			instructions, custom_env, custom_args, is_internal
+		)
+		VALUES ($1, 'Issue plan wiki agent ' || gen_random_uuid()::text, '', 'local', '{}'::jsonb, $2, 'workspace', 1, $3, '', '{}'::jsonb, '[]'::jsonb, true)
+		RETURNING id::text
+	`, testWorkspaceID, runtimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
+
+	var planID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO plan (
+			workspace_id, project_id, title, prompt, status, planner_agent_id, created_by
+		)
+		VALUES ($1, $2, 'Plan with wiki context', 'Generate an implementation plan from current wiki and visual board.', 'planning', $3, $4)
+		RETURNING id::text
+	`, testWorkspaceID, projectID, agentID, testUserID).Scan(&planID); err != nil {
+		t.Fatalf("insert plan: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM plan WHERE id = $1`, planID) })
+
+	contextJSON, err := json.Marshal(service.IssuePlanContext{
+		Type:        service.IssuePlanContextType,
+		Phase:       service.IssuePlanPhaseSpec,
+		PlanID:      planID,
+		Prompt:      "Generate an implementation plan from current wiki and visual board.",
+		RequesterID: testUserID,
+		WorkspaceID: testWorkspaceID,
+		ProjectID:   projectID,
+	})
+	if err != nil {
+		t.Fatalf("marshal issue plan context: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, context, force_fresh_session
+		)
+		VALUES ($1, $2, 'queued', 100, $3::jsonb, true)
+		RETURNING id::text
+	`, agentID, runtimeID, contextJSON).Scan(&taskID); err != nil {
+		t.Fatalf("insert issue plan task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-issue-plan-wiki")
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: %d %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task *struct {
+			ProjectID         string                      `json:"project_id"`
+			Repos             []RepoData                  `json:"repos"`
+			RelevantKnowledge []service.RelevantKnowledge `json:"relevant_knowledge"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Task == nil {
+		t.Fatal("expected task in response")
+	}
+	if resp.Task.ProjectID != projectID {
+		t.Fatalf("project_id = %q, want %q", resp.Task.ProjectID, projectID)
+	}
+	if len(resp.Task.Repos) != 1 || resp.Task.Repos[0].URL != projectRepoURL {
+		t.Fatalf("expected project repo in issue-plan claim, got %+v", resp.Task.Repos)
+	}
+	foundWiki := false
+	for _, item := range resp.Task.RelevantKnowledge {
+		if item.Slug == wikiSlug {
+			foundWiki = true
+			break
+		}
+	}
+	if !foundWiki {
+		t.Fatalf("expected relevant_knowledge to include %q, got %+v", wikiSlug, resp.Task.RelevantKnowledge)
+	}
+
+	var logCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM project_knowledge_retrieval_log
+		WHERE task_id = $1 AND project_id = $2 AND search_mode IN ('hybrid', 'vector', 'keyword', 'fallback', 'none')
+	`, taskID, projectID).Scan(&logCount); err != nil {
+		t.Fatalf("count retrieval logs: %v", err)
+	}
+	if logCount == 0 {
+		t.Fatal("expected issue-plan claim to write a project knowledge retrieval log")
 	}
 }
 

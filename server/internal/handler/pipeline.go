@@ -973,7 +973,7 @@ func (h *Handler) normalizePipelineDefinition(r *http.Request, workspaceID pgtyp
 		if nodeType == "" {
 			nodeType = "issue"
 		}
-		if nodeType != "issue" && nodeType != "manual" && nodeType != "check" && nodeType != "spec_review" && nodeType != "code_review" {
+		if nodeType != "issue" && nodeType != "manual" && nodeType != "check" && nodeType != "spec_review" && nodeType != "code_review" && nodeType != "merge" && nodeType != "subagent-driven-development" {
 			return normalizedPipelineDefinition{}, &pipelineValidationError{"node type is invalid"}
 		}
 		title := strings.TrimSpace(req.Title)
@@ -1259,6 +1259,17 @@ Return a final JSON object with this exact shape:
 }
 
 Use "pass" only when the code quality review has no blocking findings. Use "fail" when downstream work must stay blocked.`
+	case "merge":
+		return `Merge / integrate output contract:
+Record the integration result in the issue comment or task output with these fields:
+- Source branch
+- Target branch
+- PR URL or merge commit
+- Test result
+- Status: merged | pr_created | failed
+- Failure reason and conflict files when status is failed
+
+Use PR-first behavior by default. Do not direct-merge or push protected branches unless the task explicitly authorizes direct integration.`
 	default:
 		return ""
 	}

@@ -30,7 +30,7 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 	{
 		Key:         "systematic-debugging",
 		Name:        "Systematic Debugging",
-		Description: "Superpowers-style bugfix flow: reproduce, trace root cause, validate hypotheses, make the minimal fix, and run regression checks.",
+		Description: "Built-in pipeline using superpowers/systematic-debugging and superpowers/verification-before-completion: reproduce, trace root cause, validate hypotheses, make the minimal fix, and run regression checks.",
 		Nodes: []systemPipelineNodeTemplate{
 			{
 				Key:         "reproduce",
@@ -81,7 +81,7 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 	{
 		Key:         "test-driven-development",
 		Name:        "Test-Driven Development",
-		Description: "Superpowers-style TDD flow: write a failing test, implement the smallest passing change, run focused checks, add edge cases, and prepare for review.",
+		Description: "Built-in pipeline using superpowers/test-driven-development and superpowers/verification-before-completion: write a failing test, implement the smallest passing change, run focused checks, add edge cases, and prepare for review.",
 		Nodes: []systemPipelineNodeTemplate{
 			{
 				Key:         "failing-test",
@@ -132,7 +132,7 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 	{
 		Key:         "review-gated-feature-development",
 		Name:        "Review-Gated Feature Development",
-		Description: "Feature implementation with explicit spec review and code review gates before human handoff.",
+		Description: "Built-in pipeline using superpowers/writing-plans, superpowers/requesting-code-review, superpowers/receiving-code-review, and superpowers/verification-before-completion for explicit spec and code review gates.",
 		Nodes: []systemPipelineNodeTemplate{
 			{
 				Key:         "implementation",
@@ -169,6 +169,96 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 				PositionX:         840,
 				PositionY:         0,
 			},
+			{
+				Key:               "merge-to-main",
+				NodeType:          "merge",
+				Title:             "合入 / 集成 · Merge / Integrate",
+				Description:       "After human confirmation, integrate the confirmed branch using PR-first behavior. Record source branch, target branch, PR URL or merge commit, test result, final status, and conflict files on failure.",
+				DependsOnNodeKeys: []string{"ready-for-human"},
+				PositionX:         1120,
+				PositionY:         0,
+			},
+		},
+	},
+	{
+		Key:         "writing-plans",
+		Name:        "writing-plans",
+		Description: "Built-in pipeline using superpowers/brainstorming and superpowers/writing-plans to turn unclear work into a reviewable spec and executable issue plan.",
+		Nodes: []systemPipelineNodeTemplate{
+			{Key: "clarify-goal", NodeType: "spec_review", Title: "Clarify goal and constraints", Description: "Capture the user goal, assumptions, open questions, out-of-scope work, and success criteria before execution planning.", PositionX: 0, PositionY: 0},
+			{Key: "write-plan", NodeType: "issue", Title: "Write the execution plan", Description: "Produce concrete issue slices with acceptance criteria, dependencies, suggested verification, and agent recommendations.", DependsOnNodeKeys: []string{"clarify-goal"}, PositionX: 280, PositionY: 0},
+			{Key: "review-plan", NodeType: "manual", Title: "Review plan with human", Description: "Human confirms scope, assumptions, and execution order before downstream issues are created.", DependsOnNodeKeys: []string{"write-plan"}, PositionX: 560, PositionY: 0},
+		},
+	},
+	{
+		Key:         "using-git-worktrees",
+		Name:        "using-git-worktrees",
+		Description: "Built-in pipeline using superpowers/using-git-worktrees for isolated implementation branches and clean handoff.",
+		Nodes: []systemPipelineNodeTemplate{
+			{Key: "prepare-worktree", NodeType: "issue", Title: "Prepare isolated worktree", Description: "Create or select a worktree and branch dedicated to this change. Record repo, branch, base ref, and setup command evidence.", PositionX: 0, PositionY: 0},
+			{Key: "implement-in-worktree", NodeType: "issue", Title: "Implement in worktree", Description: "Make the scoped change only inside the isolated branch and avoid mixing unrelated workspace changes.", DependsOnNodeKeys: []string{"prepare-worktree"}, PositionX: 280, PositionY: 0},
+			{Key: "verify-and-handoff", NodeType: "check", Title: "Verify and hand off branch", Description: "Run focused checks, summarize changed files and branch state, and leave merge/review instructions.", DependsOnNodeKeys: []string{"implement-in-worktree"}, PositionX: 560, PositionY: 0},
+		},
+	},
+	{
+		Key:         "executing-plans",
+		Name:        "executing-plans",
+		Description: "Built-in pipeline using superpowers/executing-plans and superpowers/verification-before-completion for stepwise plan execution.",
+		Nodes: []systemPipelineNodeTemplate{
+			{Key: "load-plan", NodeType: "issue", Title: "Load and confirm plan", Description: "Read the approved plan, identify dependencies, and confirm the next executable slice before editing.", PositionX: 0, PositionY: 0},
+			{Key: "execute-slice", NodeType: "issue", Title: "Execute selected slice", Description: "Complete the selected plan item against its acceptance criteria without expanding scope.", DependsOnNodeKeys: []string{"load-plan"}, PositionX: 280, PositionY: 0},
+			{Key: "record-progress", NodeType: "check", Title: "Record progress and blockers", Description: "Update completion evidence, commands run, remaining blockers, and which plan item should run next.", DependsOnNodeKeys: []string{"execute-slice"}, PositionX: 560, PositionY: 0},
+		},
+	},
+	{
+		Key:         "subagent-driven-development",
+		Name:        "subagent-driven-development",
+		Description: "Built-in pipeline using superpowers/subagent-driven-development and superpowers/dispatching-parallel-agents for coordinated multi-agent delivery.",
+		Nodes: []systemPipelineNodeTemplate{
+			{Key: "decompose-work", NodeType: "issue", Title: "Decompose agent work", Description: "Split the goal into independent deliverables with required skills, inputs, outputs, dependencies, and review points.", PositionX: 0, PositionY: 0},
+			{Key: "dispatch-agents", NodeType: "issue", Title: "Dispatch parallel agents", Description: "Assign independent work to suitable visible agents. Keep shared context and collision boundaries explicit.", DependsOnNodeKeys: []string{"decompose-work"}, PositionX: 280, PositionY: 0},
+			{Key: "integrate-results", NodeType: "issue", Title: "Integrate results", Description: "Merge agent outputs, resolve conflicts, and produce a single coherent implementation or report.", DependsOnNodeKeys: []string{"dispatch-agents"}, PositionX: 560, PositionY: 0},
+			{Key: "integration-check", NodeType: "check", Title: "Run integration checks", Description: "Verify the combined result with focused commands or manual evidence before handoff.", DependsOnNodeKeys: []string{"integrate-results"}, PositionX: 840, PositionY: 0},
+		},
+	},
+	{
+		Key:         "verification-before-completion",
+		Name:        "verification-before-completion",
+		Description: "Built-in pipeline using superpowers/verification-before-completion to require evidence before any work is marked complete.",
+		Nodes: []systemPipelineNodeTemplate{
+			{Key: "inspect-state", NodeType: "check", Title: "Inspect actual state", Description: "Check the real files, UI, API, task output, or runtime state that should prove completion.", PositionX: 0, PositionY: 0},
+			{Key: "run-focused-verification", NodeType: "check", Title: "Run focused verification", Description: "Run exact relevant tests, builds, smoke checks, or manual checks; record commands and results.", DependsOnNodeKeys: []string{"inspect-state"}, PositionX: 280, PositionY: 0},
+			{Key: "completion-decision", NodeType: "manual", Title: "Completion decision", Description: "Mark complete only if evidence satisfies acceptance criteria; otherwise create follow-up or reopen the blocked work.", DependsOnNodeKeys: []string{"run-focused-verification"}, PositionX: 560, PositionY: 0},
+		},
+	},
+	{
+		Key:         "requesting-code-review",
+		Name:        "requesting-code-review",
+		Description: "Built-in pipeline using superpowers/requesting-code-review to prepare a code review gate with clear scope and evidence.",
+		Nodes: []systemPipelineNodeTemplate{
+			{Key: "prepare-review-context", NodeType: "issue", Title: "Prepare review context", Description: "Summarize scope, changed files, intended behavior, known risks, and verification evidence for the reviewer.", PositionX: 0, PositionY: 0},
+			{Key: "code-review-gate", NodeType: "code_review", Title: "Request code review", Description: "Reviewer checks correctness, regressions, tests, maintainability, and security before approval.", DependsOnNodeKeys: []string{"prepare-review-context"}, PositionX: 280, PositionY: 0},
+		},
+	},
+	{
+		Key:         "receiving-code-review",
+		Name:        "receiving-code-review",
+		Description: "Built-in pipeline using superpowers/receiving-code-review to triage and resolve review feedback without losing scope.",
+		Nodes: []systemPipelineNodeTemplate{
+			{Key: "triage-feedback", NodeType: "issue", Title: "Triage review feedback", Description: "Classify findings as blocking, non-blocking, or out of scope; preserve the reviewer evidence and rationale.", PositionX: 0, PositionY: 0},
+			{Key: "apply-review-fixes", NodeType: "issue", Title: "Apply review fixes", Description: "Fix blocking feedback with focused changes and avoid unrelated refactors.", DependsOnNodeKeys: []string{"triage-feedback"}, PositionX: 280, PositionY: 0},
+			{Key: "reverify-review", NodeType: "check", Title: "Re-verify after review", Description: "Run focused checks and summarize how each blocking review item was resolved.", DependsOnNodeKeys: []string{"apply-review-fixes"}, PositionX: 560, PositionY: 0},
+		},
+	},
+	{
+		Key:         "finishing-a-development-branch",
+		Name:        "finishing-a-development-branch",
+		Description: "Built-in pipeline using superpowers/finishing-a-development-branch for final branch cleanup, verification, review, and handoff.",
+		Nodes: []systemPipelineNodeTemplate{
+			{Key: "branch-cleanup", NodeType: "issue", Title: "Clean up development branch", Description: "Inspect diff, remove accidental changes, update docs or migrations, and ensure branch state is intentional.", PositionX: 0, PositionY: 0},
+			{Key: "final-verification", NodeType: "check", Title: "Run final verification", Description: "Run the focused verification set and capture exact commands, results, and residual risks.", DependsOnNodeKeys: []string{"branch-cleanup"}, PositionX: 280, PositionY: 0},
+			{Key: "handoff-review", NodeType: "code_review", Title: "Handoff for review", Description: "Prepare review notes, branch/commit information, test evidence, and remaining decisions for a human or reviewer agent.", DependsOnNodeKeys: []string{"final-verification"}, PositionX: 560, PositionY: 0},
+			{Key: "merge-to-main", NodeType: "merge", Title: "合入 / 集成 · Merge / Integrate", Description: "After review and human confirmation, integrate the confirmed branch using PR-first behavior. Record source branch, target branch, PR URL or merge commit, test result, final status, and conflict files on failure.", DependsOnNodeKeys: []string{"handoff-review"}, PositionX: 840, PositionY: 0},
 		},
 	},
 }

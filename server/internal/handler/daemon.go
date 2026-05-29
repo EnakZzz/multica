@@ -657,7 +657,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		h.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
 
 		if registered.Status == "online" && runtimeHasCapability(registered.Metadata, daemonCapabilityIssuePlan) {
-			h.ensureInternalPlannerAgent(r.Context(), registered)
+			h.ensureBuiltInAgents(r.Context(), registered)
 		}
 
 		resp = append(resp, runtimeToResponse(registered))
@@ -1544,6 +1544,9 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.PlanItemExecutionKind = normalizePlanItemExecutionKind(item.ExecutionKind)
 			resp.PlanItemRequiresGitCommit = item.RequiresGitCommit
 			resp.PlanItemBranchName = strings.TrimSpace(item.BranchName)
+			if resp.PlanItemNodeType == service.PipelineNodeTypeMerge && resp.PlanItemBranchName == "" {
+				resp.PlanItemBranchName = strings.TrimSpace(item.IterationBranchName)
+			}
 			if resp.PlanItemRequiresGitCommit && resp.PlanItemBranchName != "" {
 				resp.PublishBranchName = resp.PlanItemBranchName
 			}
@@ -1823,18 +1826,22 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			if ip.ProjectID != "" {
 				projectUUID, err := util.ParseUUID(ip.ProjectID)
 				if err == nil {
-					resp.ProjectID = ip.ProjectID
-					if proj, err := h.Queries.GetProject(r.Context(), projectUUID); err == nil {
-						resp.ProjectTitle = proj.Title
+					projectRepos := h.applyProjectContextToTaskResponse(r.Context(), &resp, projectUUID)
+					if len(projectRepos) > 0 {
+						resp.Repos = projectRepos
 					}
+					h.applyRelevantKnowledgeToIssuePlanTaskResponse(r.Context(), &resp, ip, task.ID)
 				}
 			}
 			resp.AvailableAgents = h.availablePlanAgents(r.Context(), parseUUID(ip.WorkspaceID), ip.RequesterID)
 			resp.AvailablePipelines = h.availablePlanPipelines(r.Context(), parseUUID(ip.WorkspaceID), ip.RequesterID)
-			if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(ip.WorkspaceID)); err == nil && ws.Repos != nil {
-				var repos []RepoData
-				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
-					resp.Repos = repos
+			resp.AvailableSkills = h.availablePlanSkills(r.Context(), parseUUID(ip.WorkspaceID), ip.RequesterID)
+			if len(resp.Repos) == 0 {
+				if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(ip.WorkspaceID)); err == nil && ws.Repos != nil {
+					var repos []RepoData
+					if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
+						resp.Repos = repos
+					}
 				}
 			}
 		}
@@ -1925,6 +1932,8 @@ func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) availablePlanAgents(ctx context.Context, workspaceID pgtype.UUID, requesterID string) []PlanAgentData {
+	h.ensureBuiltInAgentsForWorkspace(ctx, workspaceID)
+
 	agents, err := h.Queries.ListAgents(ctx, workspaceID)
 	if err != nil {
 		slog.Warn("issue-plan claim: failed to list agents", "workspace_id", uuidToString(workspaceID), "error", err)
@@ -1944,7 +1953,7 @@ func (h *Handler) availablePlanAgents(ctx context.Context, workspaceID pgtype.UU
 		if a.ArchivedAt.Valid {
 			continue
 		}
-		if a.IsInternal {
+		if a.IsInternal && !a.BuiltinKey.Valid {
 			continue
 		}
 		if !h.canAccessPrivateAgent(ctx, a, "member", requesterID, uuidToString(workspaceID)) {
@@ -1954,9 +1963,12 @@ func (h *Handler) availablePlanAgents(ctx context.Context, workspaceID pgtype.UU
 		out = append(out, PlanAgentData{
 			ID:           agentID,
 			Name:         a.Name,
+			DisplayName:  agentDisplayName(a),
 			Description:  a.Description,
 			Instructions: a.Instructions,
 			Skills:       skillsByAgent[agentID],
+			IsBuiltin:    a.BuiltinKey.Valid,
+			BuiltinKey:   strings.TrimSpace(a.BuiltinKey.String),
 		})
 	}
 	return out
@@ -1964,6 +1976,9 @@ func (h *Handler) availablePlanAgents(ctx context.Context, workspaceID pgtype.UU
 
 func (h *Handler) availablePlanPipelines(ctx context.Context, workspaceID pgtype.UUID, requesterID string) []PlanPipelineData {
 	if requesterID != "" {
+		if err := h.ensureBuiltInSkills(ctx, workspaceID, parseUUID(requesterID)); err != nil {
+			slog.Warn("issue-plan claim: failed to ensure built-in skills", "workspace_id", uuidToString(workspaceID), "error", err)
+		}
 		if err := h.ensureSystemPipelines(ctx, workspaceID, parseUUID(requesterID)); err != nil {
 			slog.Warn("issue-plan claim: failed to ensure system pipelines", "workspace_id", uuidToString(workspaceID), "error", err)
 		}
@@ -2004,6 +2019,30 @@ func (h *Handler) availablePlanPipelines(ctx context.Context, workspaceID pgtype
 			SystemKey:   strings.TrimSpace(p.SystemKey.String),
 			ReadOnly:    p.IsSystem,
 			Nodes:       nodeData,
+		})
+	}
+	return out
+}
+
+func (h *Handler) availablePlanSkills(ctx context.Context, workspaceID pgtype.UUID, requesterID string) []PlanSkillData {
+	if requesterID != "" {
+		if err := h.ensureBuiltInSkills(ctx, workspaceID, parseUUID(requesterID)); err != nil {
+			slog.Warn("issue-plan claim: failed to ensure built-in skills for skill list", "workspace_id", uuidToString(workspaceID), "error", err)
+		}
+	}
+	skills, err := h.Queries.ListSkillSummariesByWorkspace(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("issue-plan claim: failed to list skills", "workspace_id", uuidToString(workspaceID), "error", err)
+		return nil
+	}
+	out := make([]PlanSkillData, 0, len(skills))
+	for _, s := range skills {
+		out = append(out, PlanSkillData{
+			ID:          uuidToString(s.ID),
+			Name:        s.Name,
+			Description: s.Description,
+			IsBuiltin:   s.IsBuiltin,
+			BuiltinKey:  strings.TrimSpace(s.BuiltinKey.String),
 		})
 	}
 	return out

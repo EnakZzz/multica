@@ -497,8 +497,8 @@ func TestInternalPlannerIssueCompletionCreatesPipelinePlanDraft(t *testing.T) {
 	`, planID).Scan(&itemCount); err != nil {
 		t.Fatalf("count plan items: %v", err)
 	}
-	if itemCount != 2 {
-		t.Fatalf("plan item count = %d, want 2", itemCount)
+	if itemCount != 4 {
+		t.Fatalf("plan item count = %d, want 4 including iteration confirmation gate and merge node", itemCount)
 	}
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT recommended_agent_id::text, depends_on_positions, generated_issue_id::text
@@ -509,6 +509,46 @@ func TestInternalPlannerIssueCompletionCreatesPipelinePlanDraft(t *testing.T) {
 	}
 	if secondAgentID != agentID || len(deps) != 1 || deps[0] != 1 || generatedIssueID != nil {
 		t.Fatalf("second plan item agent/deps/generated = %s/%v/%v, want %s/[1]/nil", secondAgentID, deps, generatedIssueID, agentID)
+	}
+	var gateKind string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT execution_kind
+		FROM plan_item
+		WHERE plan_id = $1 AND position = 3
+	`, planID).Scan(&gateKind); err != nil {
+		t.Fatalf("load generated iteration gate: %v", err)
+	}
+	if gateKind != "human_confirmation" {
+		t.Fatalf("generated gate kind = %s, want human_confirmation", gateKind)
+	}
+
+	var mergeNodeType string
+	var mergeKind string
+	var mergeAgentID string
+	var mergeDeps []int32
+	var mergeRequiresGitCommit bool
+	var mergeGeneratedIssueID *string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT node_type, execution_kind, recommended_agent_id::text, depends_on_positions, requires_git_commit, generated_issue_id::text
+		FROM plan_item
+		WHERE plan_id = $1 AND position = 4
+	`, planID).Scan(&mergeNodeType, &mergeKind, &mergeAgentID, &mergeDeps, &mergeRequiresGitCommit, &mergeGeneratedIssueID); err != nil {
+		t.Fatalf("load generated merge item: %v", err)
+	}
+	if mergeNodeType != "merge" || mergeKind != "agent_task" {
+		t.Fatalf("merge item node/kind = %s/%s, want merge/agent_task", mergeNodeType, mergeKind)
+	}
+	if mergeAgentID == "" {
+		t.Fatalf("merge item recommended agent is empty")
+	}
+	if len(mergeDeps) != 1 || mergeDeps[0] != 3 {
+		t.Fatalf("merge dependencies = %v, want [3]", mergeDeps)
+	}
+	if mergeRequiresGitCommit {
+		t.Fatalf("merge item requires_git_commit = true, want false")
+	}
+	if mergeGeneratedIssueID != nil {
+		t.Fatalf("merge generated issue = %v, want nil", mergeGeneratedIssueID)
 	}
 }
 
@@ -949,7 +989,9 @@ func TestInternalPlannerIssueCompletionCreatesDirectPlanDraft(t *testing.T) {
 	}
 
 	commitRR := httptest.NewRecorder()
-	testHandler.CommitPlan(commitRR, withURLParam(newPipelineRequest(t, "POST", "/api/plans/"+planID+"/commit", nil), "id", planID))
+	testHandler.CommitPlan(commitRR, withURLParam(newPipelineRequest(t, "POST", "/api/plans/"+planID+"/commit", map[string]any{
+		"acknowledged_human_confirmation_item_ids": humanConfirmationItemIDsForPlan(t, planID),
+	}), "id", planID))
 	if commitRR.Code != http.StatusOK {
 		t.Fatalf("CommitPlan status = %d body=%s", commitRR.Code, commitRR.Body.String())
 	}
@@ -1064,7 +1106,9 @@ func TestPlanItemUnitTestChecklistCopiesToChildIssueAndGatesCompletion(t *testin
 	}
 
 	commitRR := httptest.NewRecorder()
-	testHandler.CommitPlan(commitRR, withURLParam(newPipelineRequest(t, "POST", "/api/plans/"+planID+"/commit", nil), "id", planID))
+	testHandler.CommitPlan(commitRR, withURLParam(newPipelineRequest(t, "POST", "/api/plans/"+planID+"/commit", map[string]any{
+		"acknowledged_human_confirmation_item_ids": humanConfirmationItemIDsForPlan(t, planID),
+	}), "id", planID))
 	if commitRR.Code != http.StatusOK {
 		t.Fatalf("CommitPlan status = %d body=%s", commitRR.Code, commitRR.Body.String())
 	}
@@ -1262,7 +1306,7 @@ func TestHumanConfirmationPlanItemRequiresAckAndBlocksDownstream(t *testing.T) {
 
 	commitRR = httptest.NewRecorder()
 	testHandler.CommitPlan(commitRR, withURLParam(newPipelineRequest(t, "POST", "/api/plans/"+planID+"/commit", map[string]any{
-		"acknowledged_human_confirmation_item_ids": []string{confirmationItemID},
+		"acknowledged_human_confirmation_item_ids": humanConfirmationItemIDsForPlan(t, planID),
 	}), "id", planID))
 	if commitRR.Code != http.StatusOK {
 		t.Fatalf("CommitPlan with ack status = %d body=%s", commitRR.Code, commitRR.Body.String())
@@ -1306,6 +1350,75 @@ func TestHumanConfirmationPlanItemRequiresAckAndBlocksDownstream(t *testing.T) {
 	}
 	if taskCount := taskCountForIssue(t, workerIssueID); taskCount != 1 {
 		t.Fatalf("worker task count after confirmation = %d, want 1", taskCount)
+	}
+}
+
+func TestMergePlanTaskPRCreatedLinksPullRequestAndMovesToReview(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	issueID, taskID := createMergePlanTaskFixtureForTest(t, "Merge PR created")
+	completeAgentTaskForTest(t, taskID, `{
+		"source_branch": "feature/lost-pet-loop-1",
+		"target_branch": "main",
+		"mode": "pr-first",
+		"pr_url": "https://github.com/acme/lost-pet/pull/42",
+		"test_result": "go test ./... passed",
+		"status": "pr_created"
+	}`)
+
+	var status string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatalf("load merge issue status: %v", err)
+	}
+	if status != "in_review" {
+		t.Fatalf("merge issue status = %q, want in_review", status)
+	}
+
+	prs, err := testHandler.Queries.ListPullRequestsByIssue(context.Background(), parseUUID(issueID))
+	if err != nil {
+		t.Fatalf("ListPullRequestsByIssue: %v", err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("linked PR count = %d, want 1", len(prs))
+	}
+	if got := prs[0].HtmlUrl; got != "https://github.com/acme/lost-pet/pull/42" {
+		t.Fatalf("linked PR URL = %q", got)
+	}
+	if got := prs[0].State; got != "open" {
+		t.Fatalf("linked PR state = %q, want open", got)
+	}
+}
+
+func TestMergePlanTaskPRCreatedWithoutPRURLBlocksIssue(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	issueID, taskID := createMergePlanTaskFixtureForTest(t, "Merge PR missing URL")
+	completeAgentTaskForTest(t, taskID, `{
+		"source_branch": "feature/lost-pet-loop-1",
+		"target_branch": "main",
+		"mode": "pr-first",
+		"test_result": "go test ./... passed",
+		"status": "pr_created"
+	}`)
+
+	var status string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatalf("load merge issue status: %v", err)
+	}
+	if status != "blocked" {
+		t.Fatalf("merge issue status = %q, want blocked", status)
+	}
+
+	prs, err := testHandler.Queries.ListPullRequestsByIssue(context.Background(), parseUUID(issueID))
+	if err != nil {
+		t.Fatalf("ListPullRequestsByIssue: %v", err)
+	}
+	if len(prs) != 0 {
+		t.Fatalf("linked PR count = %d, want 0", len(prs))
 	}
 }
 
@@ -1710,6 +1823,68 @@ func completeReviewGateTaskWithAgentCommentForTest(t *testing.T, taskID, comment
 	}
 }
 
+func createMergePlanTaskFixtureForTest(t *testing.T, title string) (issueID, taskID string) {
+	t.Helper()
+	ctx := context.Background()
+	agentID := handlerTestAgentID(t)
+	runtimeID := handlerTestRuntimeID(t)
+	var planID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, title, description, status,
+			assignee_type, assignee_id, creator_type, creator_id
+		)
+		VALUES ($1, $2, 'Merge integration fixture', 'in_progress', 'agent', $3, 'member', $4)
+		RETURNING id::text
+	`, testWorkspaceID, title, agentID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("insert merge issue: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO plan (
+			workspace_id, title, prompt, status, planner_agent_id, created_by
+		)
+		VALUES ($1, $2, 'Merge fixture plan', 'committed', $3, $4)
+		RETURNING id::text
+	`, testWorkspaceID, title+" plan", agentID, testUserID).Scan(&planID); err != nil {
+		t.Fatalf("insert merge plan: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO plan_item (
+			plan_id, position, title, description,
+			execution_kind, requires_git_commit,
+			iteration_index, iteration_title, iteration_branch_name,
+			node_type, recommended_agent_id, match_score, match_reason,
+			depends_on_positions, selected, generated_issue_id
+		)
+		VALUES (
+			$1, 1, $2, 'Integrate confirmed branch',
+			'agent_task', false,
+			1, 'Loop 1', 'feature/lost-pet-loop-1',
+			'merge', $3, 100, 'Merge fixture',
+			ARRAY[1]::integer[], true, $4
+		)
+	`, planID, title, agentID, issueID); err != nil {
+		t.Fatalf("insert merge plan item: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at
+		)
+		VALUES ($1, $2, $3, 'running', 0, now(), now())
+		RETURNING id::text
+	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("insert merge task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue_pull_request WHERE issue_id = $1`, issueID)
+		testPool.Exec(context.Background(), `DELETE FROM github_pull_request WHERE workspace_id = $1 AND repo_owner = 'acme' AND repo_name = 'lost-pet'`, testWorkspaceID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		testPool.Exec(context.Background(), `DELETE FROM plan WHERE id = $1`, planID)
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+	return issueID, taskID
+}
+
 func completeAgentTaskForTest(t *testing.T, taskID, output string) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(), `
@@ -1847,6 +2022,35 @@ func humanConfirmationItemIDForPlan(t *testing.T, planID string) string {
 		t.Fatalf("load human confirmation plan item: %v", err)
 	}
 	return itemID
+}
+
+func humanConfirmationItemIDsForPlan(t *testing.T, planID string) []string {
+	t.Helper()
+	rows, err := testPool.Query(context.Background(), `
+		SELECT id::text
+		FROM plan_item
+		WHERE plan_id = $1 AND execution_kind = 'human_confirmation'
+		ORDER BY position ASC
+	`, planID)
+	if err != nil {
+		t.Fatalf("load human confirmation plan items: %v", err)
+	}
+	defer rows.Close()
+	var itemIDs []string
+	for rows.Next() {
+		var itemID string
+		if err := rows.Scan(&itemID); err != nil {
+			t.Fatalf("scan human confirmation plan item: %v", err)
+		}
+		itemIDs = append(itemIDs, itemID)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate human confirmation plan items: %v", err)
+	}
+	if len(itemIDs) == 0 {
+		t.Fatalf("no human confirmation plan items for plan %s", planID)
+	}
+	return itemIDs
 }
 
 func childIssuesByTitleForTest(t *testing.T, parentIssueID string) map[string]string {

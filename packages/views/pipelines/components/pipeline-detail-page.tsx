@@ -55,7 +55,7 @@ type PipelineFlowNodeModel = Node<PipelineFlowNodeData, "pipeline">;
 
 type GraphContextMenu = { screenX: number; screenY: number; flowX: number; flowY: number } | null;
 
-const NODE_TYPES_LIST: PipelineNodeType[] = ["issue", "manual", "check", "spec_review", "code_review"];
+const NODE_TYPES_LIST: PipelineNodeType[] = ["issue", "manual", "check", "spec_review", "code_review", "merge", "subagent-driven-development"];
 const FLOW_NODE_TYPES = { pipeline: PipelineFlowNode };
 
 const NODE_ACCENT: Record<PipelineNodeType, string> = {
@@ -64,6 +64,8 @@ const NODE_ACCENT: Record<PipelineNodeType, string> = {
   check: "bg-emerald-500",
   spec_review: "bg-violet-500",
   code_review: "bg-rose-500",
+  merge: "bg-cyan-500",
+  "subagent-driven-development": "bg-fuchsia-500",
 };
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -861,11 +863,13 @@ function splitRepoAliasInput(value: string) {
 
 function pipelineNodeTypeLabel(nodeType: PipelineNodeType) {
   switch (nodeType) {
-    case "manual": return "Manual";
-    case "check": return "Check";
-    case "spec_review": return "Spec review";
-    case "code_review": return "Code review";
-    default: return "Issue";
+    case "manual": return "人工 / Manual";
+    case "check": return "检查 / Check";
+    case "spec_review": return "规格评审 / Spec review";
+    case "code_review": return "代码评审 / Code review";
+    case "merge": return "合入 / 集成 · Merge / Integrate";
+    case "subagent-driven-development": return "子智能体开发 / Subagent-driven";
+    default: return "任务 / Issue";
   }
 }
 

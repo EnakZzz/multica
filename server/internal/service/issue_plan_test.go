@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -44,7 +45,20 @@ func TestParseIssuePlanSpecOutputAcceptsSpec(t *testing.T) {
 	}
 }
 
-func TestNormalizePlanSpecLimitsOpenQuestions(t *testing.T) {
+func TestParseIssuePlanSpecOutputIgnoresTrailingExtraBrace(t *testing.T) {
+	spec, err := parseIssuePlanSpecOutput(`{
+		"summary": "Build a planner.",
+		"goal": "Accept the first complete JSON object."
+	} }`)
+	if err != nil {
+		t.Fatalf("parseIssuePlanSpecOutput returned error: %v", err)
+	}
+	if spec.Summary != "Build a planner." || spec.Goal != "Accept the first complete JSON object." {
+		t.Fatalf("spec = %#v", spec)
+	}
+}
+
+func TestNormalizePlanSpecKeepsOpenQuestions(t *testing.T) {
 	spec := normalizePlanSpec(PlanSpec{
 		Summary:       "Draft",
 		Goal:          "Reduce planner back-and-forth.",
@@ -52,11 +66,11 @@ func TestNormalizePlanSpecLimitsOpenQuestions(t *testing.T) {
 		OpenQuestions: []string{"Which repo?", "Which runtime?", "Which style?", "Which rollout?"},
 	})
 
-	if got := strings.Join(spec.OpenQuestions, "|"); got != "Which repo?|Which runtime?" {
-		t.Fatalf("OpenQuestions = %q, want first two questions only", got)
+	if got := strings.Join(spec.OpenQuestions, "|"); got != "Which repo?|Which runtime?|Which style?|Which rollout?" {
+		t.Fatalf("OpenQuestions = %q, want all normalized questions", got)
 	}
-	if got := strings.Join(spec.Assumptions, "|"); got != "Use existing planner UI.|Which style?|Which rollout?" {
-		t.Fatalf("Assumptions = %q, want overflow questions carried as assumptions", got)
+	if got := strings.Join(spec.Assumptions, "|"); got != "Use existing planner UI." {
+		t.Fatalf("Assumptions = %q, want assumptions unchanged", got)
 	}
 }
 
@@ -82,6 +96,44 @@ func TestNormalizePlanSpecCleansReviewContractFields(t *testing.T) {
 	}
 	if got := strings.Join(spec.VerificationCommands, "|"); got != "go test ./internal/service" {
 		t.Fatalf("VerificationCommands = %q", got)
+	}
+}
+
+func TestParseMergeIntegrationResultFromRepoIntegrateJSON(t *testing.T) {
+	result := parseMergeIntegrationResult([]byte(`{
+		"output": "Created PR\n{\"source_branch\":\"feature/lost-pet-loop-1\",\"target_branch\":\"develop\",\"mode\":\"pr-first\",\"pr_url\":\"https://github.com/acme/lost-pet/pull/42\",\"test_result\":\"go test ./... passed\",\"status\":\"pr_created\"}"
+	}`))
+
+	if result.Status != "pr_created" {
+		t.Fatalf("Status = %q, want pr_created", result.Status)
+	}
+	if result.PRURL != "https://github.com/acme/lost-pet/pull/42" {
+		t.Fatalf("PRURL = %q", result.PRURL)
+	}
+	if result.SourceBranch != "feature/lost-pet-loop-1" || result.TargetBranch != "develop" {
+		t.Fatalf("branches = %q -> %q", result.SourceBranch, result.TargetBranch)
+	}
+}
+
+func TestParseMergeIntegrationResultFallsBackToCompleteTaskPRURL(t *testing.T) {
+	result := parseMergeIntegrationResult([]byte(`{"pr_url":"https://github.com/acme/lost-pet/pull/7","output":"PR created"}`))
+
+	if result.Status != "pr_created" || result.PRURL != "https://github.com/acme/lost-pet/pull/7" {
+		t.Fatalf("result = %#v, want pr_created fallback URL", result)
+	}
+}
+
+func TestParseGitHubPullRequestURL(t *testing.T) {
+	ref, ok := parseGitHubPullRequestURL("https://github.com/acme/lost-pet/pull/42/")
+	if !ok {
+		t.Fatal("expected GitHub PR URL to parse")
+	}
+	if ref.Owner != "acme" || ref.Repo != "lost-pet" || ref.Number != 42 {
+		t.Fatalf("ref = %#v", ref)
+	}
+
+	if _, ok := parseGitHubPullRequestURL("https://github.com/acme/lost-pet/issues/42"); ok {
+		t.Fatal("expected non-PR GitHub URL to be rejected")
 	}
 }
 
@@ -115,7 +167,7 @@ func TestNormalizeIssuePlanItemIterationsSharesBranchPerIteration(t *testing.T) 
 			RequiresGitCommit: &yes,
 			IterationIndex:    2,
 		},
-	})
+	}, "merge-agent-id")
 
 	if got := items[0].BranchName; got != "feature/lost-pet-loop-1-playable-shell" {
 		t.Fatalf("first item branch = %q", got)
@@ -129,11 +181,93 @@ func TestNormalizeIssuePlanItemIterationsSharesBranchPerIteration(t *testing.T) 
 	if got := items[2].IterationBranchName; got != items[0].BranchName {
 		t.Fatalf("non-commit iteration branch = %q, want %q", got, items[0].BranchName)
 	}
-	if got := items[3].IterationBranchName; got == "" || got == items[0].BranchName {
+	if got := items[4].IterationBranchName; got == "" || got == items[0].BranchName {
 		t.Fatalf("second iteration branch = %q, want generated branch distinct from iteration 1", got)
 	}
-	if got := items[3].BranchName; got != items[3].IterationBranchName {
-		t.Fatalf("second iteration item branch = %q, want %q", got, items[3].IterationBranchName)
+	if got := items[4].BranchName; got != items[4].IterationBranchName {
+		t.Fatalf("second iteration item branch = %q, want %q", got, items[4].IterationBranchName)
+	}
+	if len(items) != 7 {
+		t.Fatalf("items length = %d, want existing gate plus merge and generated second iteration gate plus merge", len(items))
+	}
+	if got := items[2].ExecutionKind; got != PlanItemExecutionKindHumanConfirmation {
+		t.Fatalf("existing gate execution kind = %q", got)
+	}
+	if got := items[2].DependsOnPositions; !reflect.DeepEqual(got, []int32{1, 2}) {
+		t.Fatalf("existing gate dependencies = %#v, want [1 2]", got)
+	}
+	if got := items[3].NodeType; got != PipelineNodeTypeMerge {
+		t.Fatalf("first merge node type = %q", got)
+	}
+	if got := items[3].DependsOnPositions; !reflect.DeepEqual(got, []int32{3}) {
+		t.Fatalf("first merge dependencies = %#v, want previous gate", got)
+	}
+	if got := items[4].DependsOnPositions; !reflect.DeepEqual(got, []int32{4}) {
+		t.Fatalf("second iteration first item dependencies = %#v, want previous merge", got)
+	}
+	if got := items[5].ExecutionKind; got != PlanItemExecutionKindHumanConfirmation {
+		t.Fatalf("generated gate execution kind = %q", got)
+	}
+	if got := items[5].DependsOnPositions; !reflect.DeepEqual(got, []int32{5}) {
+		t.Fatalf("generated gate dependencies = %#v, want second iteration work item", got)
+	}
+	if got := items[6].NodeType; got != PipelineNodeTypeMerge {
+		t.Fatalf("second merge node type = %q", got)
+	}
+}
+
+func TestNormalizeIssuePlanItemIterationsAddsHumanGatePerIteration(t *testing.T) {
+	yes := true
+	items := normalizeIssuePlanItemIterations("Lost Pet", []issuePlanResultItem{
+		{
+			Title:               "Build playable shell",
+			RequiresGitCommit:   &yes,
+			IterationIndex:      1,
+			IterationTitle:      "Playable shell",
+			IterationBranchName: "feature/lost-pet-loop-1-playable-shell",
+		},
+		{
+			Title:             "Test playable shell",
+			RequiresGitCommit: &yes,
+			IterationIndex:    1,
+		},
+		{
+			Title:             "Build memory core",
+			RequiresGitCommit: &yes,
+			IterationIndex:    2,
+			IterationTitle:    "Memory core",
+		},
+	}, "merge-agent-id")
+
+	if len(items) != 7 {
+		t.Fatalf("items length = %d, want work, gate, merge, work, gate, merge", len(items))
+	}
+	if got := items[2].ExecutionKind; got != PlanItemExecutionKindHumanConfirmation {
+		t.Fatalf("first generated gate execution kind = %q", got)
+	}
+	if got := items[2].DependsOnPositions; !reflect.DeepEqual(got, []int32{1, 2}) {
+		t.Fatalf("first generated gate dependencies = %#v, want [1 2]", got)
+	}
+	if got := items[3].NodeType; got != PipelineNodeTypeMerge {
+		t.Fatalf("first merge node type = %q", got)
+	}
+	if got := items[3].DependsOnPositions; !reflect.DeepEqual(got, []int32{3}) {
+		t.Fatalf("first merge dependencies = %#v, want first gate", got)
+	}
+	if got := items[4].DependsOnPositions; !reflect.DeepEqual(got, []int32{4}) {
+		t.Fatalf("second iteration work dependencies = %#v, want first merge", got)
+	}
+	if got := items[5].ExecutionKind; got != PlanItemExecutionKindHumanConfirmation {
+		t.Fatalf("second generated gate execution kind = %q", got)
+	}
+	if got := items[5].DependsOnPositions; !reflect.DeepEqual(got, []int32{5}) {
+		t.Fatalf("second generated gate dependencies = %#v, want second iteration work", got)
+	}
+	if got := items[5].ConfirmationQuestion; got == "" {
+		t.Fatalf("second generated gate confirmation question is empty")
+	}
+	if got := items[6].NodeType; got != PipelineNodeTypeMerge {
+		t.Fatalf("second merge node type = %q", got)
 	}
 }
 
@@ -217,6 +351,31 @@ func TestParseIssuePlanOutputAcceptsDependencies(t *testing.T) {
 	}
 	if got := out.Items[0].UnitTestChecklist; len(got) != 1 || got[0].ID != "plan-item-save" || got[0].Status != UnitTestStatusPending {
 		t.Fatalf("UnitTestChecklist = %#v, want normalized pending check", got)
+	}
+}
+
+func TestParseIssuePlanOutputIgnoresTrailingExtraBrace(t *testing.T) {
+	out, err := parseIssuePlanOutput(`{
+		"title": "Launch plan",
+		"parent_issue": { "title": "Launch", "description": "Ship the project" },
+		"items": [
+			{
+				"title": "Build backend",
+				"description": "Implement APIs",
+				"recommended_agent_id": "",
+				"match_score": 0,
+				"match_reason": "No backend agent",
+				"missing_capability": "Backend Engineer",
+				"depends_on_positions": [],
+				"selected": true
+			}
+		]
+	} }`)
+	if err != nil {
+		t.Fatalf("parseIssuePlanOutput returned error: %v", err)
+	}
+	if len(out.Items) != 1 || out.Items[0].Title != "Build backend" {
+		t.Fatalf("items = %#v", out.Items)
 	}
 }
 

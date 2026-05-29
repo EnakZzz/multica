@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -51,12 +53,14 @@ func TestNormalizeUpdatePlanItemIterationsSharesBranchPerIteration(t *testing.T)
 			IterationIndex:      1,
 			IterationTitle:      "Playable shell",
 			IterationBranchName: "feature/lost-pet-loop-1-playable-shell",
+			Selected:            true,
 		},
 		{
 			Title:             "Test playable shell",
 			RequiresGitCommit: &yes,
 			BranchName:        "feature/item-tests",
 			IterationIndex:    1,
+			Selected:          true,
 		},
 		{
 			Title:             "Confirm playable shell",
@@ -64,13 +68,15 @@ func TestNormalizeUpdatePlanItemIterationsSharesBranchPerIteration(t *testing.T)
 			RequiresGitCommit: &no,
 			BranchName:        "feature/should-be-cleared",
 			IterationIndex:    1,
+			Selected:          true,
 		},
 		{
 			Title:             "Build memory core",
 			RequiresGitCommit: &yes,
 			IterationIndex:    2,
+			Selected:          true,
 		},
-	})
+	}, "merge-agent-id")
 
 	if got := items[0].BranchName; got != "feature/lost-pet-loop-1-playable-shell" {
 		t.Fatalf("first item branch = %q", got)
@@ -84,11 +90,96 @@ func TestNormalizeUpdatePlanItemIterationsSharesBranchPerIteration(t *testing.T)
 	if got := items[2].IterationBranchName; got != items[0].BranchName {
 		t.Fatalf("non-commit iteration branch = %q, want %q", got, items[0].BranchName)
 	}
-	if got := items[3].IterationBranchName; got == "" || got == items[0].BranchName {
+	if got := items[4].IterationBranchName; got == "" || got == items[0].BranchName {
 		t.Fatalf("second iteration branch = %q, want generated branch distinct from iteration 1", got)
 	}
-	if got := items[3].BranchName; got != items[3].IterationBranchName {
-		t.Fatalf("second iteration item branch = %q, want %q", got, items[3].IterationBranchName)
+	if got := items[4].BranchName; got != items[4].IterationBranchName {
+		t.Fatalf("second iteration item branch = %q, want %q", got, items[4].IterationBranchName)
+	}
+	if len(items) != 7 {
+		t.Fatalf("items length = %d, want existing gate plus merge and generated second iteration gate plus merge", len(items))
+	}
+	if got := items[2].ExecutionKind; got != service.PlanItemExecutionKindHumanConfirmation {
+		t.Fatalf("existing gate execution kind = %q", got)
+	}
+	if got := items[2].DependsOnPositions; !reflect.DeepEqual(got, []int32{1, 2}) {
+		t.Fatalf("existing gate dependencies = %#v, want [1 2]", got)
+	}
+	if got := items[3].NodeType; got != service.PipelineNodeTypeMerge {
+		t.Fatalf("first merge node type = %q", got)
+	}
+	if got := items[3].DependsOnPositions; !reflect.DeepEqual(got, []int32{3}) {
+		t.Fatalf("first merge dependencies = %#v, want previous gate", got)
+	}
+	if got := items[4].DependsOnPositions; !reflect.DeepEqual(got, []int32{4}) {
+		t.Fatalf("second iteration first item dependencies = %#v, want previous merge", got)
+	}
+	if got := items[5].ExecutionKind; got != service.PlanItemExecutionKindHumanConfirmation {
+		t.Fatalf("generated gate execution kind = %q", got)
+	}
+	if got := items[5].DependsOnPositions; !reflect.DeepEqual(got, []int32{5}) {
+		t.Fatalf("generated gate dependencies = %#v, want second iteration work item", got)
+	}
+	if got := items[6].NodeType; got != service.PipelineNodeTypeMerge {
+		t.Fatalf("second merge node type = %q", got)
+	}
+}
+
+func TestNormalizeUpdatePlanItemIterationsAddsHumanGatePerIteration(t *testing.T) {
+	yes := true
+	items := normalizeUpdatePlanItemIterations("Lost Pet", []updatePlanItemRequest{
+		{
+			Title:               "Build playable shell",
+			RequiresGitCommit:   &yes,
+			IterationIndex:      1,
+			IterationTitle:      "Playable shell",
+			IterationBranchName: "feature/lost-pet-loop-1-playable-shell",
+			Selected:            true,
+		},
+		{
+			Title:             "Test playable shell",
+			RequiresGitCommit: &yes,
+			IterationIndex:    1,
+			Selected:          true,
+		},
+		{
+			Title:             "Build memory core",
+			RequiresGitCommit: &yes,
+			IterationIndex:    2,
+			IterationTitle:    "Memory core",
+			Selected:          true,
+		},
+	}, "merge-agent-id")
+
+	if len(items) != 7 {
+		t.Fatalf("items length = %d, want work, gate, merge, work, gate, merge", len(items))
+	}
+	if got := items[2].ExecutionKind; got != service.PlanItemExecutionKindHumanConfirmation {
+		t.Fatalf("first generated gate execution kind = %q", got)
+	}
+	if got := items[2].DependsOnPositions; !reflect.DeepEqual(got, []int32{1, 2}) {
+		t.Fatalf("first generated gate dependencies = %#v, want [1 2]", got)
+	}
+	if got := items[3].NodeType; got != service.PipelineNodeTypeMerge {
+		t.Fatalf("first merge node type = %q", got)
+	}
+	if got := items[3].DependsOnPositions; !reflect.DeepEqual(got, []int32{3}) {
+		t.Fatalf("first merge dependencies = %#v, want first gate", got)
+	}
+	if got := items[4].DependsOnPositions; !reflect.DeepEqual(got, []int32{4}) {
+		t.Fatalf("second iteration work dependencies = %#v, want first merge", got)
+	}
+	if got := items[5].ExecutionKind; got != service.PlanItemExecutionKindHumanConfirmation {
+		t.Fatalf("second generated gate execution kind = %q", got)
+	}
+	if got := items[5].DependsOnPositions; !reflect.DeepEqual(got, []int32{5}) {
+		t.Fatalf("second generated gate dependencies = %#v, want second iteration work", got)
+	}
+	if got := items[5].ConfirmationQuestion; got == "" {
+		t.Fatalf("second generated gate confirmation question is empty")
+	}
+	if got := items[6].NodeType; got != service.PipelineNodeTypeMerge {
+		t.Fatalf("second merge node type = %q", got)
 	}
 }
 
@@ -147,6 +238,12 @@ func TestIsQuickCreatePlannerAgentRequiresInternalFlag(t *testing.T) {
 	}
 	if !isQuickCreatePlannerAgent(db.Agent{Name: internalPlannerAgentName, IsInternal: true}) {
 		t.Fatalf("internal planner should be treated as the built-in planner")
+	}
+	if !isQuickCreatePlannerAgent(db.Agent{IsInternal: true, BuiltinKey: pgtype.Text{String: internalPlannerBuiltinKey, Valid: true}}) {
+		t.Fatalf("internal planner should be detected by builtin_key")
+	}
+	if isQuickCreatePlannerAgent(db.Agent{IsInternal: true, BuiltinKey: pgtype.Text{String: "multica/merge-agent", Valid: true}, Name: "Merge Agent"}) {
+		t.Fatalf("merge agent should not be treated as the built-in planner")
 	}
 }
 
