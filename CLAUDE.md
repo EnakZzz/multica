@@ -188,6 +188,24 @@ Notes:
 - Agent execution code must publish via `multica repo publish` from a generated `agent/*` branch. Direct pushes to `main` / `master` are protected and rejected.
 - Most CLI commands require `server_url` and `workspace_id` to be configured, or passed via flags/env (`MULTICA_SERVER_URL`, `MULTICA_WORKSPACE_ID`).
 
+### Local Authenticated API Debugging
+
+When debugging a local/self-host UI mismatch, reuse the local CLI login token from `~/.multica/config.json` instead of inventing test headers. Do not print or paste the token value.
+
+```powershell
+$cfg = Get-Content "$env:USERPROFILE\.multica\config.json" -Raw | ConvertFrom-Json
+$headers = @{
+  Authorization = "Bearer $($cfg.token)"
+  "X-Workspace-Slug" = "local-agents" # or the workspace slug from the URL
+}
+
+Invoke-RestMethod -Uri "$($cfg.server_url)/api/agents" -Headers $headers |
+  Where-Object { $_.builtin_key -eq "multica/merge-agent" } |
+  Select-Object id, name, display_name, is_internal, builtin_key, runtime_id
+```
+
+Use the same pattern for other scoped API checks. If the browser is on `http://127.0.0.1:3001/<slug>/...`, the API usually lives at the CLI `server_url` (`http://127.0.0.1:8081` in the local self-host setup) and requires `X-Workspace-Slug: <slug>`.
+
 ### CI Requirements
 
 CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL service. See `.github/workflows/ci.yml`.

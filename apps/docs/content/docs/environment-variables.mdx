@@ -139,6 +139,19 @@ Public auth endpoints — `/auth/send-code`, `/auth/verify-code`, `/auth/google`
 | `RATE_LIMIT_AUTH_VERIFY` | `20` | Max requests per IP per minute against `/auth/verify-code` |
 | `RATE_LIMIT_TRUSTED_PROXIES` | empty | Comma-separated CIDRs whose `X-Forwarded-For` header the limiter is allowed to trust. Empty (the default) means **never trust XFF** — the limiter only uses the direct connection's `RemoteAddr` |
 
+## Project Wiki embeddings (optional)
+
+Project Wiki RAG always keeps keyword search and canonical Wiki fallback available. Set these variables only when you want semantic vector retrieval for Wiki and project memory.
+
+| Variable | Default | Description |
+|---|---|---|
+| `MULTICA_EMBEDDINGS_API_KEY` | empty | API key for an OpenAI-compatible embeddings endpoint. When empty, vector retrieval and embedding workers are disabled |
+| `MULTICA_EMBEDDINGS_BASE_URL` | `https://api.openai.com/v1` | Base URL for the embeddings API |
+| `MULTICA_EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embedding model name stored with each vector |
+| `MULTICA_EMBEDDINGS_DIMENSIONS` | `1536` | Vector dimension expected by Multica's pgvector table |
+
+Wiki and memory edits enqueue embedding jobs after the save transaction commits. Failures are retried in the background and never block Wiki saves or Plan generation. Existing Wiki pages are not backfilled automatically on startup; run `multica project wiki backfill-embeddings <project-id>` or call the backfill API explicitly.
+
 When a request is over the limit, the server replies with `429 Too Many Requests`, `Retry-After: 60`, and body `{"error":"too many requests"}`.
 
 <Callout type="warning">
@@ -189,6 +202,18 @@ The [GitHub PR ↔ issue integration](/github-integration) needs two variables. 
 - The `/api/webhooks/github` endpoint returns **`503 github webhooks not configured`** — Multica refuses to process events with no secret rather than treating every signature as valid.
 
 **Note:** `GITHUB_WEBHOOK_SECRET` is reused as the signing key for the install-flow state token, so operators only need to manage one secret. It is **not** the GitHub App's *Client* secret — Client secrets are OAuth-related and not used by this integration. See [GitHub integration → Self-host setup](/github-integration#self-host-setup) for the full walkthrough.
+
+## GitLab Merge Request creation
+
+`multica repo integrate --strategy pr-first` can create or reuse GitLab Merge Requests for local agent merge tasks when the checkout's `origin` remote points at GitLab.
+
+| Variable | Default | Description |
+|---|---|---|
+| `GITLAB_BASE_URL` | inferred from `origin` | Base URL for self-managed GitLab, for example `https://gitlab.example.com` |
+| `GITLAB_TOKEN` | empty | Personal/project/group access token used as `PRIVATE-TOKEN`; `GLAB_TOKEN` and `GITLAB_PRIVATE_TOKEN` are also accepted |
+| `CI_JOB_TOKEN` | empty | Used as `JOB-TOKEN` when running inside GitLab CI |
+
+If no GitLab token is configured, PR-first returns a failed JSON result and does not fall back to a direct merge.
 
 ## Usage analytics
 
