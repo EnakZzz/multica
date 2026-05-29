@@ -97,7 +97,7 @@ func TestProjectVisualGenerateNodesFromWikiCreatesBoardNodes(t *testing.T) {
 	}
 	output := `{
   "nodes": [
-    {"id":"milo","type":"character","title":"Milo","description":"走失宠物主角，需要清晰识别。","prompt":"Warm readable pet character concept for Milo.","source_refs":[{"wiki_slug":"visual-brief","snippet":"角色：Milo"}],"confidence":0.91},
+    {"id":"milo","type":"character","title":"Milo","title_zh":"米洛","description":"Lost pet protagonist with readable identity.","description_zh":"走失宠物主角，需要清晰识别。","prompt":"Warm readable pet character concept for Milo.","prompt_zh":"为米洛生成温暖、清晰易读的宠物主角概念图。","source_refs":[{"wiki_slug":"visual-brief","snippet":"角色：Milo"}],"confidence":0.91},
     {"id":"street","type":"scene","title":"雨夜街角","description":"带路灯和告示牌的城市街角。","prompt":"Rainy city street corner with warm lamp and missing-pet poster.","source_refs":[{"wiki_slug":"visual-brief","snippet":"场景：雨夜街角"}],"confidence":0.88},
     {"id":"clue","type":"ui_element","title":"线索按钮","description":"触发线索查看的圆形按钮。","prompt":"Round clue button UI element, readable and game-ready.","source_refs":[{"wiki_slug":"visual-brief","snippet":"UI：线索按钮"}],"confidence":0.84}
   ],
@@ -128,6 +128,7 @@ func TestProjectVisualGenerateNodesFromWikiCreatesBoardNodes(t *testing.T) {
 		t.Fatalf("board project/nodes/edges mismatch: project=%s nodes=%d edges=%d", board.ProjectID, len(board.Nodes), len(board.Edges))
 	}
 	types := map[string]bool{}
+	foundMiloZh := false
 	for _, node := range board.Nodes {
 		types[node.Type] = true
 		if node.Status != "draft" {
@@ -136,6 +137,12 @@ func TestProjectVisualGenerateNodesFromWikiCreatesBoardNodes(t *testing.T) {
 		if !strings.Contains(string(node.SourceRefs), "visual-brief") {
 			t.Fatalf("extracted node source_refs = %s, want wiki slug", string(node.SourceRefs))
 		}
+		if node.Title == "Milo" && node.TitleZh == "米洛" && strings.Contains(node.DescriptionZh, "走失宠物主角") && strings.Contains(node.PromptZh, "温暖") {
+			foundMiloZh = true
+		}
+	}
+	if !foundMiloZh {
+		t.Fatalf("expected extracted Milo node to preserve Chinese display fields: %#v", board.Nodes)
 	}
 	for _, want := range []string{"character", "scene", "ui_element"} {
 		if !types[want] {
@@ -286,6 +293,182 @@ func TestProjectVisualGenerateImageValidatesAgentWorkspaceAndRuntime(t *testing.
 	}
 }
 
+func TestProjectVisualCreateAnimationNodeFromSourceNode(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	project := createProjectVisualTestProject(t, "Visual animation project")
+	sourceNodeID := createProjectVisualTestNode(t, project.ID, "character", "Milo", "draft", "")
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/projects/"+project.ID+"/visual-nodes", map[string]any{
+		"type":           "animation",
+		"title":          "Milo animation",
+		"title_zh":       "米洛动画",
+		"description":    "Animation node for Milo",
+		"description_zh": "米洛的动画节点",
+		"prompt":         "Use game-asset-pipeline and output a spritesheet.",
+		"prompt_zh":      "使用 game-asset-pipeline 并输出精灵表。",
+		"position_x":     340,
+		"position_y":     10,
+		"source_node_id": sourceNodeID,
+		"relation":       "variant_of",
+		"source_refs": []map[string]string{{
+			"visual_node_id": sourceNodeID,
+		}},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectVisualNode(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateProjectVisualNode: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var board visualBoardResponse
+	if err := json.NewDecoder(w.Body).Decode(&board); err != nil {
+		t.Fatalf("decode visual board: %v", err)
+	}
+	var animationNode *visualNodeResponse
+	for i := range board.Nodes {
+		if board.Nodes[i].Title == "Milo animation" {
+			animationNode = &board.Nodes[i]
+			break
+		}
+	}
+	if animationNode == nil {
+		t.Fatalf("created animation node not returned in board: %#v", board.Nodes)
+	}
+	if animationNode.Type != "animation" || !strings.Contains(animationNode.Prompt, "game-asset-pipeline") {
+		t.Fatalf("animation node type/prompt = %q %q", animationNode.Type, animationNode.Prompt)
+	}
+	if animationNode.TitleZh != "米洛动画" || animationNode.DescriptionZh != "米洛的动画节点" || !strings.Contains(animationNode.PromptZh, "精灵表") {
+		t.Fatalf("animation node zh fields = title %q description %q prompt %q", animationNode.TitleZh, animationNode.DescriptionZh, animationNode.PromptZh)
+	}
+	foundEdge := false
+	for _, edge := range board.Edges {
+		if edge.SourceNodeID == sourceNodeID && edge.TargetNodeID == animationNode.ID && edge.Relation == "variant_of" {
+			foundEdge = true
+			break
+		}
+	}
+	if !foundEdge {
+		t.Fatalf("expected variant edge from %s to %s, got %#v", sourceNodeID, animationNode.ID, board.Edges)
+	}
+}
+
+func TestProjectVisualDeleteNodeRemovesAttachedEdges(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	project := createProjectVisualTestProject(t, "Visual delete project")
+	sourceNodeID := createProjectVisualTestNode(t, project.ID, "character", "Milo", "draft", "")
+	targetNodeID := createProjectVisualTestNode(t, project.ID, "animation", "Milo animation", "draft", "")
+	var boardID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT board_id::text
+		FROM project_visual_node
+		WHERE id = $1
+	`, sourceNodeID).Scan(&boardID); err != nil {
+		t.Fatalf("load visual board id: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO project_visual_edge (
+			board_id, workspace_id, project_id, source_node_id, target_node_id, relation
+		)
+		VALUES ($1, $2, $3, $4, $5, 'variant_of')
+	`, boardID, testWorkspaceID, project.ID, sourceNodeID, targetNodeID); err != nil {
+		t.Fatalf("insert visual edge: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodDelete, "/api/projects/"+project.ID+"/visual-nodes/"+targetNodeID, nil)
+	req = withURLParams(req, "id", project.ID, "nodeId", targetNodeID)
+	testHandler.DeleteProjectVisualNode(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DeleteProjectVisualNode: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var board visualBoardResponse
+	if err := json.NewDecoder(w.Body).Decode(&board); err != nil {
+		t.Fatalf("decode visual board: %v", err)
+	}
+	if len(board.Nodes) != 1 || board.Nodes[0].ID != sourceNodeID {
+		t.Fatalf("nodes after delete = %#v, want only source node %s", board.Nodes, sourceNodeID)
+	}
+	if len(board.Edges) != 0 {
+		t.Fatalf("edges after delete = %#v, want none", board.Edges)
+	}
+}
+
+func TestProjectVisualClearBoardRemovesNodesAndEdges(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	project := createProjectVisualTestProject(t, "Visual clear project")
+	sourceNodeID := createProjectVisualTestNode(t, project.ID, "character", "Milo", "draft", "")
+	targetNodeID := createProjectVisualTestNode(t, project.ID, "animation", "Milo animation", "draft", "")
+	var boardID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT board_id::text
+		FROM project_visual_node
+		WHERE id = $1
+	`, sourceNodeID).Scan(&boardID); err != nil {
+		t.Fatalf("load visual board id: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO project_visual_edge (
+			board_id, workspace_id, project_id, source_node_id, target_node_id, relation
+		)
+		VALUES ($1, $2, $3, $4, $5, 'variant_of')
+	`, boardID, testWorkspaceID, project.ID, sourceNodeID, targetNodeID); err != nil {
+		t.Fatalf("insert visual edge: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodDelete, "/api/projects/"+project.ID+"/visual-board", nil)
+	req = withURLParam(req, "id", project.ID)
+	testHandler.ClearProjectVisualBoard(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClearProjectVisualBoard: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var board visualBoardResponse
+	if err := json.NewDecoder(w.Body).Decode(&board); err != nil {
+		t.Fatalf("decode visual board: %v", err)
+	}
+	if board.ProjectID != project.ID || len(board.Nodes) != 0 || len(board.Edges) != 0 {
+		t.Fatalf("cleared board mismatch: project=%s nodes=%d edges=%d", board.ProjectID, len(board.Nodes), len(board.Edges))
+	}
+
+	var nodeCount, edgeCount, boardCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM project_visual_node
+		WHERE project_id = $1
+	`, project.ID).Scan(&nodeCount); err != nil {
+		t.Fatalf("count visual nodes: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM project_visual_edge
+		WHERE project_id = $1
+	`, project.ID).Scan(&edgeCount); err != nil {
+		t.Fatalf("count visual edges: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM project_visual_board
+		WHERE id = $1 AND project_id = $2
+	`, boardID, project.ID).Scan(&boardCount); err != nil {
+		t.Fatalf("count visual boards: %v", err)
+	}
+	if nodeCount != 0 || edgeCount != 0 || boardCount != 1 {
+		t.Fatalf("cleared rows mismatch: nodes=%d edges=%d boards=%d", nodeCount, edgeCount, boardCount)
+	}
+}
+
 func TestProjectVisualGenerationResultRequiresSameProjectNodeAndBindsAttachment(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -319,6 +502,7 @@ func TestProjectVisualGenerationResultRequiresSameProjectNodeAndBindsAttachment(
 	req = newRequest(http.MethodPost, "/api/projects/"+projectA.ID+"/visual-nodes/"+nodeID+"/generation-result", map[string]any{
 		"attachment_id": attachmentID,
 		"note":          "first usable preview",
+		"note_zh":       "第一版可用预览",
 	})
 	req = withURLParams(req, "id", projectA.ID, "nodeId", nodeID)
 	testHandler.CompleteProjectVisualNodeGeneration(w, req)
@@ -350,6 +534,9 @@ func TestProjectVisualGenerationResultRequiresSameProjectNodeAndBindsAttachment(
 	if node.ResultNote != "first usable preview" {
 		t.Fatalf("node result note = %q", node.ResultNote)
 	}
+	if node.ResultNoteZh != "第一版可用预览" {
+		t.Fatalf("node result note zh = %q", node.ResultNoteZh)
+	}
 
 	select {
 	case event := <-gotEvent:
@@ -365,6 +552,110 @@ func TestProjectVisualGenerationResultRequiresSameProjectNodeAndBindsAttachment(
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected project_visual:updated event")
+	}
+}
+
+func TestProjectVisualGenerationHistoryListsIssuesAndRestoresVersion(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	project := createProjectVisualTestProject(t, "Visual history project")
+	nodeID := createProjectVisualTestNode(t, project.ID, "scene", "Street corner", "draft", "")
+	artAgentID := createHandlerTestAgent(t, "Visual History Agent "+uuid.NewString(), nil)
+
+	first := queueProjectVisualGenerationForTest(t, project.ID, nodeID, artAgentID)
+	firstAttachmentID := createProjectVisualTestAttachment(t, testWorkspaceID, "street-v1.png")
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/projects/"+project.ID+"/visual-nodes/"+nodeID+"/generation-result", map[string]any{
+		"task_id":       first.TaskID,
+		"attachment_id": firstAttachmentID,
+		"note":          "first usable preview",
+		"note_zh":       "第一版可用预览",
+	})
+	req = withURLParams(req, "id", project.ID, "nodeId", nodeID)
+	testHandler.CompleteProjectVisualNodeGeneration(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete first generation: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	second := queueProjectVisualGenerationForTest(t, project.ID, nodeID, artAgentID)
+	secondAttachmentID := createProjectVisualTestAttachment(t, testWorkspaceID, "street-v2.png")
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodPost, "/api/projects/"+project.ID+"/visual-nodes/"+nodeID+"/generation-result", map[string]any{
+		"task_id":       second.TaskID,
+		"attachment_id": secondAttachmentID,
+		"note":          "second usable preview",
+		"note_zh":       "第二版可用预览",
+	})
+	req = withURLParams(req, "id", project.ID, "nodeId", nodeID)
+	testHandler.CompleteProjectVisualNodeGeneration(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete second generation: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodGet, "/api/projects/"+project.ID+"/visual-nodes/"+nodeID+"/generations", nil)
+	req = withURLParams(req, "id", project.ID, "nodeId", nodeID)
+	testHandler.ListProjectVisualNodeGenerations(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list generations: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var history listVisualNodeGenerationsResponse
+	if err := json.NewDecoder(w.Body).Decode(&history); err != nil {
+		t.Fatalf("decode history: %v", err)
+	}
+	if len(history.Generations) != 2 {
+		t.Fatalf("history length = %d, want 2: %#v", len(history.Generations), history.Generations)
+	}
+	var firstGenerationID string
+	foundFirstIssue := false
+	foundSecondCurrent := false
+	for _, generation := range history.Generations {
+		if generation.AttachmentID == nil {
+			continue
+		}
+		if *generation.AttachmentID == firstAttachmentID {
+			firstGenerationID = generation.ID
+			foundFirstIssue = generation.IssueID == first.IssueID &&
+				generation.IssueIdentifier != "" &&
+				generation.IssueTitle == "Generate visual asset: Street corner" &&
+				generation.NoteZh == "第一版可用预览"
+		}
+		if *generation.AttachmentID == secondAttachmentID {
+			foundSecondCurrent = generation.IssueID == second.IssueID && generation.IsCurrent
+		}
+	}
+	if !foundFirstIssue || !foundSecondCurrent || firstGenerationID == "" {
+		t.Fatalf("unexpected generation history: %#v", history.Generations)
+	}
+
+	var linkedIssueID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT issue_id::text FROM attachment WHERE id = $1
+	`, firstAttachmentID).Scan(&linkedIssueID); err != nil {
+		t.Fatalf("load first attachment issue link: %v", err)
+	}
+	if linkedIssueID != first.IssueID {
+		t.Fatalf("first attachment issue_id = %s, want %s", linkedIssueID, first.IssueID)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodPost, "/api/projects/"+project.ID+"/visual-nodes/"+nodeID+"/generations/"+firstGenerationID+"/restore", nil)
+	req = withURLParams(req, "id", project.ID, "nodeId", nodeID, "generationId", firstGenerationID)
+	testHandler.RestoreProjectVisualNodeGeneration(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("restore generation: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var board visualBoardResponse
+	if err := json.NewDecoder(w.Body).Decode(&board); err != nil {
+		t.Fatalf("decode restored board: %v", err)
+	}
+	if len(board.Nodes) != 1 || board.Nodes[0].ResultAttachmentID == nil || *board.Nodes[0].ResultAttachmentID != firstAttachmentID {
+		t.Fatalf("restored board node = %#v, want attachment %s", board.Nodes, firstAttachmentID)
+	}
+	if board.Nodes[0].ResultNoteZh != "第一版可用预览" {
+		t.Fatalf("restored result note zh = %q", board.Nodes[0].ResultNoteZh)
 	}
 }
 
@@ -404,6 +695,11 @@ func TestProjectVisualCreatePlanIncludesOnlyAdoptedNodes(t *testing.T) {
 	if !strings.Contains(plan.Prompt, "Adopted Hero") || !strings.Contains(plan.Prompt, attachmentID) {
 		t.Fatalf("plan prompt missing adopted node or attachment: %s", plan.Prompt)
 	}
+	for _, want := range []string{"Plan mode: playable_prototype", "visual_asset_manifest", "procedural", "pixel-style placeholder", "do not wait for final generated art assets"} {
+		if !strings.Contains(plan.Prompt, want) {
+			t.Fatalf("default playable prototype prompt missing %q: %s", want, plan.Prompt)
+		}
+	}
 	if strings.Contains(plan.Prompt, "Draft Forest") || strings.Contains(plan.Prompt, "Rejected Lantern") {
 		t.Fatalf("plan prompt should exclude draft/rejected nodes: %s", plan.Prompt)
 	}
@@ -425,6 +721,111 @@ func TestProjectVisualCreatePlanIncludesOnlyAdoptedNodes(t *testing.T) {
 	}
 	if taskContext["type"] != "issue_plan" || taskContext["phase"] != "spec" || taskContext["project_id"] != project.ID {
 		t.Fatalf("unexpected plan task context: %#v", taskContext)
+	}
+}
+
+func TestProjectVisualCreatePlayablePrototypePlanModePrompt(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	project := createProjectVisualTestProject(t, "Visual prototype plan project")
+	createProjectVisualTestNode(t, project.ID, "character", "Lost Pet Hero", "adopted", "")
+	createInternalPlannerAgentForTest(t)
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/projects/"+project.ID+"/visual-board/create-plan", map[string]any{
+		"gameplay_notes": "Use current frontend stack and keep the experience non-text-first.",
+		"plan_mode":      "playable_prototype",
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreatePlanFromProjectVisualBoard(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreatePlanFromProjectVisualBoard: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var plan PlanResponse
+	if err := json.NewDecoder(w.Body).Decode(&plan); err != nil {
+		t.Fatalf("decode plan response: %v", err)
+	}
+	for _, want := range []string{
+		"Plan mode: playable_prototype",
+		"visual_asset_manifest",
+		"CSS, SVG, Canvas",
+		"pixel-style placeholder assets",
+		"do not wait for final generated art assets",
+		"full Lost Pet recovery flow",
+	} {
+		if !strings.Contains(plan.Prompt, want) {
+			t.Fatalf("playable prototype prompt missing %q: %s", want, plan.Prompt)
+		}
+	}
+}
+
+func TestProjectVisualCreateProductionAssetIntegrationPlanModePrompt(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	project := createProjectVisualTestProject(t, "Visual integration plan project")
+	attachmentID := createProjectVisualTestAttachment(t, testWorkspaceID, "selected-hero.png")
+	createProjectVisualTestNode(t, project.ID, "character", "Selected Hero", "adopted", attachmentID)
+	createProjectVisualTestNode(t, project.ID, "scene", "Missing Park", "adopted", "")
+	createInternalPlannerAgentForTest(t)
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/projects/"+project.ID+"/visual-board/create-plan", map[string]any{
+		"gameplay_notes": "Replace current placeholder assets with selected visual board results.",
+		"plan_mode":      "production_asset_integration",
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreatePlanFromProjectVisualBoard(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreatePlanFromProjectVisualBoard: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var plan PlanResponse
+	if err := json.NewDecoder(w.Body).Decode(&plan); err != nil {
+		t.Fatalf("decode plan response: %v", err)
+	}
+	for _, want := range []string{
+		"Plan mode: production_asset_integration",
+		"Do not create final asset generation tasks",
+		"do not use game-asset-pipeline to produce new images",
+		"result_attachment_id",
+		"asset replacement map",
+		"missing an integration-ready asset",
+	} {
+		if !strings.Contains(plan.Prompt, want) {
+			t.Fatalf("production asset integration prompt missing %q: %s", want, plan.Prompt)
+		}
+	}
+	if !strings.Contains(plan.Prompt, attachmentID) {
+		t.Fatalf("production asset integration prompt missing result attachment id %s: %s", attachmentID, plan.Prompt)
+	}
+}
+
+func TestProjectVisualCreatePlanRequiresAdoptedNodes(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	project := createProjectVisualTestProject(t, "Visual plan no adopted project")
+	createProjectVisualTestNode(t, project.ID, "scene", "Draft Forest", "draft", "")
+	createProjectVisualTestNode(t, project.ID, "prop", "Rejected Lantern", "rejected", "")
+	createInternalPlannerAgentForTest(t)
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/projects/"+project.ID+"/visual-board/create-plan", map[string]any{
+		"plan_mode": "production_asset_integration",
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreatePlanFromProjectVisualBoard(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("CreatePlanFromProjectVisualBoard: expected 400 without adopted nodes, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "at least one adopted visual node is required") {
+		t.Fatalf("unexpected no-adopted response: %s", w.Body.String())
 	}
 }
 
@@ -502,6 +903,35 @@ func createProjectVisualTestNode(t *testing.T, projectID, nodeType, title, statu
 		t.Fatalf("insert visual node with result: %v", err)
 	}
 	return nodeID
+}
+
+type queuedVisualGenerationForTest struct {
+	TaskID  string
+	IssueID string
+}
+
+func queueProjectVisualGenerationForTest(t *testing.T, projectID, nodeID, agentID string) queuedVisualGenerationForTest {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/projects/"+projectID+"/visual-nodes/"+nodeID+"/generate", map[string]any{
+		"agent_id": agentID,
+	})
+	req = withURLParams(req, "id", projectID, "nodeId", nodeID)
+	testHandler.GenerateProjectVisualNodeImage(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("queue visual generation: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		TaskID  string `json:"task_id"`
+		IssueID string `json:"issue_id"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode queued visual generation: %v", err)
+	}
+	if resp.TaskID == "" || resp.IssueID == "" {
+		t.Fatalf("queued visual generation missing ids: %#v", resp)
+	}
+	return queuedVisualGenerationForTest{TaskID: resp.TaskID, IssueID: resp.IssueID}
 }
 
 func createProjectVisualTestAttachment(t *testing.T, workspaceID, filename string) string {

@@ -44,8 +44,11 @@ type visualNodeResponse struct {
 	Type                   string              `json:"type"`
 	Status                 string              `json:"status"`
 	Title                  string              `json:"title"`
+	TitleZh                string              `json:"title_zh"`
 	Description            string              `json:"description"`
+	DescriptionZh          string              `json:"description_zh"`
 	Prompt                 string              `json:"prompt"`
+	PromptZh               string              `json:"prompt_zh"`
 	PositionX              float64             `json:"position_x"`
 	PositionY              float64             `json:"position_y"`
 	SourceRefs             json.RawMessage     `json:"source_refs"`
@@ -53,11 +56,36 @@ type visualNodeResponse struct {
 	ResultAttachmentID     *string             `json:"result_attachment_id"`
 	ResultAttachment       *AttachmentResponse `json:"result_attachment"`
 	ResultNote             string              `json:"result_note"`
+	ResultNoteZh           string              `json:"result_note_zh"`
 	GenerationAgentID      *string             `json:"generation_agent_id"`
 	GenerationTaskID       *string             `json:"generation_task_id"`
 	GenerationError        string              `json:"generation_error"`
+	GenerationErrorZh      string              `json:"generation_error_zh"`
 	CreatedAt              string              `json:"created_at"`
 	UpdatedAt              string              `json:"updated_at"`
+}
+
+type visualNodeGenerationResponse struct {
+	ID              string              `json:"id"`
+	TaskID          string              `json:"task_id"`
+	TaskStatus      string              `json:"task_status"`
+	IssueID         string              `json:"issue_id"`
+	IssueIdentifier string              `json:"issue_identifier"`
+	IssueTitle      string              `json:"issue_title"`
+	IssueStatus     string              `json:"issue_status"`
+	AttachmentID    *string             `json:"attachment_id"`
+	Attachment      *AttachmentResponse `json:"attachment"`
+	Note            string              `json:"note"`
+	NoteZh          string              `json:"note_zh"`
+	Error           string              `json:"error"`
+	ErrorZh         string              `json:"error_zh"`
+	IsCurrent       bool                `json:"is_current"`
+	CreatedAt       string              `json:"created_at"`
+	CompletedAt     string              `json:"completed_at"`
+}
+
+type listVisualNodeGenerationsResponse struct {
+	Generations []visualNodeGenerationResponse `json:"generations"`
 }
 
 type visualEdgeResponse struct {
@@ -90,17 +118,22 @@ type visualNodeRow struct {
 	Type                   string
 	Status                 string
 	Title                  string
+	TitleZh                string
 	Description            string
+	DescriptionZh          string
 	Prompt                 string
+	PromptZh               string
 	PositionX              float64
 	PositionY              float64
 	SourceRefs             []byte
 	ReferenceAttachmentIDs []pgtype.UUID
 	ResultAttachmentID     pgtype.UUID
 	ResultNote             string
+	ResultNoteZh           string
 	GenerationAgentID      pgtype.UUID
 	GenerationTaskID       pgtype.UUID
 	GenerationError        string
+	GenerationErrorZh      string
 	CreatedAt              pgtype.Timestamptz
 	UpdatedAt              pgtype.Timestamptz
 	ResultAttachment       *AttachmentResponse
@@ -126,15 +159,33 @@ type updateVisualBoardRequest struct {
 }
 
 type updateVisualNodeRequest struct {
-	ID          string          `json:"id"`
-	Type        string          `json:"type"`
-	Status      string          `json:"status"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Prompt      string          `json:"prompt"`
-	PositionX   float64         `json:"position_x"`
-	PositionY   float64         `json:"position_y"`
-	SourceRefs  json.RawMessage `json:"source_refs"`
+	ID            string          `json:"id"`
+	Type          string          `json:"type"`
+	Status        string          `json:"status"`
+	Title         string          `json:"title"`
+	TitleZh       string          `json:"title_zh"`
+	Description   string          `json:"description"`
+	DescriptionZh string          `json:"description_zh"`
+	Prompt        string          `json:"prompt"`
+	PromptZh      string          `json:"prompt_zh"`
+	PositionX     float64         `json:"position_x"`
+	PositionY     float64         `json:"position_y"`
+	SourceRefs    json.RawMessage `json:"source_refs"`
+}
+
+type createVisualNodeRequest struct {
+	Type          string          `json:"type"`
+	Title         string          `json:"title"`
+	TitleZh       string          `json:"title_zh"`
+	Description   string          `json:"description"`
+	DescriptionZh string          `json:"description_zh"`
+	Prompt        string          `json:"prompt"`
+	PromptZh      string          `json:"prompt_zh"`
+	PositionX     float64         `json:"position_x"`
+	PositionY     float64         `json:"position_y"`
+	SourceRefs    json.RawMessage `json:"source_refs"`
+	SourceNodeID  string          `json:"source_node_id"`
+	Relation      string          `json:"relation"`
 }
 
 type updateVisualEdgeRequest struct {
@@ -150,12 +201,16 @@ type generateVisualNodeRequest struct {
 
 type visualGenerationResultRequest struct {
 	AttachmentID string `json:"attachment_id"`
+	TaskID       string `json:"task_id"`
 	Note         string `json:"note"`
+	NoteZh       string `json:"note_zh"`
 	Error        string `json:"error"`
+	ErrorZh      string `json:"error_zh"`
 }
 
 type createVisualPlanRequest struct {
 	GameplayNotes string `json:"gameplay_notes"`
+	PlanMode      string `json:"plan_mode"`
 	Title         string `json:"title"`
 }
 
@@ -232,13 +287,27 @@ func (h *Handler) UpdateProjectVisualBoard(w http.ResponseWriter, r *http.Reques
 		}
 		_, err := h.DB.Exec(r.Context(), `
 			UPDATE project_visual_node
-			SET type = $1, status = $2, title = $3, description = $4, prompt = $5,
-			    position_x = $6, position_y = $7, source_refs = $8, updated_at = now()
-			WHERE id = $9 AND board_id = $10 AND workspace_id = $11 AND project_id = $12
-		`, nodeType, status, title, nodeReq.Description, nodeReq.Prompt, nodeReq.PositionX, nodeReq.PositionY,
-			normalizeJSONRaw(nodeReq.SourceRefs, "[]"), nodeID, board.ID, project.WorkspaceID, project.ID)
+			SET type = $1, status = $2, title = $3,
+			    title_zh = CASE WHEN $4 = '' THEN COALESCE(NULLIF(title_zh, ''), $3) ELSE $4 END,
+			    description = $5,
+			    description_zh = CASE WHEN $6 = '' THEN COALESCE(NULLIF(description_zh, ''), $5) ELSE $6 END,
+			    prompt = $7,
+			    prompt_zh = CASE WHEN $8 = '' THEN COALESCE(NULLIF(prompt_zh, ''), $7) ELSE $8 END,
+			    position_x = $9, position_y = $10, source_refs = $11, updated_at = now()
+			WHERE id = $12 AND board_id = $13 AND workspace_id = $14 AND project_id = $15
+		`, nodeType, status, title, strings.TrimSpace(nodeReq.TitleZh),
+			nodeReq.Description, strings.TrimSpace(nodeReq.DescriptionZh),
+			nodeReq.Prompt, strings.TrimSpace(nodeReq.PromptZh),
+			nodeReq.PositionX, nodeReq.PositionY, normalizeJSONRaw(nodeReq.SourceRefs, "[]"),
+			nodeID, board.ID, project.WorkspaceID, project.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update visual node")
+			return
+		}
+	}
+	if req.Edges != nil {
+		if err := h.syncVisualBoardEdges(r.Context(), board, project.WorkspaceID, project.ID, req.Edges); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
@@ -247,6 +316,259 @@ func (h *Handler) UpdateProjectVisualBoard(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to load visual board")
 		return
 	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) ClearProjectVisualBoard(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	board, err := h.ensureVisualBoard(r, project.WorkspaceID, project.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual board")
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear visual board")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM project_visual_edge
+		WHERE board_id = $1 AND workspace_id = $2 AND project_id = $3
+	`, board.ID, project.WorkspaceID, project.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear visual board")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM project_visual_node
+		WHERE board_id = $1 AND workspace_id = $2 AND project_id = $3
+	`, board.ID, project.WorkspaceID, project.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear visual board")
+		return
+	}
+	if err := tx.QueryRow(r.Context(), `
+		UPDATE project_visual_board
+		SET updated_at = now()
+		WHERE id = $1 AND workspace_id = $2 AND project_id = $3
+		RETURNING id, workspace_id, project_id, viewport, metadata, created_at, updated_at
+	`, board.ID, project.WorkspaceID, project.ID).Scan(&board.ID, &board.WorkspaceID, &board.ProjectID, &board.Viewport, &board.Metadata, &board.CreatedAt, &board.UpdatedAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear visual board")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear visual board")
+		return
+	}
+	resp, err := h.loadVisualBoardResponse(r, board)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual board")
+		return
+	}
+	h.publishProjectVisualBoardUpdated(project.WorkspaceID, project.ID, "cleared")
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) syncVisualBoardEdges(ctx context.Context, board visualBoardRow, workspaceID, projectID pgtype.UUID, edges []updateVisualEdgeRequest) error {
+	keep := map[string]struct{}{}
+	for _, edgeReq := range edges {
+		sourceID, err := util.ParseUUID(strings.TrimSpace(edgeReq.SourceNodeID))
+		if err != nil {
+			return fmt.Errorf("invalid visual edge source_node_id")
+		}
+		targetID, err := util.ParseUUID(strings.TrimSpace(edgeReq.TargetNodeID))
+		if err != nil {
+			return fmt.Errorf("invalid visual edge target_node_id")
+		}
+		if uuidToString(sourceID) == uuidToString(targetID) {
+			continue
+		}
+		relation := strings.TrimSpace(edgeReq.Relation)
+		if relation == "" {
+			relation = "reference"
+		}
+		if edgeID, err := util.ParseUUID(strings.TrimSpace(edgeReq.ID)); err == nil {
+			tag, err := h.DB.Exec(ctx, `
+				UPDATE project_visual_edge
+				SET source_node_id = $1, target_node_id = $2, relation = $3, updated_at = now()
+				WHERE id = $4 AND board_id = $5 AND workspace_id = $6 AND project_id = $7
+			`, sourceID, targetID, truncateRunes(relation, 80), edgeID, board.ID, workspaceID, projectID)
+			if err != nil {
+				return fmt.Errorf("update visual edge: %w", err)
+			}
+			if tag.RowsAffected() > 0 {
+				keep[uuidToString(edgeID)] = struct{}{}
+				continue
+			}
+		}
+		var inserted pgtype.UUID
+		err = h.DB.QueryRow(ctx, `
+			INSERT INTO project_visual_edge (
+				board_id, workspace_id, project_id, source_node_id, target_node_id, relation
+			)
+			SELECT $1, $2, $3, $4, $5, $6
+			WHERE EXISTS (
+				SELECT 1 FROM project_visual_node
+				WHERE id = $4 AND board_id = $1 AND workspace_id = $2 AND project_id = $3
+			)
+			AND EXISTS (
+				SELECT 1 FROM project_visual_node
+				WHERE id = $5 AND board_id = $1 AND workspace_id = $2 AND project_id = $3
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM project_visual_edge
+				WHERE board_id = $1 AND workspace_id = $2 AND project_id = $3
+				  AND source_node_id = $4 AND target_node_id = $5 AND relation = $6
+			)
+			RETURNING id
+		`, board.ID, workspaceID, projectID, sourceID, targetID, truncateRunes(relation, 80)).Scan(&inserted)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				continue
+			}
+			return fmt.Errorf("insert visual edge: %w", err)
+		}
+		keep[uuidToString(inserted)] = struct{}{}
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id
+		FROM project_visual_edge
+		WHERE board_id = $1 AND workspace_id = $2 AND project_id = $3
+	`, board.ID, workspaceID, projectID)
+	if err != nil {
+		return fmt.Errorf("list visual edges: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scan visual edge: %w", err)
+		}
+		if _, ok := keep[uuidToString(id)]; ok {
+			continue
+		}
+		if _, err := h.DB.Exec(ctx, `
+			DELETE FROM project_visual_edge
+			WHERE id = $1 AND board_id = $2 AND workspace_id = $3 AND project_id = $4
+		`, id, board.ID, workspaceID, projectID); err != nil {
+			return fmt.Errorf("delete visual edge: %w", err)
+		}
+	}
+	return rows.Err()
+}
+
+func (h *Handler) CreateProjectVisualNode(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	var req createVisualNodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	nodeType := normalizeVisualNodeType(req.Type)
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		writeError(w, http.StatusBadRequest, "node title is required")
+		return
+	}
+	board, err := h.ensureVisualBoard(r, project.WorkspaceID, project.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual board")
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create visual node")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var inserted pgtype.UUID
+	description := strings.TrimSpace(req.Description)
+	prompt := strings.TrimSpace(req.Prompt)
+	err = tx.QueryRow(r.Context(), `
+		INSERT INTO project_visual_node (
+			board_id, workspace_id, project_id, type, status, title, title_zh, description, description_zh, prompt, prompt_zh,
+			position_x, position_y, source_refs
+		)
+		VALUES ($1, $2, $3, $4, 'draft', $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		RETURNING id
+	`, board.ID, project.WorkspaceID, project.ID, nodeType, truncateRunes(title, 160),
+		visualTextOrFallback(req.TitleZh, title), description, visualTextOrFallback(req.DescriptionZh, description),
+		prompt, visualTextOrFallback(req.PromptZh, prompt), req.PositionX, req.PositionY,
+		normalizeJSONRaw(req.SourceRefs, "[]")).Scan(&inserted)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create visual node")
+		return
+	}
+	if strings.TrimSpace(req.SourceNodeID) != "" {
+		sourceNodeID, ok := parseUUIDOrBadRequest(w, req.SourceNodeID, "source_node_id")
+		if !ok {
+			return
+		}
+		if _, ok := h.loadVisualNode(w, r, project.WorkspaceID, project.ID, sourceNodeID); !ok {
+			return
+		}
+		relation := strings.TrimSpace(req.Relation)
+		if relation == "" {
+			relation = "variant_of"
+		}
+		if _, err := tx.Exec(r.Context(), `
+			INSERT INTO project_visual_edge (
+				board_id, workspace_id, project_id, source_node_id, target_node_id, relation
+			)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, board.ID, project.WorkspaceID, project.ID, sourceNodeID, inserted, relation); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to link visual node")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create visual node")
+		return
+	}
+	resp, err := h.loadVisualBoardResponse(r, board)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual board")
+		return
+	}
+	h.publishProjectVisualUpdated(project.WorkspaceID, project.ID, inserted, "created")
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (h *Handler) DeleteProjectVisualNode(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "visual node id")
+	if !ok {
+		return
+	}
+	board, err := h.ensureVisualBoard(r, project.WorkspaceID, project.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual board")
+		return
+	}
+	if _, ok := h.loadVisualNode(w, r, project.WorkspaceID, project.ID, nodeID); !ok {
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), `
+		DELETE FROM project_visual_node
+		WHERE id = $1 AND board_id = $2 AND workspace_id = $3 AND project_id = $4
+	`, nodeID, board.ID, project.WorkspaceID, project.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete visual node")
+		return
+	}
+	resp, err := h.loadVisualBoardResponse(r, board)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual board")
+		return
+	}
+	h.publishProjectVisualUpdated(project.WorkspaceID, project.ID, nodeID, "deleted")
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -466,7 +788,7 @@ func (h *Handler) GenerateProjectVisualNodeImage(w http.ResponseWriter, r *http.
 	_, err = tx.Exec(r.Context(), `
 		UPDATE project_visual_node
 		SET status = 'generating', generation_agent_id = $1, generation_task_id = $2,
-		    generation_error = '', updated_at = now()
+		    generation_error = '', generation_error_zh = '', updated_at = now()
 		WHERE id = $3 AND workspace_id = $4 AND project_id = $5
 	`, agentID, task.ID, node.ID, project.WorkspaceID, project.ID)
 	if err != nil {
@@ -493,6 +815,89 @@ func (h *Handler) GenerateProjectVisualNodeImage(w http.ResponseWriter, r *http.
 	})
 }
 
+func (h *Handler) ListProjectVisualNodeGenerations(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "visual node id")
+	if !ok {
+		return
+	}
+	node, ok := h.loadVisualNode(w, r, project.WorkspaceID, project.ID, nodeID)
+	if !ok {
+		return
+	}
+	generations, err := h.listVisualNodeGenerations(r, project.WorkspaceID, project.ID, node)
+	if err != nil {
+		slog.Warn("list visual node generations failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to list visual node generations")
+		return
+	}
+	writeJSON(w, http.StatusOK, listVisualNodeGenerationsResponse{Generations: generations})
+}
+
+func (h *Handler) RestoreProjectVisualNodeGeneration(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "visual node id")
+	if !ok {
+		return
+	}
+	generationID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "generationId"), "visual generation id")
+	if !ok {
+		return
+	}
+	_, ok = h.loadVisualNode(w, r, project.WorkspaceID, project.ID, nodeID)
+	if !ok {
+		return
+	}
+	var attachmentID pgtype.UUID
+	var note, noteZh string
+	var taskID, agentID pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT g.attachment_id, g.note, g.note_zh, g.task_id, atq.agent_id
+		FROM project_visual_node_generation g
+		LEFT JOIN agent_task_queue atq ON atq.id = g.task_id
+		WHERE g.id = $1 AND g.workspace_id = $2 AND g.project_id = $3 AND g.node_id = $4
+		  AND g.attachment_id IS NOT NULL
+	`, generationID, project.WorkspaceID, project.ID, nodeID).Scan(&attachmentID, &note, &noteZh, &taskID, &agentID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusNotFound, "visual generation result not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load visual generation")
+		return
+	}
+	_, err = h.DB.Exec(r.Context(), `
+		UPDATE project_visual_node
+		SET status = CASE WHEN status = 'generating' THEN 'draft' ELSE status END,
+		    result_attachment_id = $1, result_note = $2, result_note_zh = $3,
+		    generation_task_id = $4, generation_agent_id = $5,
+		    generation_error = '', generation_error_zh = '', updated_at = now()
+		WHERE id = $6 AND workspace_id = $7 AND project_id = $8
+	`, attachmentID, note, noteZh, taskID, agentID, nodeID, project.WorkspaceID, project.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to restore visual generation")
+		return
+	}
+	board, err := h.ensureVisualBoard(r, project.WorkspaceID, project.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual board")
+		return
+	}
+	resp, err := h.loadVisualBoardResponse(r, board)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load visual board")
+		return
+	}
+	h.publishProjectVisualUpdated(project.WorkspaceID, project.ID, nodeID, "restored")
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (h *Handler) CompleteProjectVisualNodeGeneration(w http.ResponseWriter, r *http.Request) {
 	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
 	if !ok {
@@ -507,18 +912,38 @@ func (h *Handler) CompleteProjectVisualNodeGeneration(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	node, ok := h.loadVisualNode(w, r, project.WorkspaceID, project.ID, nodeID)
+	if !ok {
+		return
+	}
+	taskID, issueID, _, ok := h.visualGenerationTaskForCompletion(w, r, project.WorkspaceID, project.ID, node, req.TaskID)
+	if !ok {
+		return
+	}
 	if strings.TrimSpace(req.Error) != "" {
+		errorText := strings.TrimSpace(req.Error)
+		errorZh := visualTextOrFallback(req.ErrorZh, errorText)
+		note := strings.TrimSpace(req.Note)
+		noteZh := visualTextOrFallback(req.NoteZh, note)
 		tag, err := h.DB.Exec(r.Context(), `
 			UPDATE project_visual_node
-			SET status = 'failed', generation_error = $1, result_note = $2, updated_at = now()
-			WHERE id = $3 AND workspace_id = $4 AND project_id = $5
-		`, strings.TrimSpace(req.Error), strings.TrimSpace(req.Note), nodeID, project.WorkspaceID, project.ID)
+			SET status = 'failed', generation_error = $1, generation_error_zh = $2,
+			    result_note = $3, result_note_zh = $4,
+			    generation_task_id = CASE WHEN $5::uuid IS NULL THEN generation_task_id ELSE $5 END,
+			    updated_at = now()
+			WHERE id = $6 AND workspace_id = $7 AND project_id = $8
+		`, errorText, errorZh, note, noteZh, taskID, nodeID, project.WorkspaceID, project.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update visual node")
 			return
 		}
 		if tag.RowsAffected() == 0 {
 			writeError(w, http.StatusNotFound, "visual node not found")
+			return
+		}
+		if err := h.recordVisualNodeGeneration(r.Context(), node, taskID, issueID, pgtype.UUID{}, note, noteZh, errorText, errorZh); err != nil {
+			slog.Warn("record visual node generation failed", append(logger.RequestAttrs(r), "node_id", uuidToString(nodeID), "task_id", uuidToString(taskID), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to record visual generation")
 			return
 		}
 		h.publishProjectVisualUpdated(project.WorkspaceID, project.ID, nodeID, "failed")
@@ -533,18 +958,30 @@ func (h *Handler) CompleteProjectVisualNodeGeneration(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, "attachment_id does not refer to an attachment of this workspace")
 		return
 	}
+	if issueID.Valid {
+		h.linkAttachmentsByIssueIDs(r.Context(), issueID, project.WorkspaceID, []pgtype.UUID{attachmentID})
+	}
+	note := strings.TrimSpace(req.Note)
+	noteZh := visualTextOrFallback(req.NoteZh, note)
 	tag, err := h.DB.Exec(r.Context(), `
 		UPDATE project_visual_node
 		SET status = CASE WHEN status = 'generating' THEN 'draft' ELSE status END,
-		    result_attachment_id = $1, result_note = $2, generation_error = '', updated_at = now()
-		WHERE id = $3 AND workspace_id = $4 AND project_id = $5
-	`, attachmentID, strings.TrimSpace(req.Note), nodeID, project.WorkspaceID, project.ID)
+		    result_attachment_id = $1, result_note = $2, result_note_zh = $3,
+		    generation_task_id = CASE WHEN $4::uuid IS NULL THEN generation_task_id ELSE $4 END,
+		    generation_error = '', generation_error_zh = '', updated_at = now()
+		WHERE id = $5 AND workspace_id = $6 AND project_id = $7
+	`, attachmentID, note, noteZh, taskID, nodeID, project.WorkspaceID, project.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update visual node")
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "visual node not found")
+		return
+	}
+	if err := h.recordVisualNodeGeneration(r.Context(), node, taskID, issueID, attachmentID, note, noteZh, "", ""); err != nil {
+		slog.Warn("record visual node generation failed", append(logger.RequestAttrs(r), "node_id", uuidToString(nodeID), "task_id", uuidToString(taskID), "attachment_id", uuidToString(attachmentID), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to record visual generation")
 		return
 	}
 	h.publishProjectVisualUpdated(project.WorkspaceID, project.ID, nodeID, "completed")
@@ -584,7 +1021,8 @@ func (h *Handler) CreatePlanFromProjectVisualBoard(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, "at least one adopted visual node is required")
 		return
 	}
-	prompt := buildVisualPlanPrompt(project.Title, adopted, req.GameplayNotes)
+	planMode := normalizeVisualPlanMode(req.PlanMode)
+	prompt := buildVisualPlanPrompt(project.Title, adopted, req.GameplayNotes, planMode)
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
 		title = "Plan from visual canvas: " + project.Title
@@ -675,9 +1113,10 @@ func (h *Handler) loadVisualBoardResponse(r *http.Request, board visualBoardRow)
 func (h *Handler) listVisualNodes(r *http.Request, workspaceID, projectID pgtype.UUID) ([]visualNodeRow, error) {
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT n.id, n.board_id, n.workspace_id, n.project_id, n.type, n.status, n.title,
-		       n.description, n.prompt, n.position_x, n.position_y, n.source_refs,
-		       n.reference_attachment_ids, n.result_attachment_id, n.result_note,
-		       n.generation_agent_id, n.generation_task_id, n.generation_error,
+		       n.title_zh, n.description, n.description_zh, n.prompt, n.prompt_zh,
+		       n.position_x, n.position_y, n.source_refs,
+		       n.reference_attachment_ids, n.result_attachment_id, n.result_note, n.result_note_zh,
+		       n.generation_agent_id, n.generation_task_id, n.generation_error, n.generation_error_zh,
 		       n.created_at, n.updated_at
 		FROM project_visual_node n
 		WHERE n.workspace_id = $1 AND n.project_id = $2
@@ -691,8 +1130,10 @@ func (h *Handler) listVisualNodes(r *http.Request, workspaceID, projectID pgtype
 	for rows.Next() {
 		var n visualNodeRow
 		if err := rows.Scan(&n.ID, &n.BoardID, &n.WorkspaceID, &n.ProjectID, &n.Type, &n.Status, &n.Title,
-			&n.Description, &n.Prompt, &n.PositionX, &n.PositionY, &n.SourceRefs, &n.ReferenceAttachmentIDs,
-			&n.ResultAttachmentID, &n.ResultNote, &n.GenerationAgentID, &n.GenerationTaskID, &n.GenerationError,
+			&n.TitleZh, &n.Description, &n.DescriptionZh, &n.Prompt, &n.PromptZh,
+			&n.PositionX, &n.PositionY, &n.SourceRefs, &n.ReferenceAttachmentIDs,
+			&n.ResultAttachmentID, &n.ResultNote, &n.ResultNoteZh,
+			&n.GenerationAgentID, &n.GenerationTaskID, &n.GenerationError, &n.GenerationErrorZh,
 			&n.CreatedAt, &n.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -734,14 +1175,16 @@ func (h *Handler) loadVisualNode(w http.ResponseWriter, r *http.Request, workspa
 	var n visualNodeRow
 	err := h.DB.QueryRow(r.Context(), `
 		SELECT id, board_id, workspace_id, project_id, type, status, title, description,
-		       prompt, position_x, position_y, source_refs, reference_attachment_ids,
-		       result_attachment_id, result_note, generation_agent_id, generation_task_id,
-		       generation_error, created_at, updated_at
+		       title_zh, description_zh, prompt, prompt_zh, position_x, position_y, source_refs, reference_attachment_ids,
+		       result_attachment_id, result_note, result_note_zh, generation_agent_id, generation_task_id,
+		       generation_error, generation_error_zh, created_at, updated_at
 		FROM project_visual_node
 		WHERE id = $1 AND workspace_id = $2 AND project_id = $3
 	`, nodeID, workspaceID, projectID).Scan(&n.ID, &n.BoardID, &n.WorkspaceID, &n.ProjectID, &n.Type, &n.Status,
-		&n.Title, &n.Description, &n.Prompt, &n.PositionX, &n.PositionY, &n.SourceRefs, &n.ReferenceAttachmentIDs,
-		&n.ResultAttachmentID, &n.ResultNote, &n.GenerationAgentID, &n.GenerationTaskID, &n.GenerationError,
+		&n.Title, &n.Description, &n.TitleZh, &n.DescriptionZh, &n.Prompt, &n.PromptZh,
+		&n.PositionX, &n.PositionY, &n.SourceRefs, &n.ReferenceAttachmentIDs,
+		&n.ResultAttachmentID, &n.ResultNote, &n.ResultNoteZh, &n.GenerationAgentID, &n.GenerationTaskID,
+		&n.GenerationError, &n.GenerationErrorZh,
 		&n.CreatedAt, &n.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -763,14 +1206,19 @@ func (h *Handler) visualNodeToResponse(n visualNodeRow) visualNodeResponse {
 		Type:                   n.Type,
 		Status:                 n.Status,
 		Title:                  n.Title,
+		TitleZh:                n.TitleZh,
 		Description:            n.Description,
+		DescriptionZh:          n.DescriptionZh,
 		Prompt:                 n.Prompt,
+		PromptZh:               n.PromptZh,
 		PositionX:              n.PositionX,
 		PositionY:              n.PositionY,
 		SourceRefs:             json.RawMessage(defaultJSON(n.SourceRefs, "[]")),
 		ReferenceAttachmentIDs: uuidSliceToStrings(n.ReferenceAttachmentIDs),
 		ResultNote:             n.ResultNote,
+		ResultNoteZh:           n.ResultNoteZh,
 		GenerationError:        n.GenerationError,
+		GenerationErrorZh:      n.GenerationErrorZh,
 		CreatedAt:              timestampToString(n.CreatedAt),
 		UpdatedAt:              timestampToString(n.UpdatedAt),
 		ResultAttachment:       n.ResultAttachment,
@@ -804,6 +1252,151 @@ func visualEdgeToResponse(e visualEdgeRow) visualEdgeResponse {
 	}
 }
 
+func (h *Handler) visualGenerationTaskForCompletion(w http.ResponseWriter, r *http.Request, workspaceID, projectID pgtype.UUID, node visualNodeRow, requestedTaskID string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, bool) {
+	taskID := node.GenerationTaskID
+	if strings.TrimSpace(requestedTaskID) != "" {
+		parsed, ok := parseUUIDOrBadRequest(w, requestedTaskID, "task_id")
+		if !ok {
+			return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
+		}
+		taskID = parsed
+	}
+	if !taskID.Valid {
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, true
+	}
+	var issueID, agentID pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT atq.issue_id, atq.agent_id
+		FROM agent_task_queue atq
+		JOIN issue i ON i.id = atq.issue_id
+		WHERE atq.id = $1
+		  AND i.workspace_id = $2
+		  AND i.project_id = $3
+		  AND atq.context->>'type' = $4
+		  AND atq.context->>'node_id' = $5
+	`, taskID, workspaceID, projectID, visualTaskTypeGenerate, uuidToString(node.ID)).Scan(&issueID, &agentID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusBadRequest, "task_id does not refer to this visual node generation")
+			return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load visual generation task")
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
+	}
+	return taskID, issueID, agentID, true
+}
+
+func (h *Handler) recordVisualNodeGeneration(ctx context.Context, node visualNodeRow, taskID, issueID, attachmentID pgtype.UUID, note, noteZh, errorText, errorZh string) error {
+	if taskID.Valid {
+		_, err := h.DB.Exec(ctx, `
+			INSERT INTO project_visual_node_generation (
+				board_id, workspace_id, project_id, node_id, task_id, issue_id, attachment_id,
+				note, note_zh, error, error_zh
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			ON CONFLICT (task_id) DO UPDATE SET
+				issue_id = EXCLUDED.issue_id,
+				attachment_id = EXCLUDED.attachment_id,
+				note = EXCLUDED.note,
+				note_zh = EXCLUDED.note_zh,
+				error = EXCLUDED.error,
+				error_zh = EXCLUDED.error_zh,
+				updated_at = now()
+		`, node.BoardID, node.WorkspaceID, node.ProjectID, node.ID, taskID, issueID, attachmentID, note, noteZh, errorText, errorZh)
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
+		INSERT INTO project_visual_node_generation (
+			board_id, workspace_id, project_id, node_id, issue_id, attachment_id,
+			note, note_zh, error, error_zh
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, node.BoardID, node.WorkspaceID, node.ProjectID, node.ID, issueID, attachmentID, note, noteZh, errorText, errorZh)
+	return err
+}
+
+func (h *Handler) listVisualNodeGenerations(r *http.Request, workspaceID, projectID pgtype.UUID, node visualNodeRow) ([]visualNodeGenerationResponse, error) {
+	prefix := h.getIssuePrefix(r.Context(), workspaceID)
+	currentAttachmentID := uuidToString(node.ResultAttachmentID)
+	rows, err := h.DB.Query(r.Context(), `
+		WITH generation_rows AS (
+			SELECT g.id, g.task_id, COALESCE(atq.status, '') AS task_status, g.issue_id,
+			       COALESCE(i.number, 0) AS number, COALESCE(i.title, '') AS title, COALESCE(i.status, '') AS issue_status,
+			       g.attachment_id, g.note, g.note_zh, g.error, g.error_zh,
+			       g.created_at, COALESCE(atq.completed_at, g.updated_at) AS completed_at
+			FROM project_visual_node_generation g
+			LEFT JOIN agent_task_queue atq ON atq.id = g.task_id
+			LEFT JOIN issue i ON i.id = g.issue_id
+			WHERE g.workspace_id = $1 AND g.project_id = $2 AND g.node_id = $3
+		),
+		task_rows AS (
+			SELECT NULL::uuid AS id, atq.id AS task_id, atq.status AS task_status, atq.issue_id,
+			       i.number, i.title, i.status AS issue_status,
+			       NULL::uuid AS attachment_id, ''::text AS note, ''::text AS note_zh,
+			       COALESCE(atq.error, '')::text AS error, COALESCE(atq.error, '')::text AS error_zh,
+			       atq.created_at, atq.completed_at
+			FROM agent_task_queue atq
+			JOIN issue i ON i.id = atq.issue_id
+			LEFT JOIN project_visual_node_generation g ON g.task_id = atq.id
+			WHERE i.workspace_id = $1 AND i.project_id = $2
+			  AND atq.context->>'type' = $4
+			  AND atq.context->>'node_id' = $5
+			  AND g.id IS NULL
+		)
+		SELECT id, task_id, task_status, issue_id, number, title, issue_status,
+		       attachment_id, note, note_zh, error, error_zh, created_at, completed_at
+		FROM generation_rows
+		UNION ALL
+		SELECT id, task_id, task_status, issue_id, number, title, issue_status,
+		       attachment_id, note, note_zh, error, error_zh, created_at, completed_at
+		FROM task_rows
+		ORDER BY created_at DESC
+	`, workspaceID, projectID, node.ID, visualTaskTypeGenerate, uuidToString(node.ID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []visualNodeGenerationResponse
+	for rows.Next() {
+		var generationID, taskID, issueID, attachmentID pgtype.UUID
+		var taskStatus, issueTitle, issueStatus, note, noteZh, errorText, errorZh string
+		var issueNumber int32
+		var createdAt, completedAt pgtype.Timestamptz
+		if err := rows.Scan(&generationID, &taskID, &taskStatus, &issueID, &issueNumber, &issueTitle, &issueStatus,
+			&attachmentID, &note, &noteZh, &errorText, &errorZh, &createdAt, &completedAt); err != nil {
+			return nil, err
+		}
+		item := visualNodeGenerationResponse{
+			ID:          uuidToString(generationID),
+			TaskID:      uuidToString(taskID),
+			TaskStatus:  taskStatus,
+			IssueID:     uuidToString(issueID),
+			IssueTitle:  issueTitle,
+			IssueStatus: issueStatus,
+			Note:        note,
+			NoteZh:      noteZh,
+			Error:       errorText,
+			ErrorZh:     errorZh,
+			CreatedAt:   timestampToString(createdAt),
+			CompletedAt: timestampToString(completedAt),
+		}
+		if issueID.Valid && issueNumber > 0 {
+			item.IssueIdentifier = fmt.Sprintf("%s-%d", prefix, issueNumber)
+		}
+		if attachmentID.Valid {
+			v := uuidToString(attachmentID)
+			item.AttachmentID = &v
+			item.IsCurrent = v != "" && v == currentAttachmentID
+			if att, err := h.Queries.GetAttachment(r.Context(), db.GetAttachmentParams{ID: attachmentID, WorkspaceID: workspaceID}); err == nil {
+				resp := h.attachmentToResponse(att)
+				item.Attachment = &resp
+			}
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 type visualNodeCandidate struct {
 	NodeType    string
 	Title       string
@@ -823,9 +1416,12 @@ type visualBoardExtractNode struct {
 	Type               string          `json:"type"`
 	NodeType           string          `json:"node_type"`
 	Title              string          `json:"title"`
+	TitleZh            string          `json:"title_zh"`
 	Description        string          `json:"description"`
+	DescriptionZh      string          `json:"description_zh"`
 	VisualBrief        string          `json:"visual_brief"`
 	Prompt             string          `json:"prompt"`
+	PromptZh           string          `json:"prompt_zh"`
 	SourceRefs         json.RawMessage `json:"source_refs"`
 	SourceSlugs        []string        `json:"source_slugs"`
 	ExtractedFacts     []string        `json:"extracted_facts"`
@@ -943,6 +1539,13 @@ func visualNodeGenerateIssueDescription(projectTitle string, node visualNodeRow)
 	return strings.Join([]string{
 		fmt.Sprintf("Generate a visual asset for %s.", title),
 		"",
+		"Required pipeline:",
+		"- Use the `game-asset-pipeline` skill as the production contract for style docs, rule docs, manifest, bounded generation, deterministic validation, QA sheets, retry notes, and handoff.",
+		"- For character, generated-variant, and animation nodes, the selected handoff asset must preserve transparency: PNG/WebP with alpha and no baked scene/background unless the node explicitly asks for an environment background.",
+		"- When using GPT Image 2 for transparent game assets, generate on a flat removable chroma-key background and remove the key locally, matching the `game-asset-pipeline` transparency rule.",
+		"- For animation work, produce the same class of deliverables inside this visual-node workflow: animation manifest, spritesheet, per-action previews, validation output, QA notes, and final handoff paths.",
+		"- Keep the work inside the current Multica visual-node issue and completion flow.",
+		"",
 		"Visual node:",
 		fmt.Sprintf("- ID: %s", uuidToString(node.ID)),
 		fmt.Sprintf("- Type: %s", node.Type),
@@ -952,7 +1555,8 @@ func visualNodeGenerateIssueDescription(projectTitle string, node visualNodeRow)
 		strings.TrimSpace(node.Prompt),
 		"",
 		"Expected output:",
-		"- Create or obtain a usable image asset for this visual node.",
+		"- Create or obtain a usable image or animation asset for this visual node.",
+		"- For character/animation deliverables, do not accept a baked background; verify alpha/transparent-pixel hygiene before completion.",
 		"- Upload the generated image through `multica visual-node complete`.",
 		"- If generation fails, complete the visual node with an explicit error.",
 	}, "\n")
@@ -1019,6 +1623,9 @@ func normalizeVisualBoardExtractResult(result visualBoardExtractResult) visualBo
 		if strings.TrimSpace(node.Prompt) == "" && strings.TrimSpace(node.VisualBrief) != "" {
 			node.Prompt = strings.TrimSpace(node.VisualBrief)
 		}
+		node.TitleZh = visualTextOrFallback(node.TitleZh, node.Title)
+		node.DescriptionZh = visualTextOrFallback(node.DescriptionZh, node.Description)
+		node.PromptZh = visualTextOrFallback(node.PromptZh, node.Prompt)
 		if len(node.SourceRefs) == 0 && len(node.SourceSlugs) > 0 {
 			refs := make([]map[string]string, 0, len(node.SourceSlugs))
 			for _, slug := range node.SourceSlugs {
@@ -1067,6 +1674,14 @@ func compactStringList(values []string) []string {
 		}
 	}
 	return out
+}
+
+func visualTextOrFallback(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func (h *Handler) applyVisualBoardExtractCompleted(ctx context.Context, task db.AgentTaskQueue, output string) {
@@ -1129,6 +1744,9 @@ func (h *Handler) applyVisualBoardExtractCompleted(ctx context.Context, task db.
 		if prompt == "" {
 			prompt = fmt.Sprintf("Create a production-ready %s visual asset for %q. Use the Project Wiki context and keep the result coherent with adjacent visual nodes.", nodeType, title)
 		}
+		titleZh := visualTextOrFallback(node.TitleZh, title)
+		descriptionZh := visualTextOrFallback(node.DescriptionZh, description)
+		promptZh := visualTextOrFallback(node.PromptZh, prompt)
 		x := node.PositionX
 		y := node.PositionY
 		if x == 0 && y == 0 {
@@ -1139,12 +1757,12 @@ func (h *Handler) applyVisualBoardExtractCompleted(ctx context.Context, task db.
 		var inserted pgtype.UUID
 		err := tx.QueryRow(ctx, `
 			INSERT INTO project_visual_node (
-				board_id, workspace_id, project_id, type, status, title, description, prompt,
+				board_id, workspace_id, project_id, type, status, title, title_zh, description, description_zh, prompt, prompt_zh,
 				position_x, position_y, source_refs
 			)
-			VALUES ($1, $2, $3, $4, 'draft', $5, $6, $7, $8, $9, $10)
+			VALUES ($1, $2, $3, $4, 'draft', $5, $6, $7, $8, $9, $10, $11, $12, $13)
 			RETURNING id
-		`, boardID, workspaceID, projectID, nodeType, truncateRunes(title, 160), description, prompt, x, y, sourceRefs).Scan(&inserted)
+		`, boardID, workspaceID, projectID, nodeType, truncateRunes(title, 160), titleZh, description, descriptionZh, prompt, promptZh, x, y, sourceRefs).Scan(&inserted)
 		if err != nil {
 			slog.Warn("visual board extract completion: insert node failed", "task_id", uuidToString(task.ID), "error", err)
 			return
@@ -1248,21 +1866,79 @@ func (h *Handler) markVisualBoardExtractFailed(ctx context.Context, visualCtx vi
 	h.publishProjectVisualBoardUpdated(workspaceID, projectID, "failed")
 }
 
-func buildVisualPlanPrompt(projectTitle string, nodes []visualNodeRow, gameplayNotes string) string {
+func buildVisualPlanPrompt(projectTitle string, nodes []visualNodeRow, gameplayNotes, planMode string) string {
+	if normalizeVisualPlanMode(planMode) == "production_asset_integration" {
+		return buildProductionAssetIntegrationPlanPrompt(projectTitle, nodes, gameplayNotes)
+	}
+	return buildPlayablePrototypePlanPrompt(projectTitle, nodes, gameplayNotes)
+}
+
+func buildPlayablePrototypePlanPrompt(projectTitle string, nodes []visualNodeRow, gameplayNotes string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Project visual canvas has been reviewed for %q. Create an implementation plan from adopted visual nodes only.\n\n", projectTitle)
+	fmt.Fprintf(&b, "Project visual canvas has been reviewed for %q. Create a playable prototype implementation plan from adopted visual nodes only.\n\n", projectTitle)
+	writeAdoptedVisualNodes(&b, nodes)
+	writeVisualGameplayNotes(&b, gameplayNotes)
+	b.WriteString("\nPlan mode: playable_prototype.\n")
+	b.WriteString("- Create a visual_asset_manifest that maps characters, pets, backgrounds, props, clues, map points, UI states, and animation/status needs to placeholder assets.\n")
+	b.WriteString("- Use procedural, CSS, SVG, Canvas, or pixel-style placeholder assets for the current implementation slice.\n")
+	b.WriteString("- Implement UI and gameplay directly with the current project technology stack; do not wait for final generated art assets.\n")
+	b.WriteString("- The delivered experience must be a runnable, verifiable, mostly non-text visual prototype, not a text-card specification.\n")
+	b.WriteString("- Acceptance criteria must verify that users can complete one full Lost Pet recovery flow with visual characters, pet, locations, clues, progress, and feedback.\n")
+	b.WriteString("\nExclude every draft or rejected visual node. Treat adopted visual nodes as art direction and context for the placeholder-driven prototype.\n")
+	return b.String()
+}
+
+func buildProductionAssetIntegrationPlanPrompt(projectTitle string, nodes []visualNodeRow, gameplayNotes string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Project visual canvas has been reviewed for %q. Create a production asset integration plan from adopted visual nodes only.\n\n", projectTitle)
+	writeAdoptedVisualNodes(&b, nodes)
+	writeVisualGameplayNotes(&b, gameplayNotes)
+	b.WriteString("\nPlan mode: production_asset_integration.\n")
+	b.WriteString("- Do not create final asset generation tasks and do not use game-asset-pipeline to produce new images in this plan.\n")
+	b.WriteString("- Treat each adopted visual node result_attachment_id and result_attachment as the formal asset input selected from the visual node workflow.\n")
+	b.WriteString("- Create an asset replacement map that connects visual board assets to concrete in-game files, components, scenes, UI states, animation/status uses, and replacement points.\n")
+	b.WriteString("- Include import/adaptation work for file placement, sizing, transparency/alpha, format validation, animation or state mapping, and regression checks.\n")
+	b.WriteString("- If an adopted node lacks a result attachment, mark it as missing an integration-ready asset that must return to visual node generation/selection first; do not plan automatic asset production.\n")
+	b.WriteString("- Focus on replacing the current game placeholders with the current visual board results, not rebuilding gameplay or producing new art.\n")
+	b.WriteString("\nExclude every draft or rejected visual node.\n")
+	return b.String()
+}
+
+func writeAdoptedVisualNodes(b *strings.Builder, nodes []visualNodeRow) {
 	b.WriteString("Adopted visual nodes:\n")
 	for _, node := range nodes {
-		fmt.Fprintf(&b, "- [%s] %s\n  Description: %s\n  Prompt: %s\n", node.Type, node.Title, node.Description, node.Prompt)
+		fmt.Fprintf(b, "- [%s] %s\n  Description: %s\n  Prompt: %s\n", node.Type, node.Title, node.Description, node.Prompt)
+		if node.TitleZh != "" {
+			fmt.Fprintf(b, "  Title zh: %s\n", node.TitleZh)
+		}
+		if node.DescriptionZh != "" {
+			fmt.Fprintf(b, "  Description zh: %s\n", node.DescriptionZh)
+		}
+		if node.PromptZh != "" {
+			fmt.Fprintf(b, "  Prompt zh: %s\n", node.PromptZh)
+		}
 		if node.ResultAttachmentID.Valid {
-			fmt.Fprintf(&b, "  Result attachment: %s\n", uuidToString(node.ResultAttachmentID))
+			fmt.Fprintf(b, "  Result attachment id: %s\n", uuidToString(node.ResultAttachmentID))
+		}
+		if node.ResultAttachment != nil {
+			fmt.Fprintf(b, "  Result attachment: %s (%s)\n", node.ResultAttachment.Filename, node.ResultAttachment.ContentType)
 		}
 	}
+}
+
+func writeVisualGameplayNotes(b *strings.Builder, gameplayNotes string) {
 	if strings.TrimSpace(gameplayNotes) != "" {
-		fmt.Fprintf(&b, "\nGameplay notes:\n%s\n", strings.TrimSpace(gameplayNotes))
+		fmt.Fprintf(b, "\nGameplay notes:\n%s\n", strings.TrimSpace(gameplayNotes))
 	}
-	b.WriteString("\nExclude every draft or rejected visual node. Treat visual nodes as art direction and context; convert only gameplay/engineering work into issues.\n")
-	return b.String()
+}
+
+func normalizeVisualPlanMode(value string) string {
+	switch strings.TrimSpace(value) {
+	case "production_asset_integration":
+		return "production_asset_integration"
+	default:
+		return "playable_prototype"
+	}
 }
 
 func normalizeJSONRaw(raw json.RawMessage, fallback string) json.RawMessage {
@@ -1281,7 +1957,7 @@ func defaultJSON(raw []byte, fallback string) []byte {
 
 func normalizeVisualNodeType(value string) string {
 	switch value {
-	case "character", "scene", "ui_element", "prop", "reference", "gameplay_note", "generated_variant":
+	case "character", "scene", "ui_element", "prop", "reference", "gameplay_note", "generated_variant", "animation":
 		return value
 	case "character_concept":
 		return "character"

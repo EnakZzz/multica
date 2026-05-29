@@ -30,7 +30,9 @@ func init() {
 	visualNodeCompleteCmd.Flags().String("project", "", "Project ID that owns the node")
 	visualNodeCompleteCmd.Flags().String("attachment", "", "Local generated image path to upload")
 	visualNodeCompleteCmd.Flags().String("note", "", "Short generation note")
+	visualNodeCompleteCmd.Flags().String("note-zh", "", "Short Chinese generation note for human display")
 	visualNodeCompleteCmd.Flags().String("error", "", "Failure reason")
+	visualNodeCompleteCmd.Flags().String("error-zh", "", "Chinese failure reason for human display")
 }
 
 func runVisualNodeComplete(cmd *cobra.Command, args []string) error {
@@ -45,16 +47,23 @@ func runVisualNodeComplete(cmd *cobra.Command, args []string) error {
 	}
 	attachmentPath, _ := cmd.Flags().GetString("attachment")
 	note, _ := cmd.Flags().GetString("note")
+	noteZh, _ := cmd.Flags().GetString("note-zh")
 	errorText, _ := cmd.Flags().GetString("error")
+	errorZh, _ := cmd.Flags().GetString("error-zh")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	payload := map[string]any{
-		"note": strings.TrimSpace(note),
+		"note":    strings.TrimSpace(note),
+		"note_zh": strings.TrimSpace(noteZh),
+	}
+	if taskID := strings.TrimSpace(os.Getenv("MULTICA_TASK_ID")); taskID != "" {
+		payload["task_id"] = taskID
 	}
 	if strings.TrimSpace(errorText) != "" {
 		payload["error"] = strings.TrimSpace(errorText)
+		payload["error_zh"] = strings.TrimSpace(errorZh)
 	} else {
 		if strings.TrimSpace(attachmentPath) == "" {
 			return fmt.Errorf("--attachment is required unless --error is provided")

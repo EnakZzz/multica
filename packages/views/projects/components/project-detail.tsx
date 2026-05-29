@@ -1395,7 +1395,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 onClick={() => setActiveTab("visual")}
               >
                 <ImageIcon className="mr-1.5 h-3.5 w-3.5" />
-                Visual
+                Visual Board
               </Button>
             </div>
             {activeTab === "issues" ? (
