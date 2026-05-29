@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,10 +47,27 @@ type ProjectKnowledgeService struct {
 }
 
 func NewProjectKnowledgeService(q *db.Queries, tx TxStarter, embedder Embedder) *ProjectKnowledgeService {
-	if embedder == nil {
-		embedder = NewOpenAICompatibleEmbedderFromEnv()
+	if isNilEmbedder(embedder) {
+		if envEmbedder := NewOpenAICompatibleEmbedderFromEnv(); envEmbedder != nil {
+			embedder = envEmbedder
+		} else {
+			embedder = nil
+		}
 	}
 	return &ProjectKnowledgeService{Queries: q, Tx: tx, Embedder: embedder}
+}
+
+func isNilEmbedder(embedder Embedder) bool {
+	if embedder == nil {
+		return true
+	}
+	value := reflect.ValueOf(embedder)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 type OpenAICompatibleEmbedder struct {
@@ -89,10 +107,16 @@ func NewOpenAICompatibleEmbedderFromEnv() *OpenAICompatibleEmbedder {
 }
 
 func (e *OpenAICompatibleEmbedder) Model() string {
+	if e == nil {
+		return ""
+	}
 	return e.ModelName
 }
 
 func (e *OpenAICompatibleEmbedder) Dimensions() int {
+	if e == nil {
+		return 0
+	}
 	return e.DimensionsN
 }
 
@@ -147,6 +171,10 @@ func (e *OpenAICompatibleEmbedder) Embed(ctx context.Context, input string) ([]f
 	return decoded.Data[0].Embedding, nil
 }
 
+func (s *ProjectKnowledgeService) EmbeddingsConfigured() bool {
+	return s != nil && !isNilEmbedder(s.Embedder)
+}
+
 type WikiPage struct {
 	ID          string          `json:"id"`
 	WorkspaceID string          `json:"workspace_id"`
@@ -197,19 +225,43 @@ type KnowledgeSearchResult struct {
 	SourceRefs   json.RawMessage `json:"source_refs,omitempty"`
 }
 
+type KnowledgeSearchResultSet struct {
+	Results        []KnowledgeSearchResult `json:"results"`
+	SearchMode     string                  `json:"search_mode"`
+	EmbeddingModel string                  `json:"embedding_model,omitempty"`
+	FallbackUsed   bool                    `json:"fallback_used"`
+}
+
 type RelevantKnowledge struct {
-	TargetType string  `json:"target_type"`
-	ID         string  `json:"id"`
-	Slug       string  `json:"slug,omitempty"`
-	Kind       string  `json:"kind"`
-	Outcome    string  `json:"outcome"`
-	Title      string  `json:"title"`
-	Summary    string  `json:"summary"`
-	IssueID    string  `json:"issue_id,omitempty"`
-	TaskID     string  `json:"task_id,omitempty"`
-	CommentID  string  `json:"comment_id,omitempty"`
-	Confidence int32   `json:"confidence"`
-	Score      float64 `json:"score"`
+	TargetType   string   `json:"target_type"`
+	ID           string   `json:"id"`
+	Slug         string   `json:"slug,omitempty"`
+	Kind         string   `json:"kind"`
+	Outcome      string   `json:"outcome"`
+	Title        string   `json:"title"`
+	Summary      string   `json:"summary"`
+	IssueID      string   `json:"issue_id,omitempty"`
+	TaskID       string   `json:"task_id,omitempty"`
+	CommentID    string   `json:"comment_id,omitempty"`
+	Confidence   int32    `json:"confidence"`
+	Score        float64  `json:"score"`
+	MatchType    string   `json:"match_type,omitempty"`
+	VectorScore  *float64 `json:"vector_score,omitempty"`
+	KeywordScore *float64 `json:"keyword_score,omitempty"`
+	Snippet      string   `json:"snippet,omitempty"`
+	SourceReason string   `json:"source_reason,omitempty"`
+}
+
+type EmbeddingBackfillResult struct {
+	Queued  int `json:"queued"`
+	Skipped int `json:"skipped"`
+	Failed  int `json:"failed"`
+}
+
+type EmbeddingJobProcessResult struct {
+	Processed int
+	Succeeded int
+	Failed    int
 }
 
 type RetrievalLog struct {
@@ -398,7 +450,7 @@ func (s *ProjectKnowledgeService) CreateWikiPage(ctx context.Context, in CreateW
 	if err := tx.Commit(ctx); err != nil {
 		return WikiPage{}, err
 	}
-	s.embedWikiPageBestEffort(ctx, in.WorkspaceID, in.ProjectID, util.MustParseUUID(page.ID), page)
+	s.enqueueWikiPageEmbeddingBestEffort(ctx, in.WorkspaceID, in.ProjectID, util.MustParseUUID(page.ID), page)
 	return page, nil
 }
 
@@ -427,7 +479,7 @@ func (s *ProjectKnowledgeService) UpdateWikiPage(ctx context.Context, in UpdateW
 	if err := tx.Commit(ctx); err != nil {
 		return WikiPage{}, err
 	}
-	s.embedWikiPageBestEffort(ctx, util.MustParseUUID(page.WorkspaceID), in.ProjectID, in.ID, page)
+	s.enqueueWikiPageEmbeddingBestEffort(ctx, util.MustParseUUID(page.WorkspaceID), in.ProjectID, in.ID, page)
 	return page, nil
 }
 
@@ -435,6 +487,12 @@ func (s *ProjectKnowledgeService) DeleteWikiPage(ctx context.Context, projectID,
 	return s.execTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM project_memory_embedding
+			WHERE target_type = $1 AND target_id = $2 AND project_id = $3
+		`, KnowledgeTargetWikiPage, id, projectID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM project_knowledge_embedding_job
 			WHERE target_type = $1 AND target_id = $2 AND project_id = $3
 		`, KnowledgeTargetWikiPage, id, projectID); err != nil {
 			return err
@@ -508,7 +566,7 @@ func (s *ProjectKnowledgeService) CreateMemoryItem(ctx context.Context, in Creat
 	if err := tx.Commit(ctx); err != nil {
 		return MemoryItem{}, err
 	}
-	s.embedMemoryItemBestEffort(ctx, in.WorkspaceID, in.ProjectID, util.MustParseUUID(item.ID), item)
+	s.enqueueMemoryItemEmbeddingBestEffort(ctx, in.WorkspaceID, in.ProjectID, util.MustParseUUID(item.ID), item)
 	return item, nil
 }
 
@@ -548,7 +606,7 @@ func (s *ProjectKnowledgeService) UpdateMemoryItem(ctx context.Context, in Updat
 	if err := tx.Commit(ctx); err != nil {
 		return MemoryItem{}, err
 	}
-	s.embedMemoryItemBestEffort(ctx, util.MustParseUUID(item.WorkspaceID), in.ProjectID, in.ID, item)
+	s.enqueueMemoryItemEmbeddingBestEffort(ctx, util.MustParseUUID(item.WorkspaceID), in.ProjectID, in.ID, item)
 	return item, nil
 }
 
@@ -560,12 +618,26 @@ func (s *ProjectKnowledgeService) DeleteMemoryItem(ctx context.Context, projectI
 		`, KnowledgeTargetMemoryItem, id, projectID); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM project_knowledge_embedding_job
+			WHERE target_type = $1 AND target_id = $2 AND project_id = $3
+		`, KnowledgeTargetMemoryItem, id, projectID); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, `DELETE FROM project_memory_item WHERE id = $1 AND project_id = $2`, id, projectID)
 		return err
 	})
 }
 
 func (s *ProjectKnowledgeService) Search(ctx context.Context, workspaceID, projectID pgtype.UUID, query string, limit int32) ([]KnowledgeSearchResult, error) {
+	set, err := s.SearchWithMode(ctx, workspaceID, projectID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	return set.Results, nil
+}
+
+func (s *ProjectKnowledgeService) SearchWithMode(ctx context.Context, workspaceID, projectID pgtype.UUID, query string, limit int32) (KnowledgeSearchResultSet, error) {
 	if limit <= 0 || limit > 20 {
 		limit = 5
 	}
@@ -580,7 +652,7 @@ func (s *ProjectKnowledgeService) Search(ctx context.Context, workspaceID, proje
 	tsQuery := knowledgeSearchTSQuery(query)
 	var vectorLiteral *string
 	var embeddingModel string
-	if s != nil && s.Embedder != nil {
+	if s.EmbeddingsConfigured() {
 		vector, err := s.Embedder.Embed(ctx, query)
 		if err != nil {
 			slog.Debug("project knowledge vector stream skipped", "project_id", util.UUIDToString(projectID), "error", err)
@@ -593,24 +665,27 @@ func (s *ProjectKnowledgeService) Search(ctx context.Context, workspaceID, proje
 		}
 	}
 	if vectorLiteral == nil && tsQuery == "" {
-		if s == nil || s.Embedder == nil {
-			return nil, ErrEmbeddingNotConfigured
+		if !s.EmbeddingsConfigured() {
+			return KnowledgeSearchResultSet{Results: []KnowledgeSearchResult{}, SearchMode: "none"}, ErrEmbeddingNotConfigured
 		}
-		return []KnowledgeSearchResult{}, nil
+		return KnowledgeSearchResultSet{Results: []KnowledgeSearchResult{}, SearchMode: "none", EmbeddingModel: embeddingModel}, nil
 	}
 	tx, err := s.Tx.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return KnowledgeSearchResultSet{}, err
 	}
 	defer tx.Rollback(ctx)
 
 	if vectorLiteral == nil {
-		return s.searchKeywordOnly(ctx, tx, workspaceID, projectID, tsQuery, limit, candidateLimit)
+		results, err := s.searchKeywordOnly(ctx, tx, workspaceID, projectID, tsQuery, limit, candidateLimit)
+		return KnowledgeSearchResultSet{Results: results, SearchMode: "keyword"}, err
 	}
 	if tsQuery == "" {
-		return s.searchVectorOnly(ctx, tx, workspaceID, projectID, *vectorLiteral, embeddingModel, limit, candidateLimit)
+		results, err := s.searchVectorOnly(ctx, tx, workspaceID, projectID, *vectorLiteral, embeddingModel, limit, candidateLimit)
+		return KnowledgeSearchResultSet{Results: results, SearchMode: "vector", EmbeddingModel: embeddingModel}, err
 	}
-	return s.searchHybrid(ctx, tx, workspaceID, projectID, *vectorLiteral, embeddingModel, tsQuery, limit, candidateLimit)
+	results, err := s.searchHybrid(ctx, tx, workspaceID, projectID, *vectorLiteral, embeddingModel, tsQuery, limit, candidateLimit)
+	return KnowledgeSearchResultSet{Results: results, SearchMode: "hybrid", EmbeddingModel: embeddingModel}, err
 }
 
 func (s *ProjectKnowledgeService) searchHybrid(ctx context.Context, tx pgx.Tx, workspaceID, projectID pgtype.UUID, vectorLiteral, embeddingModel, tsQuery string, limit, candidateLimit int32) ([]KnowledgeSearchResult, error) {
@@ -827,27 +902,45 @@ func (s *ProjectKnowledgeService) CanonicalWikiContextForIssue(ctx context.Conte
 }
 
 func (s *ProjectKnowledgeService) CanonicalWikiContext(ctx context.Context, workspaceID, projectID pgtype.UUID, query string, limit int32) ([]KnowledgeSearchResult, error) {
+	set, err := s.CanonicalWikiContextWithMode(ctx, workspaceID, projectID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	return set.Results, nil
+}
+
+func (s *ProjectKnowledgeService) CanonicalWikiContextWithMode(ctx context.Context, workspaceID, projectID pgtype.UUID, query string, limit int32) (KnowledgeSearchResultSet, error) {
 	if limit <= 0 || limit > 20 {
 		limit = 5
 	}
-	results, err := s.Search(ctx, workspaceID, projectID, query, limit*3)
+	set, err := s.SearchWithMode(ctx, workspaceID, projectID, query, limit*3)
 	if err == nil {
-		wiki := canonicalWikiResultsFromSearch(results, int(limit))
+		wiki := canonicalWikiResultsFromSearch(set.Results, int(limit))
 		if len(wiki) > 0 {
-			return wiki, nil
+			set.Results = wiki
+			return set, nil
 		}
 	} else if !errors.Is(err, ErrEmbeddingNotConfigured) {
-		return nil, err
+		return KnowledgeSearchResultSet{}, err
 	}
 
 	pages, fallbackErr := s.ListCanonicalWikiPages(ctx, workspaceID, projectID, limit)
 	if fallbackErr != nil {
 		if err != nil {
-			return nil, err
+			return KnowledgeSearchResultSet{}, err
 		}
-		return nil, fallbackErr
+		return KnowledgeSearchResultSet{}, fallbackErr
 	}
-	return wikiPagesToSearchResults(pages), nil
+	fallbackResults := wikiPagesToSearchResults(pages)
+	mode := "fallback"
+	if len(fallbackResults) == 0 {
+		mode = "none"
+	}
+	return KnowledgeSearchResultSet{
+		Results:      fallbackResults,
+		SearchMode:   mode,
+		FallbackUsed: true,
+	}, nil
 }
 
 func canonicalWikiResultsFromSearch(results []KnowledgeSearchResult, limit int) []KnowledgeSearchResult {
@@ -935,7 +1028,7 @@ func (s *ProjectKnowledgeService) LogRetrieval(ctx context.Context, in Retrieval
 		in.Status = "injected"
 	}
 	if in.SearchMode == "" {
-		in.SearchMode = "hybrid"
+		in.SearchMode = "none"
 	}
 	if len(returned) == 0 || string(returned) == "null" {
 		returned = []byte("[]")
@@ -1210,36 +1303,64 @@ func (s *ProjectKnowledgeService) ToRelevant(results []KnowledgeSearchResult, li
 		if r.MemoryItem != nil {
 			m := r.MemoryItem
 			out = append(out, RelevantKnowledge{
-				TargetType: r.TargetType,
-				ID:         m.ID,
-				Kind:       m.Kind,
-				Outcome:    m.Outcome,
-				Title:      m.Title,
-				Summary:    m.Summary,
-				IssueID:    ptrString(m.IssueID),
-				TaskID:     ptrString(m.TaskID),
-				CommentID:  ptrString(m.CommentID),
-				Confidence: m.Confidence,
-				Score:      r.Score,
+				TargetType:   r.TargetType,
+				ID:           m.ID,
+				Kind:         m.Kind,
+				Outcome:      m.Outcome,
+				Title:        m.Title,
+				Summary:      m.Summary,
+				IssueID:      ptrString(m.IssueID),
+				TaskID:       ptrString(m.TaskID),
+				CommentID:    ptrString(m.CommentID),
+				Confidence:   m.Confidence,
+				Score:        r.Score,
+				MatchType:    r.MatchType,
+				VectorScore:  r.VectorScore,
+				KeywordScore: r.KeywordScore,
+				Snippet:      r.Snippet,
+				SourceReason: knowledgeSourceReason(r),
 			})
 			continue
 		}
 		if r.WikiPage != nil {
 			w := r.WikiPage
 			out = append(out, RelevantKnowledge{
-				TargetType: r.TargetType,
-				ID:         w.ID,
-				Slug:       w.Slug,
-				Kind:       "wiki_page",
-				Outcome:    w.Status,
-				Title:      w.Title,
-				Summary:    truncateForSummary(w.Body, 700),
-				Confidence: 90,
-				Score:      r.Score,
+				TargetType:   r.TargetType,
+				ID:           w.ID,
+				Slug:         w.Slug,
+				Kind:         "wiki_page",
+				Outcome:      w.Status,
+				Title:        w.Title,
+				Summary:      truncateForSummary(w.Body, 700),
+				Confidence:   90,
+				Score:        r.Score,
+				MatchType:    r.MatchType,
+				VectorScore:  r.VectorScore,
+				KeywordScore: r.KeywordScore,
+				Snippet:      r.Snippet,
+				SourceReason: knowledgeSourceReason(r),
 			})
 		}
 	}
 	return out
+}
+
+func knowledgeSourceReason(r KnowledgeSearchResult) string {
+	switch r.MatchType {
+	case "hybrid":
+		return "Matched by both semantic vector similarity and keyword relevance."
+	case "vector":
+		return "Matched by semantic vector similarity."
+	case "keyword":
+		return "Matched by keyword search."
+	case "canonical_fallback":
+		return "Selected from canonical Project Wiki fallback pages."
+	default:
+		if r.WikiPage != nil {
+			return "Selected from Project Wiki context."
+		}
+		return "Selected from project memory context."
+	}
 }
 
 func (s *ProjectKnowledgeService) InjectedText(results []KnowledgeSearchResult, limit int, maxChars int) string {
@@ -1277,32 +1398,227 @@ func (s *ProjectKnowledgeService) InjectedText(results []KnowledgeSearchResult, 
 	return out
 }
 
-func (s *ProjectKnowledgeService) embedWikiPageBestEffort(ctx context.Context, workspaceID, projectID, id pgtype.UUID, page WikiPage) {
-	text := strings.Join([]string{page.Title, page.Body}, "\n\n")
-	s.embedTargetBestEffort(ctx, workspaceID, projectID, KnowledgeTargetWikiPage, id, text)
+func (s *ProjectKnowledgeService) enqueueWikiPageEmbeddingBestEffort(ctx context.Context, workspaceID, projectID, id pgtype.UUID, page WikiPage) {
+	text := wikiPageEmbeddingText(page)
+	s.enqueueEmbeddingJobBestEffort(ctx, workspaceID, projectID, KnowledgeTargetWikiPage, id, text)
 }
 
-func (s *ProjectKnowledgeService) embedMemoryItemBestEffort(ctx context.Context, workspaceID, projectID, id pgtype.UUID, item MemoryItem) {
-	text := strings.Join([]string{item.Title, item.Summary, item.Symptom, item.Cause, item.FixPath}, "\n\n")
-	s.embedTargetBestEffort(ctx, workspaceID, projectID, KnowledgeTargetMemoryItem, id, text)
+func (s *ProjectKnowledgeService) enqueueMemoryItemEmbeddingBestEffort(ctx context.Context, workspaceID, projectID, id pgtype.UUID, item MemoryItem) {
+	text := memoryItemEmbeddingText(item)
+	s.enqueueEmbeddingJobBestEffort(ctx, workspaceID, projectID, KnowledgeTargetMemoryItem, id, text)
 }
 
-func (s *ProjectKnowledgeService) embedTargetBestEffort(ctx context.Context, workspaceID, projectID pgtype.UUID, targetType string, targetID pgtype.UUID, text string) {
-	if s == nil || s.Embedder == nil || strings.TrimSpace(text) == "" {
-		return
+func (s *ProjectKnowledgeService) enqueueEmbeddingJobBestEffort(ctx context.Context, workspaceID, projectID pgtype.UUID, targetType string, targetID pgtype.UUID, text string) {
+	if _, err := s.enqueueEmbeddingJob(ctx, workspaceID, projectID, targetType, targetID, text); err != nil {
+		slog.Debug("project knowledge embedding job enqueue skipped", "target_type", targetType, "target_id", util.UUIDToString(targetID), "error", err)
+	}
+}
+
+func (s *ProjectKnowledgeService) enqueueEmbeddingJob(ctx context.Context, workspaceID, projectID pgtype.UUID, targetType string, targetID pgtype.UUID, text string) (bool, error) {
+	if !s.EmbeddingsConfigured() || strings.TrimSpace(text) == "" {
+		return false, ErrEmbeddingNotConfigured
+	}
+	contentHash := knowledgeContentHash(text)
+	inserted := false
+	err := s.execTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			WITH current_embedding AS (
+				SELECT 1
+				FROM project_memory_embedding
+				WHERE target_type = $3
+				  AND target_id = $4
+				  AND embedding_model = $5
+				  AND content_hash = $6
+			)
+			INSERT INTO project_knowledge_embedding_job (
+				workspace_id, project_id, target_type, target_id, embedding_model, content_hash,
+				status, next_attempt_at, last_error, embedded_at, updated_at
+			)
+			SELECT $1, $2, $3, $4, $5, $6, 'queued', now(), NULL, NULL, now()
+			WHERE NOT EXISTS (SELECT 1 FROM current_embedding)
+			ON CONFLICT (target_type, target_id, embedding_model) DO UPDATE SET
+				workspace_id = EXCLUDED.workspace_id,
+				project_id = EXCLUDED.project_id,
+				content_hash = EXCLUDED.content_hash,
+				status = 'queued',
+				next_attempt_at = now(),
+				last_error = NULL,
+				embedded_at = NULL,
+				updated_at = now()
+			WHERE project_knowledge_embedding_job.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+			   OR project_knowledge_embedding_job.status IN ('failed', 'running')
+		`, workspaceID, projectID, targetType, targetID, s.Embedder.Model(), contentHash)
+		if err != nil {
+			return err
+		}
+		inserted = tag.RowsAffected() > 0
+		return nil
+	})
+	return inserted, err
+}
+
+func (s *ProjectKnowledgeService) ProcessEmbeddingJobs(ctx context.Context, limit int32) (EmbeddingJobProcessResult, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	out := EmbeddingJobProcessResult{}
+	if !s.EmbeddingsConfigured() {
+		return out, ErrEmbeddingNotConfigured
+	}
+	jobs, err := s.claimEmbeddingJobs(ctx, limit)
+	if err != nil {
+		return out, err
+	}
+	for _, job := range jobs {
+		out.Processed++
+		if err := s.processEmbeddingJob(ctx, job); err != nil {
+			out.Failed++
+			s.markEmbeddingJobFailed(ctx, job.ID, job.AttemptCount, err)
+			continue
+		}
+		out.Succeeded++
+	}
+	return out, nil
+}
+
+func (s *ProjectKnowledgeService) BackfillKnowledgeEmbeddings(ctx context.Context, workspaceID, projectID pgtype.UUID, targetType string) (EmbeddingBackfillResult, error) {
+	out := EmbeddingBackfillResult{}
+	if !s.EmbeddingsConfigured() {
+		return out, ErrEmbeddingNotConfigured
+	}
+	targetType = strings.TrimSpace(targetType)
+	if targetType != "" && targetType != KnowledgeTargetWikiPage && targetType != KnowledgeTargetMemoryItem {
+		return out, fmt.Errorf("unsupported knowledge target type %q", targetType)
+	}
+	if targetType == "" || targetType == KnowledgeTargetWikiPage {
+		pages, err := s.ListWikiPages(ctx, workspaceID, projectID)
+		if err != nil {
+			return out, err
+		}
+		for _, page := range pages {
+			if page.Status == "archived" {
+				continue
+			}
+			queued, err := s.enqueueEmbeddingJob(ctx, workspaceID, projectID, KnowledgeTargetWikiPage, util.MustParseUUID(page.ID), wikiPageEmbeddingText(page))
+			updateBackfillCounts(&out, queued, err)
+		}
+	}
+
+	if targetType == "" || targetType == KnowledgeTargetMemoryItem {
+		items, err := s.listAllMemoryItemsForEmbedding(ctx, workspaceID, projectID)
+		if err != nil {
+			return out, err
+		}
+		for _, item := range items {
+			queued, err := s.enqueueEmbeddingJob(ctx, workspaceID, projectID, KnowledgeTargetMemoryItem, util.MustParseUUID(item.ID), memoryItemEmbeddingText(item))
+			updateBackfillCounts(&out, queued, err)
+		}
+	}
+	return out, nil
+}
+
+func (s *ProjectKnowledgeService) listAllMemoryItemsForEmbedding(ctx context.Context, workspaceID, projectID pgtype.UUID) ([]MemoryItem, error) {
+	tx, err := s.Tx.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		SELECT id, workspace_id, project_id, issue_id, task_id, comment_id, kind, outcome, title, summary, symptom, cause, fix_path,
+		       commands, repo_refs, array_to_json(tags)::jsonb, confidence, expires_at, created_at, updated_at
+		FROM project_memory_item
+		WHERE workspace_id = $1 AND project_id = $2 AND (expires_at IS NULL OR expires_at > now())
+	`, workspaceID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MemoryItem{}
+	for rows.Next() {
+		item, err := scanMemoryItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+type embeddingJob struct {
+	ID             pgtype.UUID
+	WorkspaceID    pgtype.UUID
+	ProjectID      pgtype.UUID
+	TargetType     string
+	TargetID       pgtype.UUID
+	EmbeddingModel string
+	ContentHash    string
+	AttemptCount   int32
+}
+
+func (s *ProjectKnowledgeService) claimEmbeddingJobs(ctx context.Context, limit int32) ([]embeddingJob, error) {
+	tx, err := s.Tx.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		WITH due AS (
+			SELECT id
+			FROM project_knowledge_embedding_job
+			WHERE status IN ('queued', 'failed')
+			  AND next_attempt_at <= now()
+			  AND embedding_model = $2
+			ORDER BY next_attempt_at ASC, created_at ASC
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE project_knowledge_embedding_job j
+		SET status = 'running',
+		    attempt_count = j.attempt_count + 1,
+		    updated_at = now()
+		FROM due
+		WHERE j.id = due.id
+		RETURNING j.id, j.workspace_id, j.project_id, j.target_type, j.target_id, j.embedding_model, j.content_hash, j.attempt_count
+	`, limit, s.Embedder.Model())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := []embeddingJob{}
+	for rows.Next() {
+		var job embeddingJob
+		if err := rows.Scan(&job.ID, &job.WorkspaceID, &job.ProjectID, &job.TargetType, &job.TargetID, &job.EmbeddingModel, &job.ContentHash, &job.AttemptCount); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+func (s *ProjectKnowledgeService) processEmbeddingJob(ctx context.Context, job embeddingJob) error {
+	text, err := s.embeddingTextForJob(ctx, job)
+	if err != nil {
+		return err
+	}
+	if hash := knowledgeContentHash(text); hash != job.ContentHash {
+		_, err := s.enqueueEmbeddingJob(ctx, job.WorkspaceID, job.ProjectID, job.TargetType, job.TargetID, text)
+		return err
 	}
 	vector, err := s.Embedder.Embed(ctx, text)
 	if err != nil {
-		slog.Debug("project knowledge embedding skipped", "target_type", targetType, "target_id", util.UUIDToString(targetID), "error", err)
-		return
+		return err
 	}
 	if len(vector) != DefaultEmbeddingDimension {
-		slog.Warn("project knowledge embedding dimension mismatch", "target_type", targetType, "target_id", util.UUIDToString(targetID), "got", len(vector), "want", DefaultEmbeddingDimension)
-		return
+		return fmt.Errorf("embedding dimension mismatch: got %d want %d", len(vector), DefaultEmbeddingDimension)
 	}
-	sum := sha256.Sum256([]byte(text))
-	_ = s.execTx(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
+	return s.execTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO project_memory_embedding (workspace_id, project_id, target_type, target_id, embedding, embedding_model, content_hash)
 			VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
 			ON CONFLICT (target_type, target_id, embedding_model) DO UPDATE SET
@@ -1311,9 +1627,106 @@ func (s *ProjectKnowledgeService) embedTargetBestEffort(ctx context.Context, wor
 				embedding = EXCLUDED.embedding,
 				content_hash = EXCLUDED.content_hash,
 				embedded_at = now()
-		`, workspaceID, projectID, targetType, targetID, embeddingToVectorLiteral(vector), s.Embedder.Model(), hex.EncodeToString(sum[:]))
+		`, job.WorkspaceID, job.ProjectID, job.TargetType, job.TargetID, embeddingToVectorLiteral(vector), job.EmbeddingModel, job.ContentHash); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+			UPDATE project_knowledge_embedding_job
+			SET status = 'succeeded',
+			    last_error = NULL,
+			    embedded_at = now(),
+			    updated_at = now()
+			WHERE id = $1
+		`, job.ID)
 		return err
 	})
+}
+
+func (s *ProjectKnowledgeService) embeddingTextForJob(ctx context.Context, job embeddingJob) (string, error) {
+	tx, err := s.Tx.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	switch job.TargetType {
+	case KnowledgeTargetWikiPage:
+		row := tx.QueryRow(ctx, `
+			SELECT id, workspace_id, project_id, slug, title, body, source_refs, status, updated_by, reviewed_at, created_at, updated_at
+			FROM project_wiki_page
+			WHERE id = $1 AND workspace_id = $2 AND project_id = $3 AND status != 'archived'
+		`, job.TargetID, job.WorkspaceID, job.ProjectID)
+		page, err := scanWikiPage(row)
+		if err != nil {
+			return "", err
+		}
+		return wikiPageEmbeddingText(page), nil
+	case KnowledgeTargetMemoryItem:
+		row := tx.QueryRow(ctx, `
+			SELECT id, workspace_id, project_id, issue_id, task_id, comment_id, kind, outcome, title, summary, symptom, cause, fix_path,
+			       commands, repo_refs, array_to_json(tags)::jsonb, confidence, expires_at, created_at, updated_at
+			FROM project_memory_item
+			WHERE id = $1 AND workspace_id = $2 AND project_id = $3 AND (expires_at IS NULL OR expires_at > now())
+		`, job.TargetID, job.WorkspaceID, job.ProjectID)
+		item, err := scanMemoryItem(row)
+		if err != nil {
+			return "", err
+		}
+		return memoryItemEmbeddingText(item), nil
+	default:
+		return "", fmt.Errorf("unsupported knowledge target type %q", job.TargetType)
+	}
+}
+
+func (s *ProjectKnowledgeService) markEmbeddingJobFailed(ctx context.Context, id pgtype.UUID, attemptCount int32, jobErr error) {
+	delay := embeddingRetryDelay(attemptCount)
+	if err := s.execTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE project_knowledge_embedding_job
+			SET status = 'failed',
+			    next_attempt_at = now() + ($2::double precision * interval '1 second'),
+			    last_error = $3,
+			    updated_at = now()
+			WHERE id = $1
+		`, id, delay.Seconds(), truncateForSummary(jobErr.Error(), 1000))
+		return err
+	}); err != nil {
+		slog.Debug("failed to mark project knowledge embedding job failed", "job_id", util.UUIDToString(id), "error", err)
+	}
+}
+
+func updateBackfillCounts(out *EmbeddingBackfillResult, queued bool, err error) {
+	if err != nil {
+		out.Failed++
+		return
+	}
+	if queued {
+		out.Queued++
+	} else {
+		out.Skipped++
+	}
+}
+
+func wikiPageEmbeddingText(page WikiPage) string {
+	return strings.Join([]string{page.Title, page.Body}, "\n\n")
+}
+
+func memoryItemEmbeddingText(item MemoryItem) string {
+	return strings.Join([]string{item.Title, item.Summary, item.Symptom, item.Cause, item.FixPath}, "\n\n")
+}
+
+func knowledgeContentHash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+func embeddingRetryDelay(attemptCount int32) time.Duration {
+	if attemptCount < 1 {
+		attemptCount = 1
+	}
+	if attemptCount > 6 {
+		attemptCount = 6
+	}
+	return time.Duration(1<<uint(attemptCount-1)) * time.Minute
 }
 
 func (s *ProjectKnowledgeService) execTx(ctx context.Context, fn func(pgx.Tx) error) error {

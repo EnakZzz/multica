@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -322,7 +323,7 @@ func (h *Handler) SearchProjectKnowledge(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "query is required")
 		return
 	}
-	results, err := h.ProjectKnowledge.Search(r.Context(), project.WorkspaceID, project.ID, req.Query, req.Limit)
+	resultSet, err := h.ProjectKnowledge.SearchWithMode(r.Context(), project.WorkspaceID, project.ID, req.Query, req.Limit)
 	if err != nil {
 		if errors.Is(err, service.ErrEmbeddingNotConfigured) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"configured": false, "error": "project knowledge embeddings are not configured", "results": []any{}})
@@ -331,7 +332,25 @@ func (h *Handler) SearchProjectKnowledge(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to search project knowledge")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "results": results, "total": len(results)})
+	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "results": resultSet.Results, "total": len(resultSet.Results), "search_mode": resultSet.SearchMode})
+}
+
+func (h *Handler) BackfillProjectKnowledgeEmbeddings(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	targetType := strings.TrimSpace(r.URL.Query().Get("target_type"))
+	result, err := h.ProjectKnowledge.BackfillKnowledgeEmbeddings(r.Context(), project.WorkspaceID, project.ID, targetType)
+	if err != nil {
+		if errors.Is(err, service.ErrEmbeddingNotConfigured) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"configured": false, "queued": 0, "skipped": 0, "failed": 0, "error": "project knowledge embeddings are not configured"})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to backfill project knowledge embeddings")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "queued": result.Queued, "skipped": result.Skipped, "failed": result.Failed})
 }
 
 func (h *Handler) ListProjectKnowledgeRetrievalLogs(w http.ResponseWriter, r *http.Request) {
@@ -511,7 +530,7 @@ func (h *Handler) applyRelevantKnowledgeToTaskResponse(ctx context.Context, resp
 		queryContext["review_target_branch"] = resp.ReviewTargetBranchName
 	}
 	query := strings.Join(queryParts, "\n\n")
-	results, err := h.ProjectKnowledge.CanonicalWikiContext(ctx, issue.WorkspaceID, issue.ProjectID, query, 5)
+	resultSet, err := h.ProjectKnowledge.CanonicalWikiContextWithMode(ctx, issue.WorkspaceID, issue.ProjectID, query, 5)
 	if err != nil {
 		slog.Debug("project knowledge retrieval skipped", "issue_id", uuidToString(issue.ID), "project_id", uuidToString(issue.ProjectID), "error", err)
 		h.ProjectKnowledge.LogRetrieval(ctx, service.RetrievalLogInput{
@@ -520,13 +539,14 @@ func (h *Handler) applyRelevantKnowledgeToTaskResponse(ctx context.Context, resp
 			IssueID:      issue.ID,
 			TaskID:       taskID,
 			QueryText:    query,
-			SearchMode:   "wiki_canonical",
+			SearchMode:   "none",
 			QueryContext: queryContext,
 			Status:       "error",
 			Error:        err.Error(),
 		})
 		return
 	}
+	results := resultSet.Results
 	relevant := h.ProjectKnowledge.ToRelevant(results, 5)
 	resp.RelevantKnowledge = relevant
 	injected := h.ProjectKnowledge.InjectedText(results, 5, 2500)
@@ -540,7 +560,7 @@ func (h *Handler) applyRelevantKnowledgeToTaskResponse(ctx context.Context, resp
 		IssueID:           issue.ID,
 		TaskID:            taskID,
 		QueryText:         query,
-		SearchMode:        "wiki_canonical",
+		SearchMode:        resultSet.SearchMode,
 		QueryContext:      queryContext,
 		Candidates:        results,
 		SelectedItems:     relevant,
@@ -549,6 +569,99 @@ func (h *Handler) applyRelevantKnowledgeToTaskResponse(ctx context.Context, resp
 		InjectedItemCount: int32(len(relevant)),
 		Status:            status,
 	})
+}
+
+func (h *Handler) applyRelevantKnowledgeToIssuePlanTaskResponse(ctx context.Context, resp *AgentTaskResponse, ip service.IssuePlanContext, taskID pgtype.UUID) {
+	if h.ProjectKnowledge == nil || strings.TrimSpace(ip.ProjectID) == "" {
+		return
+	}
+	workspaceID, err := util.ParseUUID(ip.WorkspaceID)
+	if err != nil {
+		return
+	}
+	projectID, err := util.ParseUUID(ip.ProjectID)
+	if err != nil {
+		return
+	}
+
+	queryParts := []string{
+		strings.TrimSpace(ip.Prompt),
+		strings.TrimSpace(resp.ProjectTitle),
+		"Planning context needed: repository, startup command, target runtime, technology stack, engineering constraints, wiki source refs.",
+	}
+	if hasPlanSpecContext(ip.Spec) {
+		queryParts = append(queryParts,
+			ip.Spec.Summary,
+			ip.Spec.Goal,
+			ip.Spec.Approach,
+			strings.Join(ip.Spec.DesignDecisions, "\n"),
+		)
+	}
+	query := strings.Join(nonEmptyStrings(queryParts), "\n\n")
+	queryContext := map[string]any{
+		"plan_id": ip.PlanID,
+		"phase":   ip.Phase,
+		"prompt":  ip.Prompt,
+	}
+	if resp.ProjectTitle != "" {
+		queryContext["project_title"] = resp.ProjectTitle
+	}
+
+	resultSet, err := h.ProjectKnowledge.CanonicalWikiContextWithMode(ctx, workspaceID, projectID, query, 8)
+	if err != nil {
+		slog.Debug("project knowledge retrieval skipped for issue plan", "plan_id", ip.PlanID, "project_id", ip.ProjectID, "error", err)
+		h.ProjectKnowledge.LogRetrieval(ctx, service.RetrievalLogInput{
+			WorkspaceID:  workspaceID,
+			ProjectID:    projectID,
+			TaskID:       taskID,
+			QueryText:    query,
+			SearchMode:   "none",
+			QueryContext: queryContext,
+			Status:       "error",
+			Error:        err.Error(),
+		})
+		return
+	}
+	results := resultSet.Results
+	relevant := h.ProjectKnowledge.ToRelevant(results, 8)
+	resp.RelevantKnowledge = relevant
+	injected := h.ProjectKnowledge.InjectedText(results, 8, 3200)
+	status := "injected"
+	if len(relevant) == 0 {
+		status = "no_results"
+	}
+	h.ProjectKnowledge.LogRetrieval(ctx, service.RetrievalLogInput{
+		WorkspaceID:       workspaceID,
+		ProjectID:         projectID,
+		TaskID:            taskID,
+		QueryText:         query,
+		SearchMode:        resultSet.SearchMode,
+		QueryContext:      queryContext,
+		Candidates:        results,
+		SelectedItems:     relevant,
+		InjectedText:      injected,
+		TokenBudget:       3200,
+		InjectedItemCount: int32(len(relevant)),
+		Status:            status,
+	})
+}
+
+func hasPlanSpecContext(spec service.PlanSpec) bool {
+	return strings.TrimSpace(spec.Summary) != "" ||
+		strings.TrimSpace(spec.Goal) != "" ||
+		len(spec.Approach) > 0 ||
+		len(spec.DesignDecisions) > 0
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func truncateForPromptTrace(value string, max int) string {

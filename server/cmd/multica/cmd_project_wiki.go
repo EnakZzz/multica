@@ -40,11 +40,19 @@ var projectWikiUpsertCmd = &cobra.Command{
 	RunE:  runProjectWikiUpsert,
 }
 
+var projectWikiBackfillEmbeddingsCmd = &cobra.Command{
+	Use:   "backfill-embeddings <project-id>",
+	Short: "Queue embedding jobs for existing project wiki and memory items",
+	Args:  exactArgs(1),
+	RunE:  runProjectWikiBackfillEmbeddings,
+}
+
 func init() {
 	projectCmd.AddCommand(projectWikiCmd)
 	projectWikiCmd.AddCommand(projectWikiListCmd)
 	projectWikiCmd.AddCommand(projectWikiGetCmd)
 	projectWikiCmd.AddCommand(projectWikiUpsertCmd)
+	projectWikiCmd.AddCommand(projectWikiBackfillEmbeddingsCmd)
 
 	projectWikiListCmd.Flags().String("output", "table", "Output format: table or json")
 	projectWikiListCmd.Flags().Bool("full-id", false, "Show full UUIDs in table output")
@@ -59,6 +67,9 @@ func init() {
 	projectWikiUpsertCmd.Flags().StringArray("source-ref", nil, "JSON source reference to store in source_refs (may be repeated)")
 	projectWikiUpsertCmd.Flags().Bool("append", false, "Append body to an existing page instead of replacing it")
 	projectWikiUpsertCmd.Flags().String("output", "json", "Output format: table or json")
+
+	projectWikiBackfillEmbeddingsCmd.Flags().String("target-type", "", "Target type to backfill: wiki_page or memory_item")
+	projectWikiBackfillEmbeddingsCmd.Flags().String("output", "table", "Output format: table or json")
 }
 
 func runProjectWikiList(cmd *cobra.Command, args []string) error {
@@ -225,6 +236,42 @@ func runProjectWikiUpsert(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("update wiki page: %w", err)
 	}
 	return printProjectWikiMutationResult(cmd, result)
+}
+
+func runProjectWikiBackfillEmbeddings(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	projectRef, err := resolveProjectID(ctx, client, args[0])
+	if err != nil {
+		return fmt.Errorf("resolve project: %w", err)
+	}
+	targetType, _ := cmd.Flags().GetString("target-type")
+	endpoint := "/api/projects/" + url.PathEscape(projectRef.ID) + "/knowledge/embeddings/backfill"
+	if strings.TrimSpace(targetType) != "" {
+		endpoint += "?target_type=" + url.QueryEscape(strings.TrimSpace(targetType))
+	}
+	var result map[string]any
+	if err := client.PostJSON(ctx, endpoint, map[string]any{}, &result); err != nil {
+		return fmt.Errorf("backfill project knowledge embeddings: %w", err)
+	}
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+	headers := []string{"QUEUED", "SKIPPED", "FAILED", "CONFIGURED"}
+	rows := [][]string{{
+		fmt.Sprint(result["queued"]),
+		fmt.Sprint(result["skipped"]),
+		fmt.Sprint(result["failed"]),
+		fmt.Sprint(result["configured"]),
+	}}
+	cli.PrintTable(os.Stdout, headers, rows)
+	return nil
 }
 
 func fetchProjectWikiPages(ctx context.Context, client *cli.APIClient, projectID string) ([]map[string]any, error) {

@@ -301,6 +301,7 @@ func main() {
 	taskSvc := service.NewTaskService(queries, pool, hub, bus, daemonWakeup)
 	taskSvc.Analytics = analyticsClient
 	autopilotSvc := service.NewAutopilotService(queries, pool, bus, taskSvc)
+	projectKnowledgeSvc := service.NewProjectKnowledgeService(queries, pool, nil)
 	registerAutopilotListeners(bus, autopilotSvc)
 
 	// Construct a LivenessStore that mirrors the one wired into the HTTP
@@ -318,6 +319,7 @@ func main() {
 	go runAutopilotScheduler(autopilotCtx, queries, autopilotSvc)
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
 	go runDBStatsLogger(sweepCtx, pool)
+	go runProjectKnowledgeEmbeddingWorker(sweepCtx, projectKnowledgeSvc)
 
 	if metricsServer != nil {
 		go func() {
