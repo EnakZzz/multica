@@ -531,6 +531,11 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 		parentID = parent.ID
 	}
 
+	committedSpec := planSpecFromJSON(plan.CommittedSpec)
+	if strings.TrimSpace(committedSpec.Goal) == "" && strings.TrimSpace(committedSpec.Summary) == "" {
+		committedSpec = planSpecFromJSON(plan.Spec)
+	}
+
 	for _, item := range items {
 		if !item.Selected {
 			continue
@@ -559,7 +564,7 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 		child, err := qtx.CreateIssueWithOriginAndUnitTestsManual(r.Context(), db.CreateIssueWithOriginAndUnitTestsManualParams{
 			WorkspaceID:       plan.WorkspaceID,
 			Title:             item.Title,
-			Description:       strOrNullText(planItemIssueDescription(item)),
+			Description:       strOrNullText(planItemIssueDescription(item, committedSpec)),
 			Status:            "todo",
 			Priority:          "none",
 			AssigneeType:      assigneeType,
@@ -1359,12 +1364,13 @@ func planItemToResponse(item db.PlanItem) PlanItemResponse {
 	}
 }
 
-func planItemIssueDescription(item db.PlanItem) string {
+func planItemIssueDescription(item db.PlanItem, spec service.PlanSpec) string {
 	var b strings.Builder
 	description := strings.TrimSpace(item.Description)
 	if description != "" {
 		b.WriteString(description)
 	}
+	appendPlanSpecInheritanceSection(&b, item, spec)
 	if normalizePlanItemExecutionKind(item.ExecutionKind) == service.PlanItemExecutionKindHumanConfirmation {
 		appendPlanItemTextSection(&b, "Human confirmation question", item.ConfirmationQuestion)
 		appendPlanItemTextSection(&b, "Why human confirmation is required", item.ConfirmationReason)
@@ -1387,6 +1393,73 @@ func planItemIssueDescription(item db.PlanItem) string {
 	appendPlanItemSection(&b, "Context resources", item.ContextResources)
 	appendPlanItemSection(&b, "Risks and notes", item.RiskNotes)
 	return strings.TrimSpace(b.String())
+}
+
+func appendPlanSpecInheritanceSection(b *strings.Builder, item db.PlanItem, spec service.PlanSpec) {
+	spec = service.NormalizePlanSpec(spec)
+	if shouldSkipPlanSpecInheritance(item) {
+		return
+	}
+	goal := strings.TrimSpace(spec.Goal)
+	summary := strings.TrimSpace(spec.Summary)
+	success := firstNNonEmpty(spec.SuccessCriteria, 6)
+	decisions := firstNNonEmpty(spec.DesignDecisions, 4)
+	outOfScope := firstNNonEmpty(spec.OutOfScope, 4)
+	if goal == "" && summary == "" && len(success) == 0 && len(decisions) == 0 && len(outOfScope) == 0 {
+		return
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Plan-level constraints inherited by this issue:\n")
+	b.WriteString("- This issue is a slice of the approved plan. Do not weaken the plan goal, success criteria, or design decisions just because this node has a narrower title.\n")
+	if goal != "" {
+		b.WriteString("- Plan goal: ")
+		b.WriteString(goal)
+		b.WriteString("\n")
+	} else if summary != "" {
+		b.WriteString("- Plan summary: ")
+		b.WriteString(summary)
+		b.WriteString("\n")
+	}
+	for _, item := range success {
+		b.WriteString("- Success criterion: ")
+		b.WriteString(item)
+		b.WriteString("\n")
+	}
+	for _, item := range decisions {
+		b.WriteString("- Design decision: ")
+		b.WriteString(item)
+		b.WriteString("\n")
+	}
+	for _, item := range outOfScope {
+		b.WriteString("- Out of scope: ")
+		b.WriteString(item)
+		b.WriteString("\n")
+	}
+}
+
+func shouldSkipPlanSpecInheritance(item db.PlanItem) bool {
+	nodeType := service.NormalizePlanItemNodeType(item.NodeType)
+	if nodeType == service.PipelineNodeTypeMerge {
+		return true
+	}
+	return normalizePlanItemExecutionKind(item.ExecutionKind) == service.PlanItemExecutionKindHumanConfirmation
+}
+
+func firstNNonEmpty(items []string, n int) []string {
+	out := make([]string, 0, n)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+		if len(out) >= n {
+			break
+		}
+	}
+	return out
 }
 
 func appendPlanItemUnitTestSection(b *strings.Builder, title string, checks []service.UnitTestCheck) {
