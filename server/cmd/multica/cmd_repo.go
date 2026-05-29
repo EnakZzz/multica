@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -292,6 +293,7 @@ type repoIntegrateResult struct {
 	TestResult    string   `json:"test_result,omitempty"`
 	Status        string   `json:"status"`
 	Error         string   `json:"error,omitempty"`
+	PRLinkError   string   `json:"pull_request_link_error,omitempty"`
 	ConflictFiles []string `json:"conflict_files,omitempty"`
 }
 
@@ -320,6 +322,7 @@ func runRepoIntegrate(cmd *cobra.Command, _ []string) error {
 		Strategy:              strings.TrimSpace(repoIntegrateStrategy),
 		TestResult:            strings.TrimSpace(repoIntegrateTestResult),
 	})
+	result = linkRepoIntegratePullRequest(cmd, root, result)
 	return writeRepoIntegrateResult(result)
 }
 
@@ -373,6 +376,117 @@ func integrateRepo(root string, opts repoIntegrateOptions) repoIntegrateResult {
 		result.Error = "strategy must be pr-first or direct"
 		return result
 	}
+}
+
+type linkIssuePullRequestRequest struct {
+	RepoOwner string  `json:"repo_owner"`
+	RepoName  string  `json:"repo_name"`
+	Number    int32   `json:"number"`
+	Title     string  `json:"title"`
+	State     string  `json:"state"`
+	HTMLURL   string  `json:"html_url"`
+	Branch    *string `json:"branch,omitempty"`
+	HeadSHA   *string `json:"head_sha,omitempty"`
+}
+
+func linkRepoIntegratePullRequest(cmd *cobra.Command, root string, result repoIntegrateResult) repoIntegrateResult {
+	if result.PRURL == "" || result.Status != "pr_created" {
+		return result
+	}
+	issueID := strings.TrimSpace(os.Getenv("MULTICA_ISSUE_ID"))
+	if issueID == "" {
+		issueID = strings.TrimSpace(os.Getenv("MULTICA_ISSUE_IDENTIFIER"))
+	}
+	if issueID == "" {
+		return result
+	}
+	owner, repo := repoOwnerNameForPullRequest(root, result.PRURL)
+	if owner == "" || repo == "" {
+		result.PRLinkError = "could not determine repository owner/name for pull request link"
+		return result
+	}
+	number := parsePullRequestNumber(result.PRURL)
+	if number <= 0 {
+		result.PRLinkError = "could not determine pull request number from URL"
+		return result
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		result.PRLinkError = err.Error()
+		return result
+	}
+	title := fmt.Sprintf("Integrate %s into %s", result.SourceBranch, result.TargetBranch)
+	headSHA := strings.TrimSpace(gitOutputOrEmpty(root, "rev-parse", result.SourceBranch))
+	req := linkIssuePullRequestRequest{
+		RepoOwner: owner,
+		RepoName:  repo,
+		Number:    int32(number),
+		Title:     title,
+		State:     "open",
+		HTMLURL:   result.PRURL,
+	}
+	if result.SourceBranch != "" {
+		req.Branch = &result.SourceBranch
+	}
+	if headSHA != "" {
+		req.HeadSHA = &headSHA
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := client.PostJSON(ctx, "/api/issues/"+url.PathEscape(issueID)+"/pull-requests", req, nil); err != nil {
+		result.PRLinkError = err.Error()
+	}
+	return result
+}
+
+func repoOwnerNameForPullRequest(root, prURL string) (string, string) {
+	if remoteURL, err := gitOutput(root, "remote", "get-url", "origin"); err == nil {
+		if remote, ok := parseGitRemoteURL(remoteURL); ok {
+			if owner, repo := splitRepoPath(remote.Path); owner != "" && repo != "" {
+				return owner, repo
+			}
+		}
+	}
+	if u, err := url.Parse(strings.TrimSpace(prURL)); err == nil {
+		path := strings.Trim(strings.TrimSuffix(u.Path, ".git"), "/")
+		if idx := strings.Index(path, "/-/merge_requests/"); idx >= 0 {
+			return splitRepoPath(path[:idx])
+		}
+		if idx := strings.Index(path, "/pull/"); idx >= 0 {
+			return splitRepoPath(path[:idx])
+		}
+	}
+	return "", ""
+}
+
+func splitRepoPath(path string) (string, string) {
+	path = strings.Trim(strings.TrimSuffix(strings.TrimSpace(path), ".git"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 {
+		return "", ""
+	}
+	repo := parts[len(parts)-1]
+	owner := strings.Join(parts[:len(parts)-1], "/")
+	return owner, repo
+}
+
+var pullRequestNumberRe = regexp.MustCompile(`/(?:pull|merge_requests)/([0-9]+)(?:[/?#]|$)`)
+
+func parsePullRequestNumber(rawURL string) int {
+	m := pullRequestNumberRe.FindStringSubmatch(strings.TrimSpace(rawURL))
+	if len(m) != 2 {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+func gitOutputOrEmpty(root string, args ...string) string {
+	out, err := gitOutput(root, args...)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 func integrateRepoPRFirst(root string, result repoIntegrateResult) repoIntegrateResult {
