@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,14 @@ var repoPublishCmd = &cobra.Command{
 	RunE:  runRepoPublish,
 }
 
+var repoIntegrateCmd = &cobra.Command{
+	Use:   "integrate",
+	Short: "Integrate a confirmed work branch",
+	Long:  "Creates or updates a GitHub Pull Request or GitLab Merge Request by default. Direct merge is only attempted when --strategy direct is explicitly provided.",
+	Args:  exactArgs(0),
+	RunE:  runRepoIntegrate,
+}
+
 var repoSyncContextCmd = &cobra.Command{
 	Use:   "sync-context",
 	Short: "Write Multica skills and pipelines into the current git checkout",
@@ -60,9 +69,21 @@ var repoImportContextCmd = &cobra.Command{
 }
 
 var repoCheckoutRef string
+var repoIntegrateSource string
+var repoIntegrateTarget string
+var repoIntegrateStrategy string
+var repoIntegrateTestResult string
+var repoIntegrateOutput string
+var repoIntegrateAllowNonDefaultTarget bool
 
 func init() {
 	repoCheckoutCmd.Flags().StringVar(&repoCheckoutRef, "ref", "", "branch, tag, or commit to check out instead of the remote default branch")
+	repoIntegrateCmd.Flags().StringVar(&repoIntegrateSource, "source", "", "Source branch to integrate")
+	repoIntegrateCmd.Flags().StringVar(&repoIntegrateTarget, "target", "", "Target branch to integrate into")
+	repoIntegrateCmd.Flags().StringVar(&repoIntegrateStrategy, "strategy", "pr-first", "Integration strategy: pr-first or direct")
+	repoIntegrateCmd.Flags().StringVar(&repoIntegrateTestResult, "test-result", "", "Verification result to include in integration output")
+	repoIntegrateCmd.Flags().StringVar(&repoIntegrateOutput, "output", "json", "Output format: json")
+	repoIntegrateCmd.Flags().BoolVar(&repoIntegrateAllowNonDefaultTarget, "allow-non-default-target", false, "Allow integrating into a target branch other than the project default/main when the issue explicitly authorizes it")
 	repoSyncContextCmd.Flags().String("agent-id", "", "Agent ID whose project-context assigned skills should be written (defaults to MULTICA_AGENT_ID in agent tasks)")
 	repoSyncContextCmd.Flags().StringSlice("skill-id", nil, "Project-specific skill ID to write (repeatable or comma-separated)")
 	repoSyncContextCmd.Flags().String("project-id", "", "Project ID whose project resources should be written (defaults to MULTICA_PROJECT_ID in agent tasks)")
@@ -77,6 +98,7 @@ func init() {
 	repoImportContextCmd.Flags().String("output", "table", "Output format: table or json")
 	repoCmd.AddCommand(repoCheckoutCmd)
 	repoCmd.AddCommand(repoPublishCmd)
+	repoCmd.AddCommand(repoIntegrateCmd)
 	repoCmd.AddCommand(repoSyncContextCmd)
 	repoCmd.AddCommand(repoImportContextCmd)
 }
@@ -258,6 +280,475 @@ func writeRepoPublishMetadata(root string, meta repoPublishMetadata) error {
 	if err := os.WriteFile(filepath.Join(dir, "repo-output.json"), append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("write publish metadata: %w", err)
 	}
+	return nil
+}
+
+type repoIntegrateResult struct {
+	SourceBranch  string   `json:"source_branch"`
+	TargetBranch  string   `json:"target_branch"`
+	Mode          string   `json:"mode"`
+	PRURL         string   `json:"pr_url,omitempty"`
+	MergeCommit   string   `json:"merge_commit,omitempty"`
+	TestResult    string   `json:"test_result,omitempty"`
+	Status        string   `json:"status"`
+	Error         string   `json:"error,omitempty"`
+	ConflictFiles []string `json:"conflict_files,omitempty"`
+}
+
+func runRepoIntegrate(cmd *cobra.Command, _ []string) error {
+	if strings.TrimSpace(repoIntegrateOutput) != "json" {
+		return fmt.Errorf("unsupported output %q; only json is supported", repoIntegrateOutput)
+	}
+	root, err := gitOutput("", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return writeRepoIntegrateResult(repoIntegrateResult{
+			SourceBranch: strings.TrimSpace(repoIntegrateSource),
+			TargetBranch: defaultRepoIntegrateTarget(repoIntegrateTarget),
+			Mode:         strings.TrimSpace(repoIntegrateStrategy),
+			TestResult:   strings.TrimSpace(repoIntegrateTestResult),
+			Status:       "failed",
+			Error:        "not inside a git worktree; run this from the repository checkout",
+		})
+	}
+	root = strings.TrimSpace(root)
+	result := integrateRepo(root, repoIntegrateOptions{
+		SourceBranch:          strings.TrimSpace(repoIntegrateSource),
+		TargetBranch:          strings.TrimSpace(repoIntegrateTarget),
+		TargetExplicit:        cmd.Flags().Changed("target"),
+		AllowNonDefaultTarget: repoIntegrateAllowNonDefaultTarget || truthyEnv("MULTICA_ALLOW_NON_DEFAULT_MERGE_TARGET"),
+		NodeType:              strings.TrimSpace(os.Getenv("MULTICA_PLAN_ITEM_NODE_TYPE")),
+		Strategy:              strings.TrimSpace(repoIntegrateStrategy),
+		TestResult:            strings.TrimSpace(repoIntegrateTestResult),
+	})
+	return writeRepoIntegrateResult(result)
+}
+
+type repoIntegrateOptions struct {
+	SourceBranch          string
+	TargetBranch          string
+	TargetExplicit        bool
+	AllowNonDefaultTarget bool
+	NodeType              string
+	Strategy              string
+	TestResult            string
+}
+
+func integrateRepo(root string, opts repoIntegrateOptions) repoIntegrateResult {
+	source := resolveRepoIntegrateSource(root, opts.SourceBranch)
+	target := defaultRepoIntegrateTarget(opts.TargetBranch)
+	defaultTarget := defaultRepoIntegrateTarget("")
+	mode := strings.TrimSpace(opts.Strategy)
+	if mode == "" {
+		mode = "pr-first"
+	}
+	result := repoIntegrateResult{
+		SourceBranch: source,
+		TargetBranch: target,
+		Mode:         mode,
+		TestResult:   strings.TrimSpace(opts.TestResult),
+		Status:       "failed",
+	}
+	if source == "" {
+		result.Error = "source branch is required; pass --source or run after multica repo publish/check out a planned branch"
+		return result
+	}
+	if target == "" {
+		result.TargetBranch = "main"
+		target = "main"
+	}
+	if isMergeNodeIntegrate(opts.NodeType) && opts.TargetExplicit && !opts.AllowNonDefaultTarget && isFeatureBranch(source) && isFeatureBranch(target) {
+		result.Error = fmt.Sprintf("merge node cannot integrate iteration branch %q into feature target %q by default; omit --target to use the project default branch %q, or pass --allow-non-default-target only when the issue explicitly authorizes this feature target", source, target, defaultTarget)
+		return result
+	}
+	if opts.TargetExplicit && !opts.AllowNonDefaultTarget && target != defaultTarget {
+		result.Error = fmt.Sprintf("target branch %q is not the project default branch %q; pass --allow-non-default-target only when the issue explicitly authorizes integrating into this branch", target, defaultTarget)
+		return result
+	}
+	switch mode {
+	case "pr-first":
+		return integrateRepoPRFirst(root, result)
+	case "direct":
+		return integrateRepoDirect(root, result)
+	default:
+		result.Error = "strategy must be pr-first or direct"
+		return result
+	}
+}
+
+func integrateRepoPRFirst(root string, result repoIntegrateResult) repoIntegrateResult {
+	if result.SourceBranch == result.TargetBranch {
+		result.Error = "source branch and target branch must differ"
+		return result
+	}
+	if err := runCommand(root, "git", "push", "-u", "origin", result.SourceBranch); err != nil {
+		result.Error = fmt.Sprintf("push source branch before PR: %v", err)
+		return result
+	}
+	if remoteURL, err := gitOutput(root, "remote", "get-url", "origin"); err == nil {
+		if remote, ok := parseGitRemoteURL(remoteURL); ok && shouldUseGitLabMergeRequest(remote) {
+			return integrateRepoGitLabMR(result, remote)
+		}
+	}
+	return integrateRepoGitHubPR(root, result)
+}
+
+func integrateRepoGitHubPR(root string, result repoIntegrateResult) repoIntegrateResult {
+	if _, err := exec.LookPath("gh"); err != nil {
+		result.Error = "GitHub CLI `gh` is not available; PR-first integration cannot create or update a PR and will not direct-merge automatically"
+		return result
+	}
+	if prURL, err := commandOutput(root, "gh", "pr", "view", result.SourceBranch, "--json", "url", "--jq", ".url"); err == nil && strings.TrimSpace(prURL) != "" {
+		result.PRURL = strings.TrimSpace(prURL)
+		result.Status = "pr_created"
+		return result
+	}
+	title := fmt.Sprintf("Integrate %s into %s", result.SourceBranch, result.TargetBranch)
+	body := strings.TrimSpace(result.TestResult)
+	if body == "" {
+		body = "Created by `multica repo integrate --strategy pr-first`."
+	} else {
+		body = "Test result: " + body
+	}
+	prURL, err := commandOutput(root, "gh", "pr", "create", "--head", result.SourceBranch, "--base", result.TargetBranch, "--title", title, "--body", body)
+	if err != nil {
+		result.Error = fmt.Sprintf("create PR: %v", err)
+		return result
+	}
+	result.PRURL = strings.TrimSpace(prURL)
+	result.Status = "pr_created"
+	return result
+}
+
+type gitRemoteURL struct {
+	Host string
+	Path string
+}
+
+func parseGitRemoteURL(raw string) (gitRemoteURL, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return gitRemoteURL{}, false
+	}
+	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
+		host := strings.TrimSpace(u.Hostname())
+		path := strings.Trim(strings.TrimSuffix(u.Path, ".git"), "/")
+		if host != "" && path != "" {
+			return gitRemoteURL{Host: host, Path: path}, true
+		}
+	}
+	if at := strings.Index(raw, "@"); at >= 0 {
+		rest := raw[at+1:]
+		if colon := strings.Index(rest, ":"); colon > 0 {
+			host := strings.TrimSpace(rest[:colon])
+			path := strings.Trim(strings.TrimSuffix(rest[colon+1:], ".git"), "/")
+			if host != "" && path != "" {
+				return gitRemoteURL{Host: host, Path: path}, true
+			}
+		}
+	}
+	return gitRemoteURL{}, false
+}
+
+func shouldUseGitLabMergeRequest(remote gitRemoteURL) bool {
+	host := strings.ToLower(strings.TrimSpace(remote.Host))
+	if host == "" {
+		return false
+	}
+	if strings.Contains(host, "gitlab") {
+		return true
+	}
+	for _, key := range []string{"GITLAB_BASE_URL", "CI_SERVER_URL"} {
+		if envHost := hostFromURL(os.Getenv(key)); envHost != "" && strings.EqualFold(envHost, remote.Host) {
+			return true
+		}
+	}
+	if gitLabAuthHeaderValue() != "" && !isGitHubHost(host) {
+		return true
+	}
+	return false
+}
+
+func isGitHubHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "github.com" || strings.HasSuffix(host, ".github.com")
+}
+
+func hostFromURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(u.Hostname())
+}
+
+func integrateRepoGitLabMR(result repoIntegrateResult, remote gitRemoteURL) repoIntegrateResult {
+	if gitLabAuthHeaderValue() == "" {
+		result.Error = "GitLab remote detected but no GitLab token is configured; set GITLAB_TOKEN, GLAB_TOKEN, GITLAB_PRIVATE_TOKEN, or CI_JOB_TOKEN so PR-first can create or reuse a Merge Request"
+		return result
+	}
+	if mrURL, err := findOpenGitLabMergeRequest(remote, result.SourceBranch, result.TargetBranch); err == nil && mrURL != "" {
+		result.PRURL = mrURL
+		result.Status = "pr_created"
+		return result
+	} else if err != nil {
+		result.Error = fmt.Sprintf("query GitLab merge requests: %v", err)
+		return result
+	}
+	mrURL, err := createGitLabMergeRequest(remote, result)
+	if err != nil {
+		result.Error = fmt.Sprintf("create GitLab merge request: %v", err)
+		return result
+	}
+	result.PRURL = mrURL
+	result.Status = "pr_created"
+	return result
+}
+
+func gitLabAPIBase(remote gitRemoteURL) string {
+	for _, key := range []string{"GITLAB_BASE_URL", "CI_SERVER_URL"} {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			continue
+		}
+		if !strings.Contains(raw, "://") {
+			raw = "https://" + raw
+		}
+		if u, err := url.Parse(raw); err == nil && strings.EqualFold(u.Hostname(), remote.Host) {
+			return strings.TrimRight(raw, "/")
+		}
+	}
+	return "https://" + remote.Host
+}
+
+func gitLabAuthHeaderValue() string {
+	for _, key := range []string{"GITLAB_TOKEN", "GLAB_TOKEN", "GITLAB_PRIVATE_TOKEN"} {
+		if token := strings.TrimSpace(os.Getenv(key)); token != "" {
+			return "PRIVATE-TOKEN: " + token
+		}
+	}
+	if token := strings.TrimSpace(os.Getenv("CI_JOB_TOKEN")); token != "" {
+		return "JOB-TOKEN: " + token
+	}
+	return ""
+}
+
+func newGitLabRequest(method, rawURL string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, rawURL, body)
+	if err != nil {
+		return nil, err
+	}
+	header := gitLabAuthHeaderValue()
+	if header == "" {
+		return nil, fmt.Errorf("GitLab token is not configured")
+	}
+	parts := strings.SplitN(header, ": ", 2)
+	req.Header.Set(parts[0], parts[1])
+	req.Header.Set("Accept", "application/json")
+	return req, nil
+}
+
+type gitLabMergeRequestResponse struct {
+	WebURL string `json:"web_url"`
+}
+
+func findOpenGitLabMergeRequest(remote gitRemoteURL, sourceBranch, targetBranch string) (string, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests?state=opened&source_branch=%s&target_branch=%s",
+		gitLabAPIBase(remote),
+		url.PathEscape(remote.Path),
+		url.QueryEscape(sourceBranch),
+		url.QueryEscape(targetBranch),
+	)
+	req, err := newGitLabRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("GitLab API returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var mrs []gitLabMergeRequestResponse
+	if err := json.NewDecoder(resp.Body).Decode(&mrs); err != nil {
+		return "", err
+	}
+	if len(mrs) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(mrs[0].WebURL), nil
+}
+
+func createGitLabMergeRequest(remote gitRemoteURL, result repoIntegrateResult) (string, error) {
+	body := strings.TrimSpace(result.TestResult)
+	if body == "" {
+		body = "Created by `multica repo integrate --strategy pr-first`."
+	} else {
+		body = "Test result: " + body
+	}
+	payload := map[string]string{
+		"source_branch": result.SourceBranch,
+		"target_branch": result.TargetBranch,
+		"title":         fmt.Sprintf("Integrate %s into %s", result.SourceBranch, result.TargetBranch),
+		"description":   body,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests", gitLabAPIBase(remote), url.PathEscape(remote.Path))
+	req, err := newGitLabRequest(http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("GitLab API returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var mr gitLabMergeRequestResponse
+	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(mr.WebURL) == "" {
+		return "", fmt.Errorf("GitLab API response did not include web_url")
+	}
+	return strings.TrimSpace(mr.WebURL), nil
+}
+
+func integrateRepoDirect(root string, result repoIntegrateResult) repoIntegrateResult {
+	if result.SourceBranch == result.TargetBranch {
+		result.Error = "source branch and target branch must differ"
+		return result
+	}
+	_ = runCommand(root, "git", "fetch", "origin", result.TargetBranch, result.SourceBranch)
+	if err := runCommand(root, "git", "checkout", result.TargetBranch); err != nil {
+		if checkoutErr := runCommand(root, "git", "checkout", "-B", result.TargetBranch, "origin/"+result.TargetBranch); checkoutErr != nil {
+			result.Error = fmt.Sprintf("checkout target branch: %v; fallback: %v", err, checkoutErr)
+			return result
+		}
+	}
+	sourceRef := result.SourceBranch
+	if _, err := gitOutput(root, "rev-parse", "--verify", "origin/"+result.SourceBranch); err == nil {
+		sourceRef = "origin/" + result.SourceBranch
+	}
+	if err := runCommand(root, "git", "merge", "--no-ff", sourceRef, "-m", fmt.Sprintf("Merge %s into %s", result.SourceBranch, result.TargetBranch)); err != nil {
+		result.ConflictFiles = conflictedGitFiles(root)
+		_ = runCommand(root, "git", "merge", "--abort")
+		result.Error = fmt.Sprintf("merge source branch: %v", err)
+		return result
+	}
+	commit, err := gitOutput(root, "rev-parse", "HEAD")
+	if err != nil {
+		result.Error = fmt.Sprintf("read merge commit: %v", err)
+		return result
+	}
+	if err := runCommand(root, "git", "push", "origin", result.TargetBranch); err != nil {
+		result.MergeCommit = strings.TrimSpace(commit)
+		result.Error = fmt.Sprintf("push target branch: %v", err)
+		return result
+	}
+	result.MergeCommit = strings.TrimSpace(commit)
+	result.Status = "merged"
+	return result
+}
+
+func resolveRepoIntegrateSource(root, explicit string) string {
+	if source := strings.TrimSpace(explicit); source != "" {
+		return source
+	}
+	for _, key := range []string{"MULTICA_PLAN_BRANCH_NAME", "MULTICA_PUBLISH_BRANCH_NAME"} {
+		if source := strings.TrimSpace(os.Getenv(key)); source != "" {
+			return source
+		}
+	}
+	if meta, err := readRepoPublishMetadata(root); err == nil && strings.TrimSpace(meta.BranchName) != "" {
+		return strings.TrimSpace(meta.BranchName)
+	}
+	branch, err := gitOutput(root, "branch", "--show-current")
+	if err == nil {
+		return strings.TrimSpace(branch)
+	}
+	return ""
+}
+
+func defaultRepoIntegrateTarget(explicit string) string {
+	if target := strings.TrimSpace(explicit); target != "" {
+		return target
+	}
+	for _, key := range []string{"MULTICA_DEFAULT_BRANCH_HINT"} {
+		if target := strings.TrimSpace(os.Getenv(key)); target != "" {
+			return target
+		}
+	}
+	return "main"
+}
+
+func truthyEnv(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMergeNodeIntegrate(nodeType string) bool {
+	return strings.EqualFold(strings.TrimSpace(nodeType), "merge")
+}
+
+func isFeatureBranch(branch string) bool {
+	return strings.HasPrefix(strings.TrimSpace(branch), "feature/")
+}
+
+func readRepoPublishMetadata(root string) (repoPublishMetadata, error) {
+	var meta repoPublishMetadata
+	data, err := os.ReadFile(filepath.Join(root, ".multica", "repo-output.json"))
+	if err != nil {
+		return meta, err
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return meta, err
+	}
+	return meta, nil
+}
+
+func conflictedGitFiles(root string) []string {
+	out, err := gitOutput(root, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return []string{}
+	}
+	lines := strings.Split(out, "\n")
+	files := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files
+}
+
+func writeRepoIntegrateResult(result repoIntegrateResult) error {
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stdout, string(data))
 	return nil
 }
 
@@ -1658,6 +2149,23 @@ func gitOutput(workDir string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return string(out), nil
+}
+
+func commandOutput(workDir, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
+func runCommand(workDir, name string, args ...string) error {
+	_, err := commandOutput(workDir, name, args...)
+	return err
 }
 
 func shortCommit(commit string) string {

@@ -180,8 +180,11 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, branchCommitSHA, branchPushedAt, sessionID, workDir string) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branchName, branchCommitSHA, branchPushedAt, sessionID, workDir string) error {
 	body := map[string]any{"output": output}
+	if prURL != "" {
+		body["pr_url"] = prURL
+	}
 	if branchName != "" {
 		body["branch_name"] = branchName
 	}
@@ -272,8 +275,8 @@ type (
 func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
 	if err := c.postJSON(ctx, "/api/daemon/heartbeat", map[string]any{
-		"runtime_id":             runtimeID,
-		"supports_batch_import":  true,
+		"runtime_id":            runtimeID,
+		"supports_batch_import": true,
 	}, &resp); err != nil {
 		return nil, err
 	}

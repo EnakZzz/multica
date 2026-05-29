@@ -45,8 +45,13 @@ type codexSandboxPolicy struct {
 // codexSandboxPolicyFor picks the right policy for the given platform and
 // detected Codex CLI version.
 //
-// - Non-darwin: always workspace-write with network access (Landlock is not
-//   affected by the macOS Seatbelt bug).
+// - Windows: fall back to danger-full-access. Multica already isolates each
+//   task in a per-task workdir, and Codex's elevated Windows sandbox has to
+//   refresh ACL/WFP state for every shell command. In long-lived daemon tasks
+//   that repeated setup can leave tasks looking stuck before they even reach
+//   the Multica CLI.
+// - Linux: workspace-write with network access (Landlock is not affected by
+//   the macOS Seatbelt bug).
 // - darwin with a version at or above CodexDarwinNetworkAccessFixedVersion:
 //   workspace-write with network access (upstream bug fixed).
 // - darwin otherwise (including when the version is unknown): fall back to
@@ -54,6 +59,13 @@ type codexSandboxPolicy struct {
 func codexSandboxPolicyFor(goos, detectedVersion string) codexSandboxPolicy {
 	if goos == "" {
 		goos = runtime.GOOS
+	}
+	if goos == "windows" {
+		return codexSandboxPolicy{
+			Mode:          "danger-full-access",
+			NetworkAccess: false,
+			Reason:        "codex on Windows: elevated sandbox ACL/WFP setup is too slow for daemon task execution",
+		}
 	}
 	if goos != "darwin" {
 		return codexSandboxPolicy{

@@ -46,6 +46,7 @@ type TaskContextForEnv struct {
 	IssueID                   string
 	IssueIdentifier           string
 	PlanItemID                string
+	PlanItemNodeType          string
 	PlanItemExecutionKind     string
 	PlanItemRequiresGitCommit bool
 	PlanItemBranchName        string

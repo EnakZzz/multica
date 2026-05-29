@@ -87,6 +87,7 @@ type Task struct {
 	IssuePlanSpec                    PlanSpecData         `json:"issue_plan_spec,omitempty"`     // approved spec for item-generation tasks
 	AvailableAgents                  []PlanAgentData      `json:"available_agents,omitempty"`    // assignable agents planner may recommend
 	AvailablePipelines               []PlanPipelineData   `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
+	AvailableSkills                  []PlanSkillData      `json:"available_skills,omitempty"`    // visible skills planner may use as methodology references
 	VisualTaskType                   string               `json:"visual_task_type,omitempty"`
 	VisualNodeID                     string               `json:"visual_node_id,omitempty"`
 	VisualNodeTitle                  string               `json:"visual_node_title,omitempty"`
@@ -163,9 +164,20 @@ type PlanClarificationData struct {
 type PlanAgentData struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
+	DisplayName  string   `json:"display_name,omitempty"`
 	Description  string   `json:"description"`
 	Instructions string   `json:"instructions,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
+	IsBuiltin    bool     `json:"is_builtin,omitempty"`
+	BuiltinKey   string   `json:"builtin_key,omitempty"`
+}
+
+type PlanSkillData struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	IsBuiltin   bool   `json:"is_builtin,omitempty"`
+	BuiltinKey  string `json:"builtin_key,omitempty"`
 }
 
 type PlanPipelineData struct {
@@ -240,6 +252,7 @@ type TaskUsageEntry struct {
 type TaskResult struct {
 	Status          string           `json:"status"`
 	Comment         string           `json:"comment"`
+	PRURL           string           `json:"pr_url,omitempty"`
 	BranchName      string           `json:"branch_name,omitempty"`
 	BranchCommitSHA string           `json:"branch_commit_sha,omitempty"`
 	BranchPushedAt  string           `json:"branch_pushed_at,omitempty"`

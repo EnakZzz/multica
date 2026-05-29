@@ -23,7 +23,7 @@ var runtimeGOOS = runtime.GOOS
 //
 // CR/LF and other whitespace control bytes collapse to a single space; other
 // C0 controls and DEL are dropped; markdown structural characters that have
-// meaning in inline context (`*`, `_`, `` ` ``, `\`, `[`, `]`, `<`) are
+// meaning in inline context (`*`, `_`, “ ` “, `\`, `[`, `]`, `<`) are
 // backslash-escaped. Trailing whitespace is trimmed.
 func sanitizeNameForBriefMarkdown(name string) string {
 	var b strings.Builder
@@ -193,6 +193,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>] [--attachment <path>]` — Create a new issue; `--attachment` may be repeated.\n")
 	b.WriteString("- `multica issue update <id> [--title X] [--description X | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>]` — Update issue fields; use `--parent \"\"` to clear parent.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out a repository into the working directory (creates a git worktree with a dedicated branch; use `--ref` for review/QA on a specific branch, tag, or commit)\n")
+	b.WriteString("- `multica repo integrate --source <branch> --strategy pr-first --test-result <text> --output json` — Create or reuse a GitHub Pull Request or GitLab Merge Request for an approved branch into the project default branch/main. GitLab remotes require GITLAB_TOKEN / GLAB_TOKEN / GITLAB_PRIVATE_TOKEN or CI_JOB_TOKEN in the agent environment. Only add `--target <non-default> --allow-non-default-target` when the issue explicitly authorizes that non-default target. Use `--strategy direct` only when explicitly authorized.\n")
 	b.WriteString("- `multica repo import-context [--project-id <id>] [--role <role_key=agent_id>]` — Import `.multica/project.yaml` plus referenced pipeline YAML from the current git checkout into Multica. Missing role bindings leave those pipeline nodes unassigned; `repo checkout` runs this automatically after checkout, and `MULTICA_PROJECT_ROLE_BINDINGS` can provide JSON role bindings for auto-import.\n")
 	b.WriteString("- `multica repo sync-context [--skill-id <id>] [--project-id <id>] [--pipeline-id <id>]` — Write project-specific Multica skills and selected/project pipeline YAML into the current git checkout under `.multica/` so the definitions can be committed and reused by local agents or human testers. Assigned agent skills are exported only when their skill config marks them as repo/project context; generic cross-project agent skills stay runtime-only.\n")
 	b.WriteString("- `multica issue status <id> <status>` — Shortcut for `issue update --status` when you only need to flip status (todo, in_progress, in_review, done, blocked, backlog, cancelled)\n")
@@ -327,6 +328,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	} else if ctx.TriggerCommentID != "" {
 		// Comment-triggered: focus on reading and replying
 		b.WriteString("**This task was triggered by a NEW comment.** Your primary job is to respond to THIS specific comment, even if you have handled similar requests before in this session.\n\n")
+		writePlanNodeDelegationGuidance(&b, ctx)
 		fmt.Fprintf(&b, "1. Run `multica issue get %s --output json` to understand the issue context\n", ctx.IssueID)
 		fmt.Fprintf(&b, "2. Read the triggering thread first — that is what this comment is actually about: `multica issue comment list %s --thread %s --output json` returns the root and every reply in the same thread as the trigger.\n", ctx.IssueID, ctx.TriggerCommentID)
 		fmt.Fprintf(&b, "   - If the thread alone is not enough context, pull the most recently active threads on the issue: `multica issue comment list %s --recent 20 --output json`. Each `--recent` page also prints a `Next thread cursor: --before <ts> --before-id <root-id>` line on stderr; pass the same pair back as `--before <ts> --before-id <root-id>` to scroll to older threads when 20 still isn't enough.\n", ctx.IssueID)
@@ -343,6 +345,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("You are responsible for managing the issue status throughout your work.\n\n")
 		if planAgentTask {
 			b.WriteString("This issue was created from a Plan item with `execution_kind=agent_task`. That kind is the execution contract: complete the task directly and do not put it into `in_review` unless the issue or a human comment explicitly asks for a separate review.\n")
+			writePlanNodeDelegationGuidance(&b, ctx)
 			if ctx.PlanItemRequiresGitCommit && ctx.PlanItemBranchName != "" {
 				fmt.Fprintf(&b, "The Plan item has a planned branch name: `%s`. `multica repo checkout <url>` will use the planned branch when available, and `multica repo publish` will push HEAD back to that planned branch. Use exactly that name in the final Branch line after publishing; do not invent or substitute another branch name.\n\n", ctx.PlanItemBranchName)
 			} else {
@@ -461,4 +464,27 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	}
 
 	return b.String()
+}
+
+func writePlanNodeDelegationGuidance(b *strings.Builder, ctx TaskContextForEnv) {
+	if isSubagentDrivenPlanNode(ctx.PlanItemNodeType) {
+		b.WriteString("This Plan node is explicitly `node_type=subagent-driven-development`. Subagent delegation is allowed for this node, but keep one owner for final verification, avoid duplicate evidence runs, and reuse existing evidence instead of rerunning the same verification only to refresh screenshots or logs.\n\n")
+		return
+	}
+	if isVerificationLikePlanNode(ctx.PlanItemNodeType) {
+		b.WriteString("Subagent delegation is disabled for this verification/review Plan node. Do not use subagents, nested agents, `mention://agent/...` links, or any delegation mechanism to perform the verification. You are the single verification owner: run the required checks once, reuse the evidence you produced, and post one final result.\n\n")
+	}
+}
+
+func isSubagentDrivenPlanNode(nodeType string) bool {
+	return strings.TrimSpace(nodeType) == "subagent-driven-development"
+}
+
+func isVerificationLikePlanNode(nodeType string) bool {
+	switch strings.TrimSpace(nodeType) {
+	case "check", "spec_review", "code_review":
+		return true
+	default:
+		return false
+	}
 }

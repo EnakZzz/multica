@@ -148,10 +148,10 @@ func TestBuildVisualNodePromptRequiresNodeCompletion(t *testing.T) {
 		ProjectID:                    "project-123",
 		ProjectTitle:                 "Lost Pet",
 		VisualNodeID:                 "node-123",
-		VisualNodeTitle:              "Rainy street corner",
-		VisualNodeType:               "scene",
-		VisualNodeDescription:        "A warm but rainy urban search scene.",
-		VisualPrompt:                 "Cozy rain-soaked street corner, readable missing pet poster.",
+		VisualNodeTitle:              "Milo portrait",
+		VisualNodeType:               "character",
+		VisualNodeDescription:        "A warm lost-pet protagonist portrait.",
+		VisualPrompt:                 "Cute small-animal protagonist portrait with readable silhouette.",
 		VisualReferenceAttachmentIDs: []string{"attachment-123"},
 	}, "codex")
 
@@ -159,15 +159,51 @@ func TestBuildVisualNodePromptRequiresNodeCompletion(t *testing.T) {
 		"There is no issue for this task",
 		"Visual node ID: node-123",
 		"download with `multica attachment download attachment-123`",
+		"follow the `game-asset-pipeline` skill",
+		"local skill at `C:\\Users\\happyelements\\.codex\\skills\\game-asset-pipeline\\SKILL.md`",
+		"must preserve transparency: PNG/WebP with alpha and no baked scene/background",
+		"generate on a flat removable chroma-key background, remove the key locally",
 		"Upload the generated image as an attachment",
+		"also provide Chinese human-display text",
 		"multica visual-node complete <node-id> --project <project-id> --attachment <local-image-path>",
-		"multica visual-node complete <node-id> --project <project-id> --error <reason>",
+		"--note-zh",
+		"multica visual-node complete <node-id> --project <project-id> --error <English reason> --error-zh <Chinese reason>",
 		"Do not create an issue",
 	}
 
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {
 			t.Errorf("BuildPrompt visual node output missing %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
+func TestBuildVisualAnimationPromptRequiresPipelineDeliverables(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID:         "issue-123",
+		IssueIdentifier: "LOC-99",
+		VisualTaskType:  "visual_node_generate",
+		ProjectID:       "project-123",
+		ProjectTitle:    "Lost Pet",
+		VisualNodeID:    "node-123",
+		VisualNodeTitle: "Milo animation set",
+		VisualNodeType:  "animation",
+		VisualPrompt:    "Generate an idle/walk/jump spritesheet for Milo.",
+	}, "codex")
+
+	mustContain := []string{
+		"Tracking issue: issue-123 (LOC-99)",
+		"follow the `game-asset-pipeline` skill",
+		"This is an animation node",
+		"animation_manifest.json, a transparent spritesheet, per-action previews, validation output, QA notes, and final handoff paths",
+		"must preserve transparency: PNG/WebP with alpha and no baked scene/background",
+		"Keep the work inside the current Multica visual-node issue and completion flow",
+		"Do not complete it with only a static portrait",
+	}
+
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("BuildPrompt visual animation output missing %q\n--- output ---\n%s", s, out)
 		}
 	}
 }
@@ -191,10 +227,16 @@ func TestBuildVisualBoardExtractPromptRequiresStrictJSON(t *testing.T) {
 	mustContain := []string{
 		"There is no issue for this task",
 		"Visual board ID: board-123",
-		"Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant",
+		"Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant, animation",
 		"wiki_page id=wiki-1 slug=visual-brief",
+		"Use English for automation fields consumed by agents",
+		"`title_zh`, `description_zh`, and `prompt_zh`",
+		"Chinese fields are for UI reading only",
 		"Return exactly one JSON object",
 		`"nodes"`,
+		`"title_zh"`,
+		`"description_zh"`,
+		`"prompt_zh"`,
 		`"edges"`,
 		"no markdown fences",
 	}
@@ -262,10 +304,12 @@ func TestBuildIssuePlanSpecPromptIncludesBuiltInPlannerQualityRules(t *testing.T
 		"Design decisions should record why the proposed approach is chosen",
 		"Separate assumptions from open questions.",
 		"Put reasonable defaults and non-blocking uncertainties in assumptions",
-		"Never ask more than 2 questions in one spec.",
+		"Ask only questions that materially change scope, access, safety, or execution.",
 		"Keep in_scope as the smallest coherent delivery slice.",
-		"whether review-gated-feature-development should be used for high-risk work.",
+		"which visible pipeline or skills fit high-risk work.",
 		"do not invent agents, skills, repos, files, or commands.",
+		"Available skills you may use as visible methodology references:",
+		"derive methodology choices from the available asset metadata instead of hardcoded pipeline names.",
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {
@@ -349,11 +393,13 @@ func TestBuildIssuePlanItemsPromptIncludesBuiltInPlannerQualityRules(t *testing.
 		"Every selected item must be independently assignable to one agent",
 		"Split by deliverable and dependency boundary, not by job title.",
 		"No hidden work:",
-		"Use review-gated-feature-development for high-risk feature work",
+		"prefer a visible pipeline with spec_review and code_review nodes.",
 		"Review gates must depend on the implementation or repair work they review.",
 		"Create explicit dependencies for true blocking order",
 		"Leave independent work dependency-free so it can run in parallel.",
 		"Recommend agents only from Available agents",
+		"Available skills you may use as visible methodology references:",
+		"Built-in pipelines, agents, and skills are readonly visible assets.",
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {

@@ -88,6 +88,148 @@ func TestResolveRepoPublishTargetAllowsDetachedHeadWithPlannedBranch(t *testing.
 	}
 }
 
+func TestParseGitRemoteURLSupportsSelfManagedGitLabForms(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		raw  string
+		host string
+		path string
+	}{
+		{"git@sc-sh.happyelements.net:group/sub/repo.git", "sc-sh.happyelements.net", "group/sub/repo"},
+		{"https://sc-sh.happyelements.net/group/sub/repo.git", "sc-sh.happyelements.net", "group/sub/repo"},
+		{"ssh://git@sc-sh.happyelements.net:2222/group/sub/repo.git", "sc-sh.happyelements.net", "group/sub/repo"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.raw, func(t *testing.T) {
+			got, ok := parseGitRemoteURL(tt.raw)
+			if !ok {
+				t.Fatalf("parseGitRemoteURL(%q) failed", tt.raw)
+			}
+			if got.Host != tt.host || got.Path != tt.path {
+				t.Fatalf("parseGitRemoteURL(%q) = %#v, want host=%q path=%q", tt.raw, got, tt.host, tt.path)
+			}
+		})
+	}
+}
+
+func TestGitLabMergeRequestCreatesMR(t *testing.T) {
+	var sawCreate bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("PRIVATE-TOKEN"); got != "token-1" {
+			t.Fatalf("PRIVATE-TOKEN header = %q", got)
+		}
+		escapedPath := r.URL.EscapedPath()
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(escapedPath, "/api/v4/projects/group%2Fsub%2Frepo/merge_requests"):
+			if got := r.URL.Query().Get("source_branch"); got != "feature/work" {
+				t.Fatalf("source_branch = %q", got)
+			}
+			if got := r.URL.Query().Get("target_branch"); got != "main" {
+				t.Fatalf("target_branch = %q", got)
+			}
+			w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && escapedPath == "/api/v4/projects/group%2Fsub%2Frepo/merge_requests":
+			sawCreate = true
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body["source_branch"] != "feature/work" || body["target_branch"] != "main" {
+				t.Fatalf("unexpected create body: %#v", body)
+			}
+			if !strings.Contains(body["description"], "go test ./... passed") {
+				t.Fatalf("description missing test result: %#v", body)
+			}
+			w.Write([]byte(`{"web_url":"https://sc-sh.happyelements.net/group/sub/repo/-/merge_requests/7"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("GITLAB_BASE_URL", srv.URL)
+	t.Setenv("GITLAB_TOKEN", "token-1")
+
+	remote := gitRemoteURL{Host: hostFromURL(srv.URL), Path: "group/sub/repo"}
+	got := integrateRepoGitLabMR(repoIntegrateResult{
+		SourceBranch: "feature/work",
+		TargetBranch: "main",
+		Mode:         "pr-first",
+		TestResult:   "go test ./... passed",
+		Status:       "failed",
+	}, remote)
+
+	if got.Status != "pr_created" || got.PRURL != "https://sc-sh.happyelements.net/group/sub/repo/-/merge_requests/7" {
+		t.Fatalf("integrateRepoGitLabMR() = %#v", got)
+	}
+	if !sawCreate {
+		t.Fatalf("expected merge request create call")
+	}
+}
+
+func TestDefaultRepoIntegrateTargetIgnoresLegacyTargetEnv(t *testing.T) {
+	t.Setenv("MULTICA_TARGET_BRANCH", "feature/old-target")
+	t.Setenv("MULTICA_DEFAULT_BRANCH_HINT", "develop")
+
+	if got := defaultRepoIntegrateTarget(""); got != "develop" {
+		t.Fatalf("defaultRepoIntegrateTarget() = %q, want develop", got)
+	}
+}
+
+func TestIntegrateRepoRejectsNonDefaultTargetWithoutAuthorization(t *testing.T) {
+	t.Setenv("MULTICA_DEFAULT_BRANCH_HINT", "main")
+
+	got := integrateRepo("", repoIntegrateOptions{
+		SourceBranch:   "feature/work",
+		TargetBranch:   "feature/app-shell",
+		TargetExplicit: true,
+		Strategy:       "pr-first",
+	})
+
+	if got.Status != "failed" {
+		t.Fatalf("Status = %q, want failed", got.Status)
+	}
+	if !strings.Contains(got.Error, "not the project default branch") {
+		t.Fatalf("Error = %q, want non-default target guard", got.Error)
+	}
+}
+
+func TestIntegrateRepoMergeNodeRejectsFeatureToFeatureTargetWithoutAuthorization(t *testing.T) {
+	t.Setenv("MULTICA_DEFAULT_BRANCH_HINT", "main")
+
+	got := integrateRepo("", repoIntegrateOptions{
+		SourceBranch:   "feature/work",
+		TargetBranch:   "feature/app-shell",
+		TargetExplicit: true,
+		NodeType:       "merge",
+		Strategy:       "pr-first",
+	})
+
+	if got.Status != "failed" {
+		t.Fatalf("Status = %q, want failed", got.Status)
+	}
+	if !strings.Contains(got.Error, "cannot integrate iteration branch") {
+		t.Fatalf("Error = %q, want merge node feature target guard", got.Error)
+	}
+}
+
+func TestIntegrateRepoAllowsExplicitNonDefaultTargetWithAuthorization(t *testing.T) {
+	t.Setenv("MULTICA_DEFAULT_BRANCH_HINT", "main")
+
+	got := integrateRepo("", repoIntegrateOptions{
+		SourceBranch:          "feature/work",
+		TargetBranch:          "feature/app-shell",
+		TargetExplicit:        true,
+		AllowNonDefaultTarget: true,
+		NodeType:              "merge",
+		Strategy:              "unknown",
+	})
+
+	if got.Error != "strategy must be pr-first or direct" {
+		t.Fatalf("Error = %q, want strategy validation after target authorization", got.Error)
+	}
+}
+
 func TestSyncRepoContextWritesSkillsAndPipelines(t *testing.T) {
 	const (
 		agentID        = "agent-123"

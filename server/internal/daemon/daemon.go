@@ -2140,7 +2140,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		if err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.BranchCommitSHA, result.BranchPushedAt, result.SessionID, result.WorkDir); err != nil {
+		if err := d.client.CompleteTask(ctx, taskID, result.Comment, result.PRURL, result.BranchName, result.BranchCommitSHA, result.BranchPushedAt, result.SessionID, result.WorkDir); err != nil {
 			taskLog.Error("complete task failed, falling back to fail", "error", err)
 			if failErr := d.client.FailTask(ctx, taskID, fmt.Sprintf("complete task failed: %s", err.Error()), result.SessionID, result.WorkDir, "agent_error"); failErr != nil {
 				taskLog.Error("fail task fallback also failed", "error", failErr)
@@ -2310,6 +2310,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		IssueID:                          task.IssueID,
 		IssueIdentifier:                  task.IssueIdentifier,
 		PlanItemID:                       task.PlanItemID,
+		PlanItemNodeType:                 task.PlanItemNodeType,
 		PlanItemExecutionKind:            task.PlanItemExecutionKind,
 		PlanItemRequiresGitCommit:        task.PlanItemRequiresGitCommit,
 		PlanItemBranchName:               task.PlanItemBranchName,
@@ -2413,11 +2414,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"MULTICA_AGENT_ID":            task.AgentID,
 		"MULTICA_PROJECT_ID":          task.ProjectID,
 		"MULTICA_ISSUE_IDENTIFIER":    task.IssueIdentifier,
+		"MULTICA_PLAN_ITEM_NODE_TYPE": task.PlanItemNodeType,
 		"MULTICA_PLAN_BRANCH_NAME":    task.PlanItemBranchName,
 		"MULTICA_REPO_CHECKOUT_REF":   task.RepoCheckoutRef,
 		"MULTICA_PUBLISH_BRANCH_NAME": task.PublishBranchName,
 		"MULTICA_TASK_ID":             task.ID,
 		"MULTICA_TASK_SLOT":           strconv.Itoa(slot),
+	}
+	if defaultBranch := defaultBranchHintFromProjectResources(task.ProjectResources); defaultBranch != "" {
+		agentEnv["MULTICA_DEFAULT_BRANCH_HINT"] = defaultBranch
 	}
 	if task.AutopilotRunID != "" {
 		agentEnv["MULTICA_AUTOPILOT_RUN_ID"] = task.AutopilotRunID
@@ -2425,6 +2430,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.AutopilotID != "" {
 		agentEnv["MULTICA_AUTOPILOT_ID"] = task.AutopilotID
 	}
+	copyGitProviderEnv(agentEnv, os.Getenv)
 	// Quick-create marker — when set, the multica CLI's `issue create`
 	// command stamps the new issue with origin_type=quick_create +
 	// origin_id=<task_id> so the completion handler can find it
@@ -3310,6 +3316,41 @@ func isBlockedEnvKey(key string) bool {
 		return true
 	}
 	return false
+}
+
+func copyGitProviderEnv(dst map[string]string, getenv func(string) string) {
+	for _, key := range []string{
+		"GITLAB_BASE_URL",
+		"GITLAB_TOKEN",
+		"GLAB_TOKEN",
+		"GITLAB_PRIVATE_TOKEN",
+		"CI_JOB_TOKEN",
+		"CI_SERVER_URL",
+	} {
+		if value := strings.TrimSpace(getenv(key)); value != "" {
+			dst[key] = value
+		}
+	}
+}
+
+func defaultBranchHintFromProjectResources(resources []ProjectResourceData) string {
+	for _, resource := range resources {
+		switch strings.TrimSpace(resource.ResourceType) {
+		case "git_repo", "github_repo":
+		default:
+			continue
+		}
+		var ref struct {
+			DefaultBranchHint string `json:"default_branch_hint"`
+		}
+		if err := json.Unmarshal(resource.ResourceRef, &ref); err != nil {
+			continue
+		}
+		if branch := strings.TrimSpace(ref.DefaultBranchHint); branch != "" {
+			return branch
+		}
+	}
+	return ""
 }
 
 func defaultArgsForProvider(cfg Config, provider string) []string {

@@ -42,7 +42,19 @@ func BuildPrompt(task Task, provider string) string {
 	writeRelevantKnowledgeBlock(&b, task)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
-	if isReviewGateNodeType(task.PlanItemNodeType) {
+	if strings.TrimSpace(task.PlanItemNodeType) == "merge" {
+		b.WriteString("This issue is a `node_type=merge` integration task. It must only run after the related human confirmation gate has authorized integration; do not treat this as the approval gate itself.\n")
+		b.WriteString("Use PR-first behavior. Prefer `multica repo integrate --strategy pr-first --output json` after identifying the source branch from the issue body, plan item branch, prior task comments, or checkout metadata. Target branch must be the project repo default branch when known, otherwise `main`. Only pass `--target <non-default>` together with `--allow-non-default-target` when the issue explicitly authorizes integrating into that non-default branch. The CLI can create GitHub Pull Requests and GitLab Merge Requests when the required provider token is configured.\n")
+		b.WriteString("Do not use `multica repo publish` for this merge task, and do not direct-push to main/master unless the issue or a human comment explicitly authorizes direct integration. If PR/MR creation fails, stop with status failed and report the exact reason; do not fall back to direct merge on your own. If integration fails, report failure honestly and include conflict files when available.\n")
+		b.WriteString("Your final issue comment must include:\n")
+		b.WriteString("- Source branch: ...\n")
+		b.WriteString("- Target branch: ...\n")
+		b.WriteString("- PR: ... or Merge commit: ...\n")
+		b.WriteString("- Test result: ...\n")
+		b.WriteString("- Status: merged | pr_created | failed\n")
+		b.WriteString("- Failure reason: ... and Conflict files: ... when failed\n")
+		writeWikiDeltaGuidance(&b, false)
+	} else if isReviewGateNodeType(task.PlanItemNodeType) {
 		fmt.Fprintf(&b, "This issue is a blocking review gate with `node_type=%s`. Do not mark the issue `done`, `blocked`, or any other status yourself; the server applies the gate state after your task completes.\n", task.PlanItemNodeType)
 		if strings.TrimSpace(task.ReviewTargetBranchName) != "" {
 			identifier := strings.TrimSpace(task.ReviewTargetIdentifier)
@@ -125,7 +137,15 @@ func BuildPrompt(task Task, provider string) string {
 func buildVisualNodePrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("You are running as an art-generation agent for a Multica project visual canvas.\n\n")
-	b.WriteString("There is no issue for this task. Generate or prepare the requested visual asset, upload the image attachment, and write the result back to the visual node.\n\n")
+	if task.IssueID != "" {
+		fmt.Fprintf(&b, "Tracking issue: %s", task.IssueID)
+		if task.IssueIdentifier != "" {
+			fmt.Fprintf(&b, " (%s)", task.IssueIdentifier)
+		}
+		b.WriteString(". Generate or prepare the requested visual asset, upload the image attachment, and write the result back to the visual node.\n\n")
+	} else {
+		b.WriteString("There is no issue for this task. Generate or prepare the requested visual asset, upload the image attachment, and write the result back to the visual node.\n\n")
+	}
 	if task.ProjectTitle != "" {
 		fmt.Fprintf(&b, "Project: %s (%s)\n\n", task.ProjectTitle, task.ProjectID)
 	}
@@ -144,10 +164,24 @@ func buildVisualNodePrompt(task Task) string {
 		b.WriteString("\n")
 	}
 	writeRelevantKnowledgeBlock(&b, task)
+	b.WriteString("Required generation pipeline:\n")
+	b.WriteString("- You must follow the `game-asset-pipeline` skill for this task. Treat it as the production contract: artstyle/artrule documents or their existing equivalents, asset manifest, bounded generation, deterministic validation, visual QA/contact sheets, retry notes, and handoff paths.\n")
+	b.WriteString("- Use real model output. Do not create placeholder art as the selected final asset.\n")
+	b.WriteString("- If the assigned agent does not have the skill body loaded, use the local skill at `C:\\Users\\happyelements\\.codex\\skills\\game-asset-pipeline\\SKILL.md` as the source of truth.\n")
+	if task.VisualNodeType == "character" || task.VisualNodeType == "generated_variant" || task.VisualNodeType == "animation" {
+		b.WriteString("- The selected handoff asset must preserve transparency: PNG/WebP with alpha and no baked scene/background unless this node explicitly asks for an environment background.\n")
+		b.WriteString("- When using GPT Image 2 for transparent game assets, follow the skill rule: generate on a flat removable chroma-key background, remove the key locally, then validate alpha/transparent-pixel hygiene before completion.\n")
+	}
+	if task.VisualNodeType == "animation" {
+		b.WriteString("- This is an animation node. Produce the same class of results inside this visual-node workflow: animation_manifest.json, a transparent spritesheet, per-action previews, validation output, QA notes, and final handoff paths for actions such as idle, walk-right, walk-left, wave, jump, attack, hit, and die as appropriate. Do not complete it with only a static portrait.\n")
+		b.WriteString("- Keep the work inside the current Multica visual-node issue and completion flow.\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("Completion contract:\n")
 	b.WriteString("- Upload the generated image as an attachment through the Multica CLI or API.\n")
-	b.WriteString("- Then run `multica visual-node complete <node-id> --project <project-id> --attachment <local-image-path> --note <short note>`.\n")
-	b.WriteString("- If generation fails, run `multica visual-node complete <node-id> --project <project-id> --error <reason>` so the node shows a failure state.\n")
+	b.WriteString("- Write automation fields in English for agent context, and also provide Chinese human-display text with `--note-zh` or `--error-zh`.\n")
+	b.WriteString("- Then run `multica visual-node complete <node-id> --project <project-id> --attachment <local-image-path> --note <short English note> --note-zh <short Chinese note>`.\n")
+	b.WriteString("- If generation fails, run `multica visual-node complete <node-id> --project <project-id> --error <English reason> --error-zh <Chinese reason>` so the node shows a failure state.\n")
 	b.WriteString("- Do not create an issue and do not call `multica issue create` for this task.\n")
 	return b.String()
 }
@@ -170,9 +204,13 @@ func buildVisualBoardExtractPrompt(task Task) string {
 		fmt.Fprintf(&b, "Project ID: %s\n", task.ProjectID)
 	}
 	fmt.Fprintf(&b, "Visual board ID: %s\n\n", task.VisualBoardID)
-	b.WriteString("Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant.\n")
+	b.WriteString("Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant, animation.\n")
 	b.WriteString("Create one node for each distinct visual thing a user should review or generate. Include gameplay_note only for mechanics that affect visual direction.\n")
 	b.WriteString("Nodes start as draft; do not mark anything adopted.\n\n")
+	b.WriteString("Language rules:\n")
+	b.WriteString("- Use English for automation fields consumed by agents: `title`, `description`, and `prompt`.\n")
+	b.WriteString("- Also return Chinese human-display fields: `title_zh`, `description_zh`, and `prompt_zh`.\n")
+	b.WriteString("- The Chinese fields are for UI reading only; do not move automation context out of the English fields.\n\n")
 	b.WriteString("Project Wiki input:\n")
 	for _, page := range task.VisualWikiPages {
 		fmt.Fprintf(&b, "\n--- wiki_page id=%s slug=%s title=%q ---\n%s\n", page.ID, page.Slug, page.Title, page.Body)
@@ -182,7 +220,7 @@ func buildVisualBoardExtractPrompt(task Task) string {
 	b.WriteString("- Do not finish with a summary that points to an issue comment or a local artifact; the backend parses only the final JSON object to populate the visual board.\n")
 	b.WriteString("- Do not create implementation issues, planning artifacts, or branches from this extraction task.\n")
 	b.WriteString("\nSchema:\n")
-	b.WriteString(`{"nodes":[{"id":"stable_local_id","type":"character|scene|ui_element|prop|reference|gameplay_note|generated_variant","title":"short title","description":"what this visual node represents","prompt":"suggested image-generation prompt","source_refs":[{"wiki_page_id":"...","wiki_slug":"...","title":"...","snippet":"..."}],"confidence":0.0,"position_x":0,"position_y":0}],"edges":[{"source":"stable_local_id","target":"stable_local_id","relation":"reference|contains|uses|variant_of|supports_gameplay"}]}` + "\n")
+	b.WriteString(`{"nodes":[{"id":"stable_local_id","type":"character|scene|ui_element|prop|reference|gameplay_note|generated_variant|animation","title":"short English title","title_zh":"short Chinese display title","description":"English description of what this visual node represents","description_zh":"Chinese display description","prompt":"English suggested image-generation prompt","prompt_zh":"Chinese display version of the prompt","source_refs":[{"wiki_page_id":"...","wiki_slug":"...","title":"...","snippet":"..."}],"confidence":0.0,"position_x":0,"position_y":0}],"edges":[{"source":"stable_local_id","target":"stable_local_id","relation":"reference|contains|uses|variant_of|supports_gameplay"}]}` + "\n")
 	return b.String()
 }
 
@@ -203,7 +241,7 @@ func writeRelevantKnowledgeBlock(b *strings.Builder, task Task) {
 	b.WriteString("Use these Wiki pages as the canonical long-term project understanding layer: goals, vocabulary, decisions, workflows, architecture constraints, risks, and recurring verification guidance. They do not override the current issue, current repository state, current diff, or the user's latest explicit instruction.\n")
 	totalChars := 0
 	for i, item := range task.RelevantKnowledge {
-		if i >= 5 || totalChars >= 2500 {
+		if i >= 8 || totalChars >= 3200 {
 			break
 		}
 		line := fmt.Sprintf("- kind=%s outcome=%s confidence=%d source=%s", item.Kind, item.Outcome, item.Confidence, item.ID)
@@ -305,7 +343,14 @@ func buildIssuePlanPrompt(task Task) string {
 		b.WriteString("- none\n")
 	} else {
 		for _, a := range task.AvailableAgents {
-			fmt.Fprintf(&b, "- id=%s name=%q description=%q", a.ID, a.Name, a.Description)
+			fmt.Fprintf(&b, "- id=%s name=%q", a.ID, a.Name)
+			if strings.TrimSpace(a.DisplayName) != "" && a.DisplayName != a.Name {
+				fmt.Fprintf(&b, " display_name=%q", a.DisplayName)
+			}
+			fmt.Fprintf(&b, " description=%q", a.Description)
+			if a.IsBuiltin {
+				fmt.Fprintf(&b, " builtin_key=%q readonly=true", a.BuiltinKey)
+			}
 			if len(a.Skills) > 0 {
 				fmt.Fprintf(&b, " skills=%q", strings.Join(a.Skills, ", "))
 			}
@@ -315,7 +360,9 @@ func buildIssuePlanPrompt(task Task) string {
 			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\nOutput JSON schema:\n")
+	b.WriteString("\n")
+	writeAvailableSkillsBlock(&b, task)
+	b.WriteString("Output JSON schema:\n")
 	b.WriteString(`{
   "needs_plan": true,
   "reason": "Why this needs or does not need a plan",
@@ -337,7 +384,7 @@ func buildIssuePlanPrompt(task Task) string {
           "unit_test_checklist": [{"id":"stable-check-id","title":"Unit test name","command":"Exact runnable unit test command","expected":"Expected passing result","required":true}],
           "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
           "risk_notes": ["Concrete edge case, dependency, or failure mode"],
-          "node_type": "issue | manual | check | spec_review | code_review",
+          "node_type": "issue | manual | check | spec_review | code_review | merge | subagent-driven-development",
           "execution_kind": "agent_task | human_confirmation",
           "confirmation_question": "Question a human must answer when execution_kind is human_confirmation, otherwise empty string",
           "confirmation_reason": "Why this cannot be safely confirmed during planning, otherwise empty string",
@@ -361,7 +408,7 @@ func buildIssuePlanPrompt(task Task) string {
       "unit_test_checklist": [{"id":"stable-check-id","title":"Unit test name","command":"Exact runnable unit test command","expected":"Expected passing result","required":true}],
       "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
       "risk_notes": ["Concrete edge case, dependency, or failure mode"],
-      "node_type": "issue | manual | check | spec_review | code_review",
+      "node_type": "issue | manual | check | spec_review | code_review | merge | subagent-driven-development",
       "execution_kind": "agent_task | human_confirmation",
       "confirmation_question": "Question a human must answer when execution_kind is human_confirmation, otherwise empty string",
       "confirmation_reason": "Why this cannot be safely confirmed during planning, otherwise empty string",
@@ -385,7 +432,7 @@ func buildIssuePlanPrompt(task Task) string {
         "unit_test_checklist": [{"id":"stable-check-id","title":"Unit test name","command":"Exact runnable unit test command","expected":"Expected passing result","required":true}],
         "context_resources": ["Relevant file path, repo alias, issue, doc, API, or URL"],
         "risk_notes": ["Concrete edge case, dependency, or failure mode"],
-        "node_type": "issue | manual | check | spec_review | code_review",
+        "node_type": "issue | manual | check | spec_review | code_review | merge | subagent-driven-development",
         "execution_kind": "agent_task | human_confirmation",
         "confirmation_question": "Question a human must answer when execution_kind is human_confirmation, otherwise empty string",
         "confirmation_reason": "Why this cannot be safely confirmed during planning, otherwise empty string",
@@ -410,19 +457,22 @@ func buildIssuePlanPrompt(task Task) string {
 	b.WriteString("- When needs_plan=false, do not execute the work yourself. Fill direct_issue with a concrete title and description so the server can save it as one editable plan item.\n")
 	b.WriteString("- For direct_issue, use only agent IDs from Available agents. If no agent fits, set recommended_agent_id to null or empty string, match_score below 60, and put the missing role/tooling in missing_capability; the server will leave the plan item unassigned for a human to route before creating issues.\n")
 	b.WriteString("- When needs_plan=true and Available pipelines is non-empty, choose the best existing pipeline and fill pipeline.nodes using only existing node keys. The server will create issues from that pipeline.\n")
-	b.WriteString("- Built-in methodology pipelines are readonly references. Prefer systematic-debugging for bugfix/build/integration failures, test-driven-development when the goal calls for TDD, and review-gated-feature-development for high-risk feature work that needs spec and code review gates.\n")
+	b.WriteString("- Built-in pipelines, agents, and skills are readonly visible assets. Choose the best existing asset from names, descriptions, skill lists, node types, and metadata; do not rely on hidden prompt-only methodology.\n")
 	b.WriteString("- Fill each selected pipeline node with a concrete title, description, optional agent_id override, and dependency keys. Dependency keys should point to prerequisite nodes in the chosen pipeline.\n")
 	b.WriteString("- If no available pipeline fits, fall back to items and split into 2-8 child issues.\n")
 	b.WriteString("- For every direct_issue, item, or selected pipeline node, include a lightweight execution contract: 2-5 acceptance_criteria when possible, suggested_test_commands as exact runnable commands or [], unit_test_checklist as exact runnable unit-test commands or [], context_resources as known files/repos/docs/issues/APIs/URLs, and risk_notes as concrete edge cases or blockers.\n")
 	b.WriteString("- When Project Wiki canonical context is present, treat it as the only long-term project understanding source. Use current issue/spec/user input for immediate requirements, but do not treat memory items or old task logs as canonical. Include relevant Wiki page slugs in context_resources using `wiki:<slug>`.\n")
 	b.WriteString("- unit_test_checklist is only for true unit tests that the assigned agent can run locally, such as `go test ./internal/service -run TestName -count=1` or `pnpm vitest packages/core/foo.test.ts`. If you do not know a real runnable unit test command, use []. Do not put broad build, typecheck, lint, e2e, smoke, or manual verification commands there; keep those in suggested_test_commands.\n")
-	b.WriteString("- Preserve review gate semantics in node_type: use spec_review for spec compliance gates, code_review for blocking code quality gates, manual for human confirmation, check for agent-executable verification, and issue for implementation or ordinary work.\n")
+	b.WriteString("- Preserve node_type semantics: use spec_review for spec compliance gates, code_review for blocking code quality gates, manual for human confirmation, check for agent-executable verification, merge for PR-first integration after human confirmation, subagent-driven-development only when the node explicitly coordinates child agents, and issue for implementation or ordinary work.\n")
+	b.WriteString("- Verification and review nodes (`check`, `spec_review`, `code_review`) must be scoped so the assigned agent can complete them without spawning child agents. Use `subagent-driven-development` only when child-agent coordination is an explicit part of the plan node.\n")
 	b.WriteString("- Plan game and interactive product work as iteration loops first: each iteration must be one playable or integration-testable version slice, then split that loop into implementation, test, review, and human-confirmation items.\n")
 	b.WriteString("- Set iteration_index, iteration_title, and iteration_branch_name on every direct_issue, item, or selected pipeline node. Items in the same playable/integration-testable loop must use the same iteration_index and iteration_branch_name. Use a new iteration_index and a new iteration_branch_name only for the next playable/integration-testable loop.\n")
+	b.WriteString("- Each iteration must include a selected execution_kind=\"human_confirmation\" manual gate that asks whether the human accepts this iteration and allows integration or the next iteration to proceed. The server also enforces this gate if it is omitted.\n")
+	b.WriteString("- If an iteration contains work that can produce git commits, the server will append a selected node_type=\"merge\" agent task after that human_confirmation gate. If you include a merge node yourself, it must depend on the human_confirmation gate and must not replace human approval.\n")
 	b.WriteString("- For every direct_issue, item, or selected pipeline node that can produce an actual git commit, set requires_git_commit=true. The server will force branch_name to the iteration_branch_name for that item. Branch names must be loop/module/function based, not agent-role based: prefer `feature/<product>-loop-1-playable-shell`, `feature/<product>-loop-2-core-flow`, `fix/<module>-<bug>`, `test/<module>-<coverage>`, or similar. Do not use `agent/<agent-role>/<issue>` style names.\n")
 	b.WriteString("- Only set requires_git_commit=false and branch_name=\"\" when the issue is purely human confirmation, discussion, investigation/reporting, external coordination, or another task that is not expected to create a repository commit.\n")
-	b.WriteString("- Set execution_kind=\"human_confirmation\" only when downstream work depends on a human decision that cannot be safely pre-planned, such as destructive changes, deploy or merge approval, ambiguous product choices, credential/access handoff, external dependency decisions, legal/content approval, or explicit risk acceptance.\n")
-	b.WriteString("- Do not use human_confirmation for ordinary implementation, tests, routine review gates, or agent-executable checks. Use execution_kind=\"agent_task\" for normal agent work.\n")
+	b.WriteString("- Outside iteration acceptance gates, set execution_kind=\"human_confirmation\" only when downstream work depends on a human decision that cannot be safely pre-planned, such as destructive changes, deploy or merge approval, ambiguous product choices, credential/access handoff, external dependency decisions, legal/content approval, or explicit risk acceptance.\n")
+	b.WriteString("- Do not use human_confirmation for ordinary implementation, tests, routine review gates, or agent-executable checks. Use execution_kind=\"agent_task\" for normal agent work and use node_type review/check semantics for review or verification gates.\n")
 	b.WriteString("- For human_confirmation items, leave recommended_agent_id empty, match_score 0, and provide confirmation_question, confirmation_reason, and required_evidence. Downstream items should depend on the confirmation item when they must wait for the human decision.\n")
 	b.WriteString("- Keep execution contracts concise. Do not include full code, full patches, or step-by-step implementation scripts.\n")
 	b.WriteString("- Do not invent file paths, commands, resources, or risks. Use [] when you do not know a useful value.\n")
@@ -475,14 +525,23 @@ func buildIssuePlanSpecPrompt(task Task) string {
 		b.WriteString("- none\n")
 	} else {
 		for _, a := range task.AvailableAgents {
-			fmt.Fprintf(&b, "- name=%q description=%q", a.Name, a.Description)
+			fmt.Fprintf(&b, "- name=%q", a.Name)
+			if strings.TrimSpace(a.DisplayName) != "" && a.DisplayName != a.Name {
+				fmt.Fprintf(&b, " display_name=%q", a.DisplayName)
+			}
+			fmt.Fprintf(&b, " description=%q", a.Description)
+			if a.IsBuiltin {
+				fmt.Fprintf(&b, " builtin_key=%q readonly=true", a.BuiltinKey)
+			}
 			if len(a.Skills) > 0 {
 				fmt.Fprintf(&b, " skills=%q", strings.Join(a.Skills, ", "))
 			}
 			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\nOutput JSON schema:\n")
+	b.WriteString("\n")
+	writeAvailableSkillsBlock(&b, task)
+	b.WriteString("Output JSON schema:\n")
 	b.WriteString(`{
   "summary": "One-paragraph summary of the proposed plan",
   "goal": "Concrete goal the plan should accomplish",
@@ -494,7 +553,7 @@ func buildIssuePlanSpecPrompt(task Task) string {
   "design_decisions": ["Decision and rationale that should remain reviewable"],
   "verification_commands": ["Exact command or manual verification evidence expected to prove the spec"],
   "assumptions": ["Assumption to confirm or carry into execution"],
-  "open_questions": ["Blocking question that materially changes scope or execution, max 2, or []"],
+  "open_questions": ["Blocking question that materially changes scope or execution, or []"],
   "clarifications": [{"question": "Question answered by the user", "answer": "User answer"}]
 }`)
 	b.WriteString("\n\nRules:\n")
@@ -505,9 +564,9 @@ func buildIssuePlanSpecPrompt(task Task) string {
 	b.WriteString("- Include verification_commands only when you know exact runnable commands or clear manual evidence. Use [] instead of inventing commands.\n")
 	b.WriteString("- Include design_decisions for meaningful tradeoffs, architecture choices, data model choices, or boundaries the reviewer should preserve.\n")
 	b.WriteString("- When Project Wiki canonical context is present, treat it as the only long-term project understanding source. Use current user input for immediate requirements, but do not treat memory items or old task logs as canonical; reference relevant Wiki slugs in approach or design_decisions when they materially shape the plan.\n")
-	b.WriteString("- Use built-in methodology pipelines as planning references when relevant: systematic-debugging for bugfix/build/integration failures, test-driven-development for TDD work, and review-gated-feature-development for high-risk feature work.\n")
+	b.WriteString("- Use visible built-in pipelines, agents, and skills as planning references when relevant; derive methodology choices from the available asset metadata instead of hardcoded pipeline names.\n")
 	b.WriteString("- Put non-blocking uncertainty in assumptions. Use open_questions only for decisions that would materially change scope, data access, destructive behavior, or execution safety.\n")
-	b.WriteString("- Ask at most 2 open questions. If you can proceed with a reasonable default, write the default as an assumption instead of asking.\n")
+	b.WriteString("- If you can proceed with a reasonable default, write the default as an assumption instead of asking.\n")
 	b.WriteString("- Preserve existing clarifications exactly unless a new answer supersedes the same question.\n")
 	b.WriteString("- summary and goal are required and must be non-empty.\n")
 	return b.String()
@@ -523,9 +582,9 @@ func writeIssuePlanSpecQualityRules(b *strings.Builder) {
 	b.WriteString("- Design decisions should record why the proposed approach is chosen and which alternatives or boundaries should not be silently changed during execution.\n")
 	b.WriteString("- Separate assumptions from open questions. Put reasonable defaults and non-blocking uncertainties in assumptions; put only blocking product, access, data, deployment, legal/content, destructive-change, or security decisions in open_questions.\n")
 	b.WriteString("- Keep in_scope as the smallest coherent delivery slice. Move follow-up work, optional polish, broad refactors, and unrelated cleanup to out_of_scope unless the user explicitly requested them.\n")
-	b.WriteString("- In approach, call out the likely implementation surfaces, validation strategy, dependency or migration risk, rollback/backout needs, and whether review-gated-feature-development should be used for high-risk work.\n")
+	b.WriteString("- In approach, call out the likely implementation surfaces, validation strategy, dependency or migration risk, rollback/backout needs, and which visible pipeline or skills fit high-risk work.\n")
 	b.WriteString("- If the available agents or pipelines do not cover a required capability, record that gap in assumptions unless it blocks execution; do not invent agents, skills, repos, files, or commands.\n")
-	b.WriteString("- Keep open_questions short and high-signal. Never ask more than 2 questions in one spec.\n\n")
+	b.WriteString("- Keep open_questions short and high-signal. Ask only questions that materially change scope, access, safety, or execution.\n\n")
 }
 
 func writeIssuePlanItemsQualityRules(b *strings.Builder) {
@@ -534,13 +593,29 @@ func writeIssuePlanItemsQualityRules(b *strings.Builder) {
 	b.WriteString("- Every selected item must be independently assignable to one agent, have a concrete deliverable, and include enough context for the assignee to start without rereading the whole plan.\n")
 	b.WriteString("- Split by deliverable and dependency boundary, not by job title. Avoid both giant catch-all tasks and tiny command-only chores; target work that can be completed and reviewed as a meaningful unit.\n")
 	b.WriteString("- No hidden work: include setup, data/schema changes, migrations/backfills, UI/server integration, documentation, verification, release/deploy handoff, and cleanup only when they are required by the approved spec.\n")
-	b.WriteString("- Use review-gated-feature-development for high-risk feature work, cross-module changes, migrations, auth/security, data-loss risk, public API changes, release/deploy risk, or work that needs explicit spec and code review gates.\n")
+	b.WriteString("- For high-risk feature work, cross-module changes, migrations, auth/security, data-loss risk, public API changes, release/deploy risk, or work that needs explicit spec and code review gates, prefer a visible pipeline with spec_review and code_review nodes.\n")
 	b.WriteString("- Review gates must depend on the implementation or repair work they review. Use spec_review for checking the delivered behavior against the approved spec; use code_review for correctness, regression, maintainability, security, and test-risk review.\n")
 	b.WriteString("- Create explicit dependencies for true blocking order: implementation before verification, data/schema before consumers, setup before integration, review before human handoff, and human_confirmation before work that needs that decision.\n")
 	b.WriteString("- Leave independent work dependency-free so it can run in parallel. Never add decorative dependencies, forward dependencies, cycles, or dependencies on items that are merely related but not blocking.\n")
 	b.WriteString("- Acceptance criteria should be 2-5 concrete checks per executable item when possible. Suggested test commands must be exact runnable commands when known; use [] instead of inventing commands.\n")
 	b.WriteString("- Recommend agents only from Available agents, and base match_score on the visible description, instructions, and skills. If no agent fits, leave the ID empty and state the missing capability.\n")
 	b.WriteString("- Branch names must describe the module and change, not the agent. Use requires_git_commit=false only for pure human decisions, external coordination, or non-repository work.\n\n")
+}
+
+func writeAvailableSkillsBlock(b *strings.Builder, task Task) {
+	b.WriteString("Available skills you may use as visible methodology references:\n")
+	if len(task.AvailableSkills) == 0 {
+		b.WriteString("- none\n\n")
+		return
+	}
+	for _, s := range task.AvailableSkills {
+		fmt.Fprintf(b, "- name=%q description=%q", s.Name, s.Description)
+		if s.IsBuiltin {
+			fmt.Fprintf(b, " builtin_key=%q readonly=true", s.BuiltinKey)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 }
 
 func writePlanSpec(b *strings.Builder, spec PlanSpecData) {

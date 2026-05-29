@@ -1247,6 +1247,93 @@ func TestInjectRuntimeConfigPlanAgentTaskMarksDone(t *testing.T) {
 	}
 }
 
+func TestInjectRuntimeConfigVerificationPlanNodeDisablesSubagents(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := TaskContextForEnv{
+		IssueID:               "issue-1",
+		PlanItemExecutionKind: "agent_task",
+		PlanItemNodeType:      "check",
+	}
+	if _, err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{
+		"Subagent delegation is disabled",
+		"single verification owner",
+		"run the required checks once",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("verification plan node CLAUDE.md missing %q\n---\n%s", want, s)
+		}
+	}
+}
+
+func TestInjectRuntimeConfigCommentTriggeredVerificationPlanNodeDisablesSubagents(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := TaskContextForEnv{
+		IssueID:          "issue-1",
+		TriggerCommentID: "comment-1",
+		PlanItemNodeType: "code_review",
+	}
+	if _, err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{
+		"This task was triggered by a NEW comment",
+		"Subagent delegation is disabled",
+		"mention://agent/...",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("comment-triggered verification plan node CLAUDE.md missing %q\n---\n%s", want, s)
+		}
+	}
+}
+
+func TestInjectRuntimeConfigSubagentDrivenPlanNodeAllowsSubagents(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := TaskContextForEnv{
+		IssueID:               "issue-1",
+		PlanItemExecutionKind: "agent_task",
+		PlanItemNodeType:      "subagent-driven-development",
+	}
+	if _, err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s := string(data)
+	if strings.Contains(s, "Subagent delegation is disabled") {
+		t.Errorf("subagent-driven plan node CLAUDE.md should not disable subagents\n---\n%s", s)
+	}
+	for _, want := range []string{
+		"node_type=subagent-driven-development",
+		"Subagent delegation is allowed",
+		"avoid duplicate evidence runs",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("subagent-driven plan node CLAUDE.md missing %q\n---\n%s", want, s)
+		}
+	}
+}
+
 // TestInjectRuntimeConfigAvailableCommandsIsNeutral pins that the global
 // Available Commands section lists the three input modes neutrally for
 // every non-Codex provider on every host OS, with no "MUST pipe via stdin"
@@ -2061,6 +2148,8 @@ func TestCodexSandboxPolicyFor(t *testing.T) {
 	}{
 		{"linux any version", "linux", "0.100.0", "workspace-write", true},
 		{"linux unknown version", "linux", "", "workspace-write", true},
+		{"windows any version", "windows", "0.130.0", "danger-full-access", false},
+		{"windows unknown version", "windows", "", "danger-full-access", false},
 		{"darwin old version", "darwin", "0.121.0", "danger-full-access", false},
 		{"darwin unknown version", "darwin", "", "danger-full-access", false},
 	}

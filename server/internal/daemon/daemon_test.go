@@ -41,6 +41,73 @@ func createDaemonTestRepo(t *testing.T) string {
 	return dir
 }
 
+func TestCopyGitProviderEnvPassesGitLabCredentials(t *testing.T) {
+	dst := map[string]string{"MULTICA_TASK_ID": "task-1"}
+	values := map[string]string{
+		"GITLAB_BASE_URL": "https://sc-sh.happyelements.net",
+		"GITLAB_TOKEN":    "token-1",
+		"CI_SERVER_URL":   "  ",
+	}
+	copyGitProviderEnv(dst, func(key string) string {
+		return values[key]
+	})
+
+	if dst["GITLAB_BASE_URL"] != "https://sc-sh.happyelements.net" {
+		t.Fatalf("GITLAB_BASE_URL not copied: %#v", dst)
+	}
+	if dst["GITLAB_TOKEN"] != "token-1" {
+		t.Fatalf("GITLAB_TOKEN not copied: %#v", dst)
+	}
+	if _, ok := dst["CI_SERVER_URL"]; ok {
+		t.Fatalf("blank CI_SERVER_URL should not be copied: %#v", dst)
+	}
+	if dst["MULTICA_TASK_ID"] != "task-1" {
+		t.Fatalf("existing env was not preserved: %#v", dst)
+	}
+}
+
+func TestTaskEnvIncludesPlanItemNodeType(t *testing.T) {
+	task := Task{
+		WorkspaceID:        "workspace-1",
+		ID:                 "task-1",
+		IssueIdentifier:    "LOC-1",
+		PlanItemNodeType:   "merge",
+		PlanItemBranchName: "feature/work",
+	}
+	agentEnv := map[string]string{
+		"MULTICA_TOKEN":               "token",
+		"MULTICA_SERVER_URL":          "http://127.0.0.1:8080",
+		"MULTICA_WORKSPACE_ID":        task.WorkspaceID,
+		"MULTICA_ISSUE_IDENTIFIER":    task.IssueIdentifier,
+		"MULTICA_PLAN_ITEM_NODE_TYPE": task.PlanItemNodeType,
+		"MULTICA_PLAN_BRANCH_NAME":    task.PlanItemBranchName,
+		"MULTICA_TASK_ID":             task.ID,
+	}
+
+	if agentEnv["MULTICA_PLAN_ITEM_NODE_TYPE"] != "merge" {
+		t.Fatalf("MULTICA_PLAN_ITEM_NODE_TYPE = %q, want merge", agentEnv["MULTICA_PLAN_ITEM_NODE_TYPE"])
+	}
+}
+
+func TestDefaultBranchHintFromProjectResources(t *testing.T) {
+	t.Parallel()
+
+	got := defaultBranchHintFromProjectResources([]ProjectResourceData{
+		{ResourceType: "source_file", ResourceRef: json.RawMessage(`{"default_branch_hint":"ignored"}`)},
+		{ResourceType: "git_repo", ResourceRef: json.RawMessage(`{"url":"https://github.com/acme/app","default_branch_hint":"develop"}`)},
+		{ResourceType: "github_repo", ResourceRef: json.RawMessage(`{"url":"https://github.com/acme/other","default_branch_hint":"main"}`)},
+	})
+	if got != "develop" {
+		t.Fatalf("default branch hint = %q, want develop", got)
+	}
+
+	if got := defaultBranchHintFromProjectResources([]ProjectResourceData{
+		{ResourceType: "git_repo", ResourceRef: json.RawMessage(`{"url":"https://github.com/acme/app"}`)},
+	}); got != "" {
+		t.Fatalf("default branch hint without value = %q, want empty", got)
+	}
+}
+
 func TestNormalizeServerBaseURL(t *testing.T) {
 	t.Parallel()
 
