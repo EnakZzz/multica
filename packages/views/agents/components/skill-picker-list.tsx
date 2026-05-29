@@ -124,7 +124,14 @@ export function SkillPickerList({
                 />
                 <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{skill.name}</div>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-sm font-medium">{skill.name}</span>
+                    {skill.is_builtin && (
+                      <span className="inline-flex shrink-0 items-center rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                        Built-in
+                      </span>
+                    )}
+                  </div>
                   {skill.description ? (
                     <div className="truncate text-xs text-muted-foreground">
                       {skill.description}

@@ -52,6 +52,71 @@ func TestListSkills_OmitsContent(t *testing.T) {
 	}
 }
 
+func TestListSkills_SeedsBuiltInSkillsWithoutUserHeader(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM skill
+		WHERE workspace_id = $1
+		  AND is_builtin = TRUE
+		  AND builtin_key LIKE 'superpowers/%'
+	`, testWorkspaceID); err != nil {
+		t.Fatalf("cleanup built-in skills: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `
+			DELETE FROM skill
+			WHERE workspace_id = $1
+			  AND is_builtin = TRUE
+			  AND builtin_key LIKE 'superpowers/%'
+		`, testWorkspaceID)
+	})
+
+	templates, err := loadBuiltInSuperpowersSkills()
+	if err != nil {
+		t.Fatalf("load built-in skills: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/skills?workspace_id="+testWorkspaceID, nil)
+	req.Header.Del("X-User-ID")
+	testHandler.ListSkills(w, req)
+	if w.Code != 200 {
+		t.Fatalf("ListSkills: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var rows []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("ListSkills: failed to decode body: %v", err)
+	}
+
+	builtInsByKey := map[string]map[string]any{}
+	for _, row := range rows {
+		key, _ := row["builtin_key"].(string)
+		if strings.HasPrefix(key, "superpowers/") {
+			builtInsByKey[key] = row
+		}
+	}
+	if len(builtInsByKey) != len(templates) {
+		t.Fatalf("ListSkills: expected %d built-in Superpowers skills, got %d", len(templates), len(builtInsByKey))
+	}
+	for _, tmpl := range templates {
+		row, ok := builtInsByKey[tmpl.Key]
+		if !ok {
+			t.Fatalf("ListSkills: missing built-in skill %s", tmpl.Key)
+		}
+		if row["is_builtin"] != true {
+			t.Fatalf("ListSkills: %s is_builtin = %v, want true", tmpl.Key, row["is_builtin"])
+		}
+		if row["editable"] != false || row["deletable"] != false {
+			t.Fatalf("ListSkills: %s editable/deletable = %v/%v, want false/false", tmpl.Key, row["editable"], row["deletable"])
+		}
+	}
+}
+
 // TestGetSkill_IncludesContent confirms the detail endpoint still ships the
 // full SKILL.md body — the list-summary change must not regress single-skill
 // reads.

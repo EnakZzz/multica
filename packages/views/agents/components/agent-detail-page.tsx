@@ -379,7 +379,7 @@ function DetailHeader({
           {t(($) => $.detail.back_to_agents)}
         </AppLink>
         <span className="text-muted-foreground/40">/</span>
-        <h1 className="truncate text-sm font-medium">{agent.name}</h1>
+        <h1 className="truncate text-sm font-medium">{agent.display_name}</h1>
         {agent.is_internal && <InternalAgentBadge />}
         {!isArchived && av && presence && (
           <span

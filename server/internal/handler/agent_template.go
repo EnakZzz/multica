@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,9 +127,9 @@ type CreateAgentFromTemplateRequest struct {
 	// Optional overrides — let the picker UI customise the template before
 	// creation without forcing a second round-trip to the detail page.
 	// When nil/empty, the template's own values are used.
-	Description     *string  `json:"description,omitempty"`
-	Instructions    *string  `json:"instructions,omitempty"`
-	AvatarURL       *string  `json:"avatar_url,omitempty"`
+	Description  *string `json:"description,omitempty"`
+	Instructions *string `json:"instructions,omitempty"`
+	AvatarURL    *string `json:"avatar_url,omitempty"`
 	// Workspace skill IDs to attach **in addition to** the template's
 	// skills. The merge dedupes against template skills automatically
 	// (agent_skill INSERT uses ON CONFLICT DO NOTHING).
@@ -217,6 +218,26 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 			"skill_url_count", len(tmpl.Skills),
 		)...)
 
+	hasBuiltInRefs := false
+	for _, ref := range tmpl.Skills {
+		if _, ok := builtInSkillKeyFromTemplateRef(ref.SourceURL); ok {
+			hasBuiltInRefs = true
+			break
+		}
+	}
+	if hasBuiltInRefs {
+		if err := h.ensureBuiltInSkills(r.Context(), wsUUID, parseUUID(ownerID)); err != nil {
+			slog.Error("agent-template create: failed to seed built-in skills",
+				append(logger.RequestAttrs(r),
+					"template_slug", tmpl.Slug,
+					"workspace_id", workspaceID,
+					"error", err,
+				)...)
+			writeError(w, http.StatusInternalServerError, "failed to prepare built-in skills: "+err.Error())
+			return
+		}
+	}
+
 	// Pre-flight dedupe: each skill that already exists in the workspace
 	// by `cached_name` can be reused WITHOUT fetching. This is the big win:
 	// on the second create-from-the-same-template, fetch_count drops to 0
@@ -230,6 +251,24 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	toFetchRefs := make([]agenttmpl.TemplateSkillRef, 0, len(tmpl.Skills))
 	toFetchOrigIdx := make([]int, 0, len(tmpl.Skills))
 	for i, ref := range tmpl.Skills {
+		if builtinKey, ok := builtInSkillKeyFromTemplateRef(ref.SourceURL); ok {
+			existing, err := h.Queries.GetBuiltInSkillByKey(r.Context(), db.GetBuiltInSkillByKeyParams{
+				WorkspaceID: wsUUID,
+				BuiltinKey:  builtInKeyText(builtinKey),
+			})
+			if err != nil {
+				slog.Error("agent-template create: built-in skill lookup failed",
+					append(logger.RequestAttrs(r),
+						"index", i,
+						"builtin_key", builtinKey,
+						"error", err,
+					)...)
+				writeError(w, http.StatusInternalServerError, "failed to load built-in skill: "+err.Error())
+				return
+			}
+			preReused[i] = existing
+			continue
+		}
 		if ref.CachedName == "" {
 			toFetchRefs = append(toFetchRefs, ref)
 			toFetchOrigIdx = append(toFetchOrigIdx, i)
@@ -649,4 +688,17 @@ func fetchSkillFromURL(client *http.Client, rawURL string) (*importedSkill, erro
 		return fetchFromGitHub(client, normalized)
 	}
 	return nil, fmt.Errorf("unknown import source for %s", rawURL)
+}
+
+func builtInSkillKeyFromTemplateRef(sourceURL string) (string, bool) {
+	const prefix = "builtin://superpowers/"
+	raw := strings.TrimSpace(sourceURL)
+	if !strings.HasPrefix(raw, prefix) {
+		return "", false
+	}
+	name := strings.Trim(strings.TrimPrefix(raw, prefix), "/")
+	if name == "" || strings.Contains(name, "/") {
+		return "", false
+	}
+	return "superpowers/" + name, true
 }

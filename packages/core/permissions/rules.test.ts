@@ -36,6 +36,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     max_concurrent_tasks: 1,
     model: "default",
     is_internal: false,
+    builtin_key: null,
     owner_id: ALICE,
     skills: [],
     created_at: "2026-04-01T00:00:00Z",
@@ -58,6 +59,10 @@ function makeSkill(createdBy: string | null): Skill {
     created_by: createdBy,
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
+    is_builtin: false,
+    builtin_key: null,
+    editable: true,
+    deletable: true,
   };
 }
 
@@ -214,6 +219,21 @@ describe("canEditSkill / canDeleteSkill", () => {
       .toBe(true);
     expect(canDeleteSkill(skill, { userId: BOB, role: "member" }).allowed)
       .toBe(false);
+  });
+  it("denies built-in skills even for admins", () => {
+    const builtIn = {
+      ...skill,
+      is_builtin: true,
+      builtin_key: "superpowers/writing-plans",
+      editable: false,
+      deletable: false,
+    };
+    const edit = canEditSkill(builtIn, { userId: BOB, role: "admin" });
+    const del = canDeleteSkill(builtIn, { userId: BOB, role: "admin" });
+    expect(edit.allowed).toBe(false);
+    expect(edit.reason).toBe("internal_resource");
+    expect(del.allowed).toBe(false);
+    expect(del.reason).toBe("internal_resource");
   });
 });
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -28,7 +29,8 @@ import (
 const maxAgentDescriptionLength = 255
 
 const (
-	internalPlannerAgentName = "规划Agent"
+	internalPlannerAgentName  = "规划Agent"
+	internalPlannerBuiltinKey = "multica/planner"
 )
 
 type AgentResponse struct {
@@ -36,6 +38,7 @@ type AgentResponse struct {
 	WorkspaceID        string            `json:"workspace_id"`
 	RuntimeID          string            `json:"runtime_id"`
 	Name               string            `json:"name"`
+	DisplayName        string            `json:"display_name"`
 	Description        string            `json:"description"`
 	Instructions       string            `json:"instructions"`
 	AvatarURL          *string           `json:"avatar_url"`
@@ -55,6 +58,7 @@ type AgentResponse struct {
 	// per-model; the API never normalizes across providers. See MUL-2339.
 	ThinkingLevel string              `json:"thinking_level"`
 	IsInternal    bool                `json:"is_internal"`
+	BuiltinKey    *string             `json:"builtin_key"`
 	OwnerID       *string             `json:"owner_id"`
 	Skills        []AgentSkillSummary `json:"skills"`
 	CreatedAt     string              `json:"created_at"`
@@ -102,6 +106,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		WorkspaceID:        uuidToString(a.WorkspaceID),
 		RuntimeID:          uuidToString(a.RuntimeID),
 		Name:               a.Name,
+		DisplayName:        agentDisplayName(a),
 		Description:        a.Description,
 		Instructions:       a.Instructions,
 		AvatarURL:          textToPtr(a.AvatarUrl),
@@ -116,6 +121,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Model:              a.Model.String,
 		ThinkingLevel:      a.ThinkingLevel.String,
 		IsInternal:         a.IsInternal,
+		BuiltinKey:         textToPtr(a.BuiltinKey),
 		OwnerID:            uuidToPtr(a.OwnerID),
 		Skills:             []AgentSkillSummary{},
 		CreatedAt:          timestampToString(a.CreatedAt),
@@ -123,6 +129,13 @@ func agentToResponse(a db.Agent) AgentResponse {
 		ArchivedAt:         timestampToPtr(a.ArchivedAt),
 		ArchivedBy:         uuidToPtr(a.ArchivedBy),
 	}
+}
+
+func agentDisplayName(a db.Agent) string {
+	if a.DisplayName.Valid && strings.TrimSpace(a.DisplayName.String) != "" {
+		return a.DisplayName.String
+	}
+	return a.Name
 }
 
 // RepoData holds repository information included in claim responses so the
@@ -214,6 +227,7 @@ type AgentTaskResponse struct {
 	IssuePlanSpec                    service.PlanSpec                `json:"issue_plan_spec,omitempty"`     // approved spec for item-generation tasks
 	AvailableAgents                  []PlanAgentData                 `json:"available_agents,omitempty"`    // assignable agents planner may recommend
 	AvailablePipelines               []PlanPipelineData              `json:"available_pipelines,omitempty"` // runnable pipelines planner may select
+	AvailableSkills                  []PlanSkillData                 `json:"available_skills,omitempty"`    // visible skills planner may use as methodology references
 	VisualTaskType                   string                          `json:"visual_task_type,omitempty"`
 	VisualNodeID                     string                          `json:"visual_node_id,omitempty"`
 	VisualNodeTitle                  string                          `json:"visual_node_title,omitempty"`
@@ -229,9 +243,20 @@ type AgentTaskResponse struct {
 type PlanAgentData struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
+	DisplayName  string   `json:"display_name,omitempty"`
 	Description  string   `json:"description"`
 	Instructions string   `json:"instructions,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
+	IsBuiltin    bool     `json:"is_builtin,omitempty"`
+	BuiltinKey   string   `json:"builtin_key,omitempty"`
+}
+
+type PlanSkillData struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	IsBuiltin   bool   `json:"is_builtin,omitempty"`
+	BuiltinKey  string `json:"builtin_key,omitempty"`
 }
 
 type PlanPipelineData struct {
@@ -362,13 +387,16 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := requestUserID(r)
+	wsUUID := parseUUID(workspaceID)
+
+	h.ensureBuiltInAgentsForWorkspace(r.Context(), wsUUID)
 
 	var agents []db.Agent
 	var err error
 	if r.URL.Query().Get("include_archived") == "true" {
-		agents, err = h.Queries.ListAllAgents(r.Context(), parseUUID(workspaceID))
+		agents, err = h.Queries.ListAllAgents(r.Context(), wsUUID)
 	} else {
-		agents, err = h.Queries.ListAgents(r.Context(), parseUUID(workspaceID))
+		agents, err = h.Queries.ListAgents(r.Context(), wsUUID)
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
@@ -376,7 +404,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Batch-load skills for all agents to avoid N+1.
-	skillRows, err := h.Queries.ListAgentSkillsByWorkspace(r.Context(), parseUUID(workspaceID))
+	skillRows, err := h.Queries.ListAgentSkillsByWorkspace(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
@@ -388,6 +416,8 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 			ID:          uuidToString(row.ID),
 			Name:        row.Name,
 			Description: row.Description,
+			IsBuiltin:   row.IsBuiltin,
+			BuiltinKey:  textToPtr(row.BuiltinKey),
 		})
 	}
 
@@ -450,6 +480,8 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 				ID:          uuidToString(s.ID),
 				Name:        s.Name,
 				Description: s.Description,
+				IsBuiltin:   s.IsBuiltin,
+				BuiltinKey:  textToPtr(s.BuiltinKey),
 			}
 		}
 	}

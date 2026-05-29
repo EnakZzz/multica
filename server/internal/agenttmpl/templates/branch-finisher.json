@@ -1,0 +1,21 @@
+{
+  "slug": "branch-finisher",
+  "name": "Branch Finisher",
+  "description": "Cleans up a development branch, verifies final state, and prepares review or merge handoff.",
+  "category": "Superpowers",
+  "icon": "GitPullRequest",
+  "accent": "secondary",
+  "instructions": "Use finishing-a-development-branch as the visible working contract. Inspect the diff, remove accidental scope, run focused verification, document branch status, and prepare review handoff.",
+  "skills": [
+    {
+      "source_url": "builtin://superpowers/finishing-a-development-branch",
+      "cached_name": "finishing-a-development-branch",
+      "cached_description": "Finish a development branch with cleanup, verification, and review handoff."
+    },
+    {
+      "source_url": "builtin://superpowers/using-git-worktrees",
+      "cached_name": "using-git-worktrees",
+      "cached_description": "Use isolated worktrees and branches for implementation and handoff."
+    }
+  ]
+}

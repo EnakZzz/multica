@@ -45,6 +45,10 @@ type SkillResponse struct {
 	CreatedBy   *string `json:"created_by"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
+	IsBuiltin   bool    `json:"is_builtin"`
+	BuiltinKey  *string `json:"builtin_key"`
+	Editable    bool    `json:"editable"`
+	Deletable   bool    `json:"deletable"`
 }
 
 // SkillSummaryResponse is the list-endpoint shape: everything SkillResponse
@@ -61,6 +65,10 @@ type SkillSummaryResponse struct {
 	CreatedBy   *string `json:"created_by"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
+	IsBuiltin   bool    `json:"is_builtin"`
+	BuiltinKey  *string `json:"builtin_key"`
+	Editable    bool    `json:"editable"`
+	Deletable   bool    `json:"deletable"`
 }
 
 // AgentSkillSummary is the still-narrower shape used for skills embedded in
@@ -69,9 +77,11 @@ type SkillSummaryResponse struct {
 // the UI; the standalone `/api/agents/{id}/skills` endpoint returns the full
 // SkillSummaryResponse for callers that need the source/origin info.
 type AgentSkillSummary struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	IsBuiltin   bool    `json:"is_builtin"`
+	BuiltinKey  *string `json:"builtin_key"`
 }
 
 type SkillFileResponse struct {
@@ -99,6 +109,10 @@ func skillToResponse(s db.Skill) SkillResponse {
 		CreatedBy:   uuidToPtr(s.CreatedBy),
 		CreatedAt:   timestampToString(s.CreatedAt),
 		UpdatedAt:   timestampToString(s.UpdatedAt),
+		IsBuiltin:   s.IsBuiltin,
+		BuiltinKey:  textToPtr(s.BuiltinKey),
+		Editable:    !s.IsBuiltin,
+		Deletable:   !s.IsBuiltin,
 	}
 }
 
@@ -121,6 +135,8 @@ func skillSummaryToResponse(
 	config []byte,
 	createdBy pgtype.UUID,
 	createdAt, updatedAt pgtype.Timestamptz,
+	isBuiltin bool,
+	builtinKey pgtype.Text,
 ) SkillSummaryResponse {
 	return SkillSummaryResponse{
 		ID:          uuidToString(id),
@@ -131,6 +147,10 @@ func skillSummaryToResponse(
 		CreatedBy:   uuidToPtr(createdBy),
 		CreatedAt:   timestampToString(createdAt),
 		UpdatedAt:   timestampToString(updatedAt),
+		IsBuiltin:   isBuiltin,
+		BuiltinKey:  textToPtr(builtinKey),
+		Editable:    !isBuiltin,
+		Deletable:   !isBuiltin,
 	}
 }
 
@@ -211,6 +231,16 @@ func (h *Handler) loadSkillForUser(w http.ResponseWriter, r *http.Request, id st
 
 func (h *Handler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
+	userID := requestUserID(r)
+	var createdBy pgtype.UUID
+	if userID != "" {
+		createdBy = parseUUID(userID)
+	}
+	if workspaceID != "" {
+		if err := h.ensureBuiltInSkills(r.Context(), parseUUID(workspaceID), createdBy); err != nil {
+			slog.Warn("failed to ensure built-in skills", "workspace_id", workspaceID, "error", err)
+		}
+	}
 
 	skills, err := h.Queries.ListSkillSummariesByWorkspace(r.Context(), parseUUID(workspaceID))
 	if err != nil {
@@ -222,7 +252,7 @@ func (h *Handler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
 			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
-			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.CreatedBy, s.CreatedAt, s.UpdatedAt, s.IsBuiltin, s.BuiltinKey,
 		)
 	}
 
@@ -309,6 +339,10 @@ func (h *Handler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 // canManageSkill checks whether the current user can update or delete a skill.
 // The skill creator or workspace owner/admin can manage any skill.
 func (h *Handler) canManageSkill(w http.ResponseWriter, r *http.Request, skill db.Skill) bool {
+	if skill.IsBuiltin {
+		writeError(w, http.StatusForbidden, "built-in skills are managed by Multica")
+		return false
+	}
 	wsID := uuidToString(skill.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "skill not found", "owner", "admin", "member")
 	if !ok {
@@ -1764,7 +1798,7 @@ func (h *Handler) ListAgentSkills(w http.ResponseWriter, r *http.Request) {
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
 			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
-			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.CreatedBy, s.CreatedAt, s.UpdatedAt, s.IsBuiltin, s.BuiltinKey,
 		)
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -1830,7 +1864,7 @@ func (h *Handler) SetAgentSkills(w http.ResponseWriter, r *http.Request) {
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
 			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
-			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.CreatedBy, s.CreatedAt, s.UpdatedAt, s.IsBuiltin, s.BuiltinKey,
 		)
 	}
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(agent.WorkspaceID))

@@ -185,3 +185,64 @@ func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
 		t.Fatalf("second CreateAgent with duplicate name: expected 409, got %d: %s", w2.Code, w2.Body.String())
 	}
 }
+
+func TestListAgents_SeedsBuiltInMergeAgent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := handlerTestRuntimeID(t)
+
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM agent
+		WHERE workspace_id = $1
+		  AND builtin_key LIKE 'multica/%'
+	`, testWorkspaceID); err != nil {
+		t.Fatalf("cleanup built-in agents before test: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `
+			DELETE FROM agent
+			WHERE workspace_id = $1
+			  AND builtin_key LIKE 'multica/%'
+		`, testWorkspaceID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodGet, "/api/agents?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListAgents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgents: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var agents []AgentResponse
+	if err := json.NewDecoder(w.Body).Decode(&agents); err != nil {
+		t.Fatalf("decode ListAgents response: %v", err)
+	}
+	var mergeAgent *AgentResponse
+	for i := range agents {
+		if agents[i].BuiltinKey != nil && *agents[i].BuiltinKey == "multica/merge-agent" {
+			mergeAgent = &agents[i]
+			break
+		}
+	}
+	if mergeAgent == nil {
+		t.Fatalf("ListAgents did not seed or return multica/merge-agent")
+	}
+	if mergeAgent.Name != "Merge Agent" {
+		t.Fatalf("merge agent name = %q, want Merge Agent", mergeAgent.Name)
+	}
+	if mergeAgent.DisplayName != "合入 Agent" {
+		t.Fatalf("merge agent display_name = %q, want 合入 Agent", mergeAgent.DisplayName)
+	}
+	if !mergeAgent.IsInternal {
+		t.Fatalf("merge agent should be marked internal")
+	}
+	if mergeAgent.RuntimeID != runtimeID {
+		t.Fatalf("merge agent runtime_id = %q, want %q", mergeAgent.RuntimeID, runtimeID)
+	}
+	if len(mergeAgent.Skills) == 0 {
+		t.Fatalf("merge agent should include attached built-in skills")
+	}
+}

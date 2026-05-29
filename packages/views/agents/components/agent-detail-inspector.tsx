@@ -195,9 +195,14 @@ export function AgentDetailInspector({
           {agent.skills.map((s) => (
             <span
               key={s.id}
-              className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground"
+              className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground"
             >
               {s.name}
+              {s.is_builtin && (
+                <span className="rounded border border-amber-500/25 bg-amber-500/10 px-1 py-px font-sans text-[9px] text-amber-700 dark:text-amber-300">
+                  Built-in
+                </span>
+              )}
             </span>
           ))}
           <SkillAttach agent={agent} canEdit={canEdit} />
@@ -324,7 +329,7 @@ function NameAndDescription({
     return (
       <div className="flex flex-col gap-1">
         <span className="text-base font-semibold leading-tight">
-          {agent.name}
+          {agent.display_name}
         </span>
         {agent.description ? (
           <span className="text-xs leading-relaxed text-muted-foreground">
@@ -355,7 +360,7 @@ function NameAndDescription({
             {...triggerProps}
             className="group -mx-1 inline-flex items-center gap-1.5 self-start rounded px-1 text-left text-base font-semibold leading-tight transition-colors hover:bg-accent/50"
           >
-            <span>{agent.name}</span>
+            <span>{agent.display_name}</span>
             <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
           </button>
         )}

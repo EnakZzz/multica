@@ -187,7 +187,7 @@ function AgentNameCell({ row }: { row: AgentRow }) {
               isArchived ? "text-muted-foreground" : ""
             }`}
           >
-            {agent.name}
+            {agent.display_name}
           </span>
           {agent.is_internal && <InternalAgentBadge />}
           {isPrivate && !isArchived && (

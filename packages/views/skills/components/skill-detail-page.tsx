@@ -270,6 +270,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
 
   const canEdit = useCanEditSkill(skill, wsId);
   const skillPermissions = useSkillPermissions(skill ?? null, wsId);
+  const canDelete = skillPermissions.canDelete.allowed;
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -437,7 +438,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   };
 
   const handleDelete = async () => {
-    if (!skill) return;
+    if (!skill || !canDelete) return;
     setDeleting(true);
     try {
       await api.deleteSkill(skill.id);
@@ -573,7 +574,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               {t(($) => $.detail.read_only)}
             </span>
           )}
-          {canEdit && (
+          {canDelete && (
             <Tooltip>
               <TooltipTrigger
                 render={

@@ -1,0 +1,21 @@
+{
+  "slug": "writing-plans-agent",
+  "name": "Writing Plans Agent",
+  "description": "Uses Superpowers planning skills to clarify goals, write reviewable specs, and split execution into concrete plan items.",
+  "category": "Superpowers",
+  "icon": "ListChecks",
+  "accent": "primary",
+  "instructions": "Use the attached Superpowers skills as the visible working contract. Clarify goals and constraints, write a compact spec, then produce executable slices with acceptance criteria, dependencies, verification evidence, and review gates.",
+  "skills": [
+    {
+      "source_url": "builtin://superpowers/brainstorming",
+      "cached_name": "brainstorming",
+      "cached_description": "Use structured ideation before converging on a plan."
+    },
+    {
+      "source_url": "builtin://superpowers/writing-plans",
+      "cached_name": "writing-plans",
+      "cached_description": "Write clear implementation plans with scope, sequencing, and verification."
+    }
+  ]
+}

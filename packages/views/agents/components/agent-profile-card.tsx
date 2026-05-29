@@ -57,7 +57,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
     : null;
   const runtime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
   const isArchived = !!agent.archived_at;
-  const initials = agent.name
+  const initials = agent.display_name
     .split(" ")
     .map((w) => w[0])
     .join("")
@@ -75,7 +75,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           agents list and the agent detail page. */}
       <div className="flex items-start gap-3">
         <ActorAvatarBase
-          name={agent.name}
+          name={agent.display_name}
           initials={initials}
           avatarUrl={agent.avatar_url}
           isAgent
@@ -84,7 +84,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <p className="truncate text-sm font-semibold">{agent.name}</p>
+            <p className="truncate text-sm font-semibold">{agent.display_name}</p>
             {agent.is_internal && <InternalAgentBadge />}
             {!agent.is_internal && !isArchived && (
               <VisibilityBadge value={agent.visibility} compact />

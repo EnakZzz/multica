@@ -77,6 +77,9 @@ export function canEditSkill(skill: Skill, ctx: PermissionContext): Decision {
   if (ctx.userId === null) {
     return deny("not_authenticated", "Sign in to edit this skill.");
   }
+  if (skill.is_builtin || skill.editable === false) {
+    return deny("internal_resource", "Built-in skills are managed by Multica.");
+  }
   if (isAdminLike(ctx.role)) return ALLOW;
   if (skill.created_by !== null && skill.created_by === ctx.userId) {
     return ALLOW;
@@ -88,6 +91,9 @@ export function canEditSkill(skill: Skill, ctx: PermissionContext): Decision {
 }
 
 export function canDeleteSkill(skill: Skill, ctx: PermissionContext): Decision {
+  if (skill.is_builtin || skill.deletable === false) {
+    return deny("internal_resource", "Built-in skills are managed by Multica.");
+  }
   return canEditSkill(skill, ctx);
 }
 

@@ -130,6 +130,7 @@ export interface Agent {
   workspace_id: string;
   runtime_id: string;
   name: string;
+  display_name: string;
   description: string;
   instructions: string;
   avatar_url: string | null;
@@ -154,6 +155,7 @@ export interface Agent {
    */
   thinking_level?: string;
   is_internal: boolean;
+  builtin_key: string | null;
   owner_id: string | null;
   skills: AgentSkillSummary[];
   created_at: string;
@@ -173,6 +175,8 @@ export interface AgentSkillSummary {
   id: string;
   name: string;
   description: string;
+  is_builtin: boolean;
+  builtin_key: string | null;
 }
 
 export interface CreateAgentRequest {
@@ -307,6 +311,10 @@ export interface SkillSummary {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  is_builtin: boolean;
+  builtin_key: string | null;
+  editable: boolean;
+  deletable: boolean;
 }
 
 export interface Skill extends SkillSummary {

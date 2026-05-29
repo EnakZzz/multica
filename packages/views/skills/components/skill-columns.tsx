@@ -112,6 +112,11 @@ function SkillNameCell({ row }: { row: SkillRow }) {
     <div className="min-w-0">
       <div className="flex min-w-0 items-center gap-2">
         <span className="block min-w-0 truncate font-medium">{skill.name}</span>
+        {skill.is_builtin && (
+          <span className="inline-flex shrink-0 items-center rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+            Built-in
+          </span>
+        )}
         {!canEdit && (
           <Tooltip>
             <TooltipTrigger

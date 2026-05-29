@@ -14,6 +14,10 @@ function makeSkill(createdBy: string | null): Skill {
     created_by: createdBy,
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
+    is_builtin: false,
+    builtin_key: null,
+    editable: true,
+    deletable: true,
   };
 }
 
@@ -61,6 +65,21 @@ describe("canEditSkill", () => {
   it("denies when userId is null (logged-out edge case)", () => {
     expect(
       canEditSkill(skill, { userId: null, role: "member" }),
+    ).toBe(false);
+  });
+
+  it("denies built-in skills even for admins", () => {
+    expect(
+      canEditSkill(
+        {
+          ...skill,
+          is_builtin: true,
+          builtin_key: "superpowers/writing-plans",
+          editable: false,
+          deletable: false,
+        },
+        { userId: "user-bob", role: "admin" },
+      ),
     ).toBe(false);
   });
 });
