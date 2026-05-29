@@ -27,19 +27,21 @@ interface ReviewGatePayload {
 export interface ReviewGatePresentation {
   markdown: string;
   isDisplayZh: boolean;
+  review?: ReviewGateResult;
 }
 
 export function getReviewGatePresentation(
   content: string | undefined,
   displayContentZh?: string | null,
 ): ReviewGatePresentation | null {
+  const review = parseReviewGateContent(content ?? "");
   const display = displayContentZh?.trim();
   if (display) {
-    return { markdown: display, isDisplayZh: true };
+    const displayReview = parseReviewGateDisplayZh(display, review);
+    return { markdown: display, isDisplayZh: true, review: displayReview ?? review ?? undefined };
   }
-  const review = parseReviewGateContent(content ?? "");
   if (!review) return null;
-  return { markdown: formatReviewGateMarkdown(review), isDisplayZh: false };
+  return { markdown: formatReviewGateMarkdown(review), isDisplayZh: false, review };
 }
 
 export function isReviewGateComment(
@@ -62,30 +64,20 @@ export function ReviewGateCommentContent({
   if (!presentation) {
     return null;
   }
-  if (presentation.isDisplayZh) {
+  const review = presentation.review;
+  if (!review) {
     return (
       <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
         <ReadonlyContent content={presentation.markdown} attachments={attachments} />
       </div>
     );
   }
-
-  const review = parseReviewGateContent(content);
-  if (!review) {
-    return (
-      <ReadonlyContent content={presentation.markdown} attachments={attachments} />
-    );
-  }
-  const failed = review.status === "fail";
   return (
     <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
-      <div className="mb-2 flex items-center gap-2">
-        <Badge variant={failed ? "destructive" : "secondary"}>
-          {failed ? "Review failed" : "Review passed"}
-        </Badge>
-        <span className="text-xs text-muted-foreground">review_gate</span>
-      </div>
-      {review.summary && (
+      {review.findings.length === 0 && (
+        <ReviewGateHeader review={review} isDisplayZh={presentation.isDisplayZh} />
+      )}
+      {review.summary && review.findings.length === 0 && (
         <p className="mb-2 text-sm text-foreground/85">{review.summary}</p>
       )}
       {review.findings.length > 0 && (
@@ -115,6 +107,24 @@ export function ReviewGateCommentContent({
   );
 }
 
+function ReviewGateHeader({
+  review,
+  isDisplayZh,
+}: {
+  review: ReviewGateResult;
+  isDisplayZh: boolean;
+}) {
+  const failed = review.status === "fail";
+  return (
+    <div className="mb-2 flex items-center gap-2">
+      <Badge variant={failed ? "destructive" : "secondary"}>
+        {isDisplayZh ? (failed ? "评审未通过" : "评审通过") : (failed ? "Review failed" : "Review passed")}
+      </Badge>
+      <span className="text-xs text-muted-foreground">review_gate</span>
+    </div>
+  );
+}
+
 function parseReviewGateContent(content: string): ReviewGateResult | null {
   const source = stripJsonFence(content.trim());
   for (let start = source.indexOf("{"); start >= 0; ) {
@@ -130,6 +140,66 @@ function parseReviewGateContent(content: string): ReviewGateResult | null {
     start = next;
   }
   return null;
+}
+
+function parseReviewGateDisplayZh(display: string, canonical: ReviewGateResult | null): ReviewGateResult | null {
+  const lines = display.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+
+  const findingMarkerIndex = lines.findIndex((line) => /^发现[:：]?$/.test(line));
+  const summaryLines = findingMarkerIndex >= 0 ? lines.slice(0, findingMarkerIndex) : lines.filter((line) => !isDisplayFindingLine(line));
+  const findingLines = findingMarkerIndex >= 0 ? lines.slice(findingMarkerIndex + 1) : lines.filter(isDisplayFindingLine);
+  const statusLine = summaryLines[0] ?? "";
+  const summary = summaryLines
+    .filter((line, index) => !(index === 0 && isDisplayStatusLine(line)))
+    .join("\n\n")
+    .trim();
+  const findings = findingLines.map(parseDisplayFinding).filter((f): f is ReviewGateFinding => f !== null);
+  if (!summary && findings.length === 0) return null;
+
+  return {
+    status: canonical?.status ?? inferDisplayStatus(statusLine) ?? "fail",
+    summary: summary || canonical?.summary || "",
+    findings: findings.length > 0 ? findings : (canonical?.findings ?? []),
+    checked_against: canonical?.checked_against ?? [],
+  };
+}
+
+function isDisplayStatusLine(line: string): boolean {
+  return /评审/.test(line) && /(通过|未通过)/.test(line);
+}
+
+function inferDisplayStatus(line: string): ReviewGateStatus | null {
+  if (/未通过|失败/.test(line)) return "fail";
+  if (/已通过|通过/.test(line)) return "pass";
+  return null;
+}
+
+function isDisplayFindingLine(line: string): boolean {
+  return /^-\s*\[(?:blocker|major|minor)\]/i.test(line);
+}
+
+function parseDisplayFinding(line: string): ReviewGateFinding | null {
+  const match = line.match(/^-\s*\[(blocker|major|minor)\]\s*(.+)$/i);
+  if (!match) return null;
+  const body = match[2]?.trim() ?? "";
+  if (!body) return null;
+  const splitAt = findFindingSeparator(body);
+  const title = splitAt >= 0 ? body.slice(0, splitAt).trim() : body;
+  const details = splitAt >= 0 ? body.slice(splitAt + 1).replace(/^[:：]\s*/, "").trim() : "";
+  return {
+    severity: match[1]?.toLowerCase() ?? "major",
+    title,
+    details,
+  };
+}
+
+function findFindingSeparator(body: string): number {
+  const ascii = body.indexOf(": ");
+  const fullWidth = body.indexOf("：");
+  if (ascii < 0) return fullWidth;
+  if (fullWidth < 0) return ascii;
+  return Math.min(ascii, fullWidth);
 }
 
 function stripJsonFence(content: string): string {

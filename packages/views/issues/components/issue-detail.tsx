@@ -110,7 +110,7 @@ function SubscriberPopoverContent({
   t,
 }: {
   members: { user_id: string; name: string }[];
-  agents: { id: string; name: string; archived_at?: string | null }[];
+  agents: { id: string; name: string; display_name?: string; archived_at?: string | null }[];
   subscribers: { user_type: string; user_id: string }[];
   toggleSubscriber: (id: string, type: "member" | "agent", subscribed: boolean) => void;
   t: ActivityT;
@@ -172,7 +172,7 @@ function SubscriberPopoverContent({
                   >
                     <Checkbox checked={isSubbed} className="pointer-events-none" />
                     <ActorAvatar actorType="agent" actorId={a.id} size={22} showStatusDot />
-                    <span className="truncate flex-1">{a.name}</span>
+                    <span className="truncate flex-1">{a.display_name || a.name}</span>
                   </CommandItem>
                 );
               })}

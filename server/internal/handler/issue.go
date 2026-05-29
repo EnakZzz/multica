@@ -1630,7 +1630,17 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 func isQuickCreatePlannerAgent(agent db.Agent) bool {
-	return agent.IsInternal && strings.EqualFold(strings.TrimSpace(agent.Name), internalPlannerAgentName)
+	return isInternalPlannerAgent(agent)
+}
+
+func isInternalPlannerAgent(agent db.Agent) bool {
+	if !agent.IsInternal {
+		return false
+	}
+	if agent.BuiltinKey.Valid && strings.TrimSpace(agent.BuiltinKey.String) == internalPlannerBuiltinKey {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(agent.Name), internalPlannerAgentName)
 }
 
 // writeAgentUnavailable returns 422 with a stable error code so the modal
@@ -2397,7 +2407,7 @@ func (h *Handler) internalPlannerAssignee(ctx context.Context, issue db.Issue) (
 	if err != nil {
 		return db.Agent{}, false
 	}
-	return agent, agent.IsInternal && agent.Name == internalPlannerAgentName
+	return agent, isInternalPlannerAgent(agent)
 }
 
 func (h *Handler) hasOpenIssueDependencies(ctx context.Context, issueID pgtype.UUID) bool {
@@ -2463,7 +2473,7 @@ func (h *Handler) isAgentAssigneeReady(ctx context.Context, issue db.Issue) bool
 	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
 		return false
 	}
-	if agent.IsInternal {
+	if isInternalPlannerAgent(agent) {
 		return false
 	}
 

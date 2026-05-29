@@ -23,11 +23,17 @@ describe("review gate comment presentation", () => {
   it("uses display_content_zh when present", () => {
     const presentation = getReviewGatePresentation(
       rawReviewGate,
-      "代码评审未通过。\n\n发现：\n- [blocker] AP 会耗尽",
+      "代码评审未通过。\n\nAP 会在收集死亡阶段记忆前耗尽。\n\n发现：\n- [blocker] AP 死锁: 没有 AP 恢复机制。",
     );
 
     expect(presentation?.isDisplayZh).toBe(true);
     expect(presentation?.markdown).toContain("代码评审未通过");
+    expect(presentation?.review?.summary).toBe("AP 会在收集死亡阶段记忆前耗尽。");
+    expect(presentation?.review?.findings[0]).toMatchObject({
+      severity: "blocker",
+      title: "AP 死锁",
+      details: "没有 AP 恢复机制。",
+    });
   });
 
   it("formats legacy review_gate JSON when no Chinese display copy exists", () => {

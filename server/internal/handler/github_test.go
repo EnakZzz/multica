@@ -178,11 +178,30 @@ func TestWebhook_MergedPR_AdvancesLinkedIssueToDone(t *testing.T) {
 	var created IssueResponse
 	json.NewDecoder(w.Body).Decode(&created)
 
+	var downstreamID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, title, description, status,
+			assignee_type, assignee_id, creator_type, creator_id
+		)
+		VALUES ($1, 'PR merge downstream task', 'Runs after merge issue completes.', 'todo', 'agent', $2, 'member', $3)
+		RETURNING id::text
+	`, testWorkspaceID, handlerTestAgentID(t), testUserID).Scan(&downstreamID); err != nil {
+		t.Fatalf("create downstream issue: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue_dependency (issue_id, depends_on_issue_id, type)
+		VALUES ($1, $2, 'blocked_by')
+	`, downstreamID, created.ID); err != nil {
+		t.Fatalf("create downstream dependency: %v", err)
+	}
+
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `DELETE FROM issue_pull_request WHERE issue_id = $1`, created.ID)
 		testPool.Exec(ctx, `DELETE FROM github_pull_request WHERE workspace_id = $1`, testWorkspaceID)
 		testPool.Exec(ctx, `DELETE FROM github_installation WHERE workspace_id = $1`, testWorkspaceID)
 		testPool.Exec(ctx, `DELETE FROM activity_log WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, downstreamID)
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
 	})
 
@@ -263,6 +282,9 @@ func TestWebhook_MergedPR_AdvancesLinkedIssueToDone(t *testing.T) {
 	}
 	if updated.Status != "done" {
 		t.Errorf("expected issue status 'done', got %q", updated.Status)
+	}
+	if taskCount := taskCountForIssue(t, downstreamID); taskCount != 1 {
+		t.Fatalf("downstream task count after merged PR = %d, want 1", taskCount)
 	}
 }
 
@@ -719,9 +741,9 @@ func TestAggregateChecksConclusion(t *testing.T) {
 		return *p
 	}
 	cases := []struct {
-		name                            string
+		name                           string
 		failed, passed, pending, total int64
-		want                            string
+		want                           string
 	}{
 		{"no_suites_nil", 0, 0, 0, 0, "<nil>"},
 		{"any_failure_wins", 1, 5, 0, 6, "failed"},
