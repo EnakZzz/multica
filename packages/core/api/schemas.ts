@@ -24,11 +24,14 @@ import type {
   PlanSpec,
   ProjectKnowledgeRetrievalLog,
   ProjectKnowledgeRetrievalLogsResponse,
+  ProjectKnowledgeEmbeddingBackfillResponse,
   ProjectKnowledgeSearchResponse,
   ProjectMemoryItem,
   ProjectVisualBoard,
   ProjectVisualEdge,
   ProjectVisualNode,
+  ListProjectVisualNodeGenerationsResponse,
+  ProjectVisualNodeGeneration,
   GenerateProjectVisualNodesResponse,
   ProjectRelevantKnowledge,
   ProjectWikiPage,
@@ -472,11 +475,14 @@ export const ProjectVisualNodeSchema = z.object({
   board_id: z.string().catch("").default(""),
   workspace_id: z.string().catch("").default(""),
   project_id: z.string().catch("").default(""),
-  type: z.enum(["character", "scene", "ui_element", "prop", "reference", "gameplay_note", "generated_variant"]).catch("reference").default("reference"),
+  type: z.enum(["character", "scene", "ui_element", "prop", "reference", "gameplay_note", "generated_variant", "animation"]).catch("reference").default("reference"),
   status: z.enum(["draft", "adopted", "rejected", "generating", "failed"]).catch("draft").default("draft"),
   title: z.string().catch("").default(""),
+  title_zh: z.string().catch("").default(""),
   description: z.string().catch("").default(""),
+  description_zh: z.string().catch("").default(""),
   prompt: z.string().catch("").default(""),
+  prompt_zh: z.string().catch("").default(""),
   position_x: z.number().catch(0).default(0),
   position_y: z.number().catch(0).default(0),
   source_refs: UnknownArraySchema,
@@ -484,9 +490,11 @@ export const ProjectVisualNodeSchema = z.object({
   result_attachment_id: z.string().nullable().catch(null).default(null),
   result_attachment: AttachmentResponseSchema.nullable().catch(null).default(null),
   result_note: z.string().catch("").default(""),
+  result_note_zh: z.string().catch("").default(""),
   generation_agent_id: z.string().nullable().catch(null).default(null),
   generation_task_id: z.string().nullable().catch(null).default(null),
   generation_error: z.string().catch("").default(""),
+  generation_error_zh: z.string().catch("").default(""),
   created_at: z.string().catch("").default(""),
   updated_at: z.string().catch("").default(""),
 }).loose();
@@ -499,8 +507,11 @@ export const EMPTY_PROJECT_VISUAL_NODE: ProjectVisualNode = {
   type: "reference",
   status: "draft",
   title: "",
+  title_zh: "",
   description: "",
+  description_zh: "",
   prompt: "",
+  prompt_zh: "",
   position_x: 0,
   position_y: 0,
   source_refs: [],
@@ -508,9 +519,11 @@ export const EMPTY_PROJECT_VISUAL_NODE: ProjectVisualNode = {
   result_attachment_id: null,
   result_attachment: null,
   result_note: "",
+  result_note_zh: "",
   generation_agent_id: null,
   generation_task_id: null,
   generation_error: "",
+  generation_error_zh: "",
   created_at: "",
   updated_at: "",
 };
@@ -563,6 +576,52 @@ export const EMPTY_PROJECT_VISUAL_BOARD: ProjectVisualBoard = {
   updated_at: "",
 };
 
+export const ProjectVisualNodeGenerationSchema = z.object({
+  id: z.string().catch("").default(""),
+  task_id: z.string().catch("").default(""),
+  task_status: z.string().catch("").default(""),
+  issue_id: z.string().catch("").default(""),
+  issue_identifier: z.string().catch("").default(""),
+  issue_title: z.string().catch("").default(""),
+  issue_status: z.string().catch("").default(""),
+  attachment_id: z.string().nullable().catch(null).default(null),
+  attachment: AttachmentResponseSchema.nullable().catch(null).default(null),
+  note: z.string().catch("").default(""),
+  note_zh: z.string().catch("").default(""),
+  error: z.string().catch("").default(""),
+  error_zh: z.string().catch("").default(""),
+  is_current: z.boolean().catch(false).default(false),
+  created_at: z.string().catch("").default(""),
+  completed_at: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_PROJECT_VISUAL_NODE_GENERATION: ProjectVisualNodeGeneration = {
+  id: "",
+  task_id: "",
+  task_status: "",
+  issue_id: "",
+  issue_identifier: "",
+  issue_title: "",
+  issue_status: "",
+  attachment_id: null,
+  attachment: null,
+  note: "",
+  note_zh: "",
+  error: "",
+  error_zh: "",
+  is_current: false,
+  created_at: "",
+  completed_at: "",
+};
+
+export const ListProjectVisualNodeGenerationsResponseSchema = z.object({
+  generations: z.array(ProjectVisualNodeGenerationSchema).catch([]).default([]),
+}).loose();
+
+export const EMPTY_LIST_PROJECT_VISUAL_NODE_GENERATIONS_RESPONSE: ListProjectVisualNodeGenerationsResponse = {
+  generations: [],
+};
+
 export const GenerateProjectVisualNodesResponseSchema = z.object({
   task_id: z.string().catch("").optional(),
   issue_id: z.string().catch("").optional(),
@@ -600,6 +659,11 @@ export const ProjectRelevantKnowledgeSchema = z.object({
   comment_id: z.string().optional(),
   confidence: z.number().catch(0).default(0),
   score: z.number().catch(0).default(0),
+  match_type: z.string().optional(),
+  vector_score: z.number().nullable().optional(),
+  keyword_score: z.number().nullable().optional(),
+  snippet: z.string().optional(),
+  source_reason: z.string().optional(),
 }).loose();
 
 export const EMPTY_PROJECT_RELEVANT_KNOWLEDGE: ProjectRelevantKnowledge = {
@@ -623,7 +687,7 @@ export const ProjectKnowledgeRetrievalLogSchema = z.object({
   task_id: z.string().nullable().catch(null).default(null),
   query_text: z.string().catch("").default(""),
   returned_items: UnknownArraySchema,
-  search_mode: z.string().catch("hybrid").default("hybrid"),
+  search_mode: z.string().catch("none").default("none"),
   query_context: UnknownRecordSchema,
   candidates: z.array(ProjectKnowledgeSearchResultSchema).catch([]).default([]),
   selected_items: z.array(ProjectRelevantKnowledgeSchema).catch([]).default([]),
@@ -649,7 +713,7 @@ export const EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOG: ProjectKnowledgeRetrievalLog
   task_id: null,
   query_text: "",
   returned_items: [],
-  search_mode: "hybrid",
+  search_mode: "none",
   query_context: {},
   candidates: [],
   selected_items: [],
@@ -681,6 +745,7 @@ export const ProjectKnowledgeSearchResponseSchema = z.object({
   configured: z.boolean().catch(false).default(false),
   results: z.array(ProjectKnowledgeSearchResultSchema).catch([]).default([]),
   total: z.number().catch(0).default(0),
+  search_mode: z.string().optional(),
   error: z.string().optional(),
 }).loose();
 
@@ -688,6 +753,21 @@ export const EMPTY_PROJECT_KNOWLEDGE_SEARCH_RESPONSE: ProjectKnowledgeSearchResp
   configured: false,
   results: [],
   total: 0,
+};
+
+export const ProjectKnowledgeEmbeddingBackfillResponseSchema = z.object({
+  configured: z.boolean().catch(false).default(false),
+  queued: z.number().catch(0).default(0),
+  skipped: z.number().catch(0).default(0),
+  failed: z.number().catch(0).default(0),
+  error: z.string().optional(),
+}).loose();
+
+export const EMPTY_PROJECT_KNOWLEDGE_EMBEDDING_BACKFILL_RESPONSE: ProjectKnowledgeEmbeddingBackfillResponse = {
+  configured: false,
+  queued: 0,
+  skipped: 0,
+  failed: 0,
 };
 
 export const RelatedMemoryResponseSchema = z.object({
@@ -762,10 +842,20 @@ const PlanItemNodeTypeSchema = z.preprocess(
     value === "manual" ||
     value === "check" ||
     value === "spec_review" ||
-    value === "code_review"
+    value === "code_review" ||
+    value === "merge" ||
+    value === "subagent-driven-development"
       ? value
       : "issue",
-  z.enum(["issue", "manual", "check", "spec_review", "code_review"]),
+  z.enum([
+    "issue",
+    "manual",
+    "check",
+    "spec_review",
+    "code_review",
+    "merge",
+    "subagent-driven-development",
+  ]),
 );
 
 const PlanClarificationSchema = z.object({
@@ -898,8 +988,24 @@ export const EMPTY_LIST_PLANS_RESPONSE: ListPlansResponse = {
 
 const PipelineNodeTypeSchema = z.preprocess(
   (value) =>
-    value === "manual" || value === "check" || value === "issue" || value === "spec_review" || value === "code_review" ? value : "issue",
-  z.enum(["issue", "manual", "check", "spec_review", "code_review"]),
+    value === "manual" ||
+    value === "check" ||
+    value === "issue" ||
+    value === "spec_review" ||
+    value === "code_review" ||
+    value === "merge" ||
+    value === "subagent-driven-development"
+      ? value
+      : "issue",
+  z.enum([
+    "issue",
+    "manual",
+    "check",
+    "spec_review",
+    "code_review",
+    "merge",
+    "subagent-driven-development",
+  ]),
 );
 
 const PipelineNodeSchema = z.object({

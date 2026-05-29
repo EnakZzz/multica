@@ -64,8 +64,11 @@ export interface ProjectKnowledgeSearchResponse {
   configured: boolean;
   results: ProjectKnowledgeSearchResult[];
   total: number;
+  search_mode?: ProjectKnowledgeSearchMode;
   error?: string;
 }
+
+export type ProjectKnowledgeSearchMode = "hybrid" | "vector" | "keyword" | "fallback" | "none" | string;
 
 export interface ProjectKnowledgeRetrievalLog {
   id: string;
@@ -75,7 +78,7 @@ export interface ProjectKnowledgeRetrievalLog {
   task_id: string | null;
   query_text: string;
   returned_items: unknown[];
-  search_mode: string;
+  search_mode: ProjectKnowledgeSearchMode;
   query_context: Record<string, unknown>;
   candidates: ProjectKnowledgeSearchResult[];
   selected_items: ProjectRelevantKnowledge[];
@@ -106,6 +109,19 @@ export interface ProjectRelevantKnowledge {
   comment_id?: string;
   confidence: number;
   score: number;
+  match_type?: string;
+  vector_score?: number | null;
+  keyword_score?: number | null;
+  snippet?: string;
+  source_reason?: string;
+}
+
+export interface ProjectKnowledgeEmbeddingBackfillResponse {
+  configured: boolean;
+  queued: number;
+  skipped: number;
+  failed: number;
+  error?: string;
 }
 
 export interface ProjectKnowledgeRetrievalLogsResponse {

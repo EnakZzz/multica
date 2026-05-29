@@ -3,6 +3,7 @@ import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { issueKeys } from "../issues/queries";
 import type {
+  CreateProjectVisualNodeRequest,
   CreateProjectVisualPlanRequest,
   GenerateProjectVisualNodeRequest,
   UpdateProjectVisualBoardRequest,
@@ -15,6 +16,15 @@ export function invalidateProjectVisualBoardQueries(
   projectId: string,
 ) {
   qc.invalidateQueries({ queryKey: projectVisualKeys.board(wsId, projectId) });
+}
+
+export function invalidateProjectVisualNodeGenerationQueries(
+  qc: QueryClient,
+  wsId: string,
+  projectId: string,
+  nodeId: string,
+) {
+  qc.invalidateQueries({ queryKey: projectVisualKeys.nodeGenerations(wsId, projectId, nodeId) });
 }
 
 export function invalidateProjectVisualPlanQueries(
@@ -34,6 +44,41 @@ export function useUpdateProjectVisualBoard(projectId: string) {
       api.updateProjectVisualBoard(projectId, data),
     onSettled: () => {
       invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+    },
+  });
+}
+
+export function useCreateProjectVisualNode(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateProjectVisualNodeRequest) =>
+      api.createProjectVisualNode(projectId, data),
+    onSettled: () => {
+      invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+    },
+  });
+}
+
+export function useDeleteProjectVisualNode(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (nodeId: string) => api.deleteProjectVisualNode(projectId, nodeId),
+    onSettled: () => {
+      invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+    },
+  });
+}
+
+export function useClearProjectVisualBoard(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.clearProjectVisualBoard(projectId),
+    onSettled: () => {
+      invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+      qc.invalidateQueries({ queryKey: [...projectVisualKeys.all(wsId), projectId, "nodes"] });
     },
   });
 }
@@ -59,12 +104,26 @@ export function useGenerateProjectVisualNodeImage(projectId: string) {
   return useMutation({
     mutationFn: ({ nodeId, ...data }: { nodeId: string } & GenerateProjectVisualNodeRequest) =>
       api.generateProjectVisualNodeImage(projectId, nodeId, data),
-    onSettled: () => {
+    onSettled: (_data, _error, variables) => {
       invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+      invalidateProjectVisualNodeGenerationQueries(qc, wsId, projectId, variables.nodeId);
       qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
       qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
       qc.invalidateQueries({ queryKey: issueKeys.projectGanttAll(wsId) });
+    },
+  });
+}
+
+export function useRestoreProjectVisualNodeGeneration(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeId, generationId }: { nodeId: string; generationId: string }) =>
+      api.restoreProjectVisualNodeGeneration(projectId, nodeId, generationId),
+    onSettled: (_data, _error, variables) => {
+      invalidateProjectVisualBoardQueries(qc, wsId, projectId);
+      invalidateProjectVisualNodeGenerationQueries(qc, wsId, projectId, variables.nodeId);
     },
   });
 }

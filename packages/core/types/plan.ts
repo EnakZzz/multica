@@ -1,6 +1,13 @@
 export type PlanStatus = "planning" | "spec_review" | "ready" | "failed" | "committed";
 export type PlanItemExecutionKind = "agent_task" | "human_confirmation";
-export type PlanItemNodeType = "issue" | "manual" | "check" | "spec_review" | "code_review";
+export type PlanItemNodeType =
+  | "issue"
+  | "manual"
+  | "check"
+  | "spec_review"
+  | "code_review"
+  | "merge"
+  | "subagent-driven-development";
 
 export interface UnitTestCheck {
   id: string;

@@ -85,10 +85,13 @@ import type {
   ListProjectWikiPagesResponse,
   ProjectKnowledgeRetrievalLog,
   ProjectKnowledgeRetrievalLogsResponse,
+  ProjectKnowledgeEmbeddingBackfillResponse,
   ProjectKnowledgeSearchResponse,
   ProjectMemoryItem,
   ProjectWikiPage,
   ProjectVisualBoard,
+  CreateProjectVisualNodeRequest,
+  ListProjectVisualNodeGenerationsResponse,
   UpdateProjectVisualBoardRequest,
   GenerateProjectVisualNodeImageResponse,
   GenerateProjectVisualNodesResponse,
@@ -188,9 +191,11 @@ import {
   EMPTY_PLAN,
   EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOG,
   EMPTY_PROJECT_KNOWLEDGE_RETRIEVAL_LOGS_RESPONSE,
+  EMPTY_PROJECT_KNOWLEDGE_EMBEDDING_BACKFILL_RESPONSE,
   EMPTY_PROJECT_KNOWLEDGE_SEARCH_RESPONSE,
   EMPTY_PROJECT_MEMORY_ITEM,
   EMPTY_PROJECT_VISUAL_BOARD,
+  EMPTY_LIST_PROJECT_VISUAL_NODE_GENERATIONS_RESPONSE,
   EMPTY_GENERATE_PROJECT_VISUAL_NODES_RESPONSE,
   EMPTY_PROJECT_WIKI_PAGE,
   EMPTY_QUICK_CREATE_ISSUE_RESPONSE,
@@ -216,9 +221,11 @@ import {
   PlanSchema,
   ProjectKnowledgeRetrievalLogSchema,
   ProjectKnowledgeRetrievalLogsResponseSchema,
+  ProjectKnowledgeEmbeddingBackfillResponseSchema,
   ProjectKnowledgeSearchResponseSchema,
   ProjectMemoryItemSchema,
   ProjectVisualBoardSchema,
+  ListProjectVisualNodeGenerationsResponseSchema,
   GenerateProjectVisualNodesResponseSchema,
   ProjectWikiPageSchema,
   QuickCreateIssueResponseSchema,
@@ -266,6 +273,34 @@ const EMPTY_ONBOARDING_RUNTIME_BOOTSTRAP_RESPONSE:
   agent_id: "",
   issue_id: "",
 };
+
+function normalizeSkillSummary<T extends Partial<SkillSummary>>(skill: T): T & SkillSummary {
+  const isBuiltin = Boolean(skill.is_builtin);
+  return {
+    ...skill,
+    is_builtin: isBuiltin,
+    builtin_key: skill.builtin_key ?? null,
+    editable: skill.editable ?? !isBuiltin,
+    deletable: skill.deletable ?? !isBuiltin,
+  } as T & SkillSummary;
+}
+
+function normalizeSkill(skill: Skill): Skill {
+  return normalizeSkillSummary(skill);
+}
+
+function normalizeAgent(agent: Agent): Agent {
+  return {
+    ...agent,
+    display_name: agent.display_name || agent.name,
+    builtin_key: agent.builtin_key ?? null,
+    skills: (agent.skills ?? []).map((skill) => ({
+      ...skill,
+      is_builtin: Boolean(skill.is_builtin),
+      builtin_key: skill.builtin_key ?? null,
+    })),
+  };
+}
 
 export interface OnboardingNoRuntimeBootstrapResponse {
   workspace_id: string;
@@ -984,18 +1019,20 @@ export class ApiClient {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.include_archived) search.set("include_archived", "true");
-    return this.fetch(`/api/agents?${search}`);
+    const agents = await this.fetch<Agent[]>(`/api/agents?${search}`);
+    return agents.map(normalizeAgent);
   }
 
   async getAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}`);
+    return normalizeAgent(await this.fetch<Agent>(`/api/agents/${id}`));
   }
 
   async createAgent(data: CreateAgentRequest): Promise<Agent> {
-    return this.fetch("/api/agents", {
+    const agent = await this.fetch<Agent>("/api/agents", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return normalizeAgent(agent);
   }
 
   async listAgentTemplates(): Promise<AgentTemplateSummary[]> {
@@ -1044,18 +1081,19 @@ export class ApiClient {
   }
 
   async updateAgent(id: string, data: UpdateAgentRequest): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}`, {
+    const agent = await this.fetch<Agent>(`/api/agents/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
+    return normalizeAgent(agent);
   }
 
   async archiveAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}/archive`, { method: "POST" });
+    return normalizeAgent(await this.fetch<Agent>(`/api/agents/${id}/archive`, { method: "POST" }));
   }
 
   async restoreAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
+    return normalizeAgent(await this.fetch<Agent>(`/api/agents/${id}/restore`, { method: "POST" }));
   }
 
   // Bulk-cancel every active task (queued/dispatched/running) for the agent.
@@ -1447,25 +1485,28 @@ export class ApiClient {
 
   // Skills
   async listSkills(): Promise<SkillSummary[]> {
-    return this.fetch("/api/skills");
+    const skills = await this.fetch<SkillSummary[]>("/api/skills");
+    return skills.map(normalizeSkillSummary);
   }
 
   async getSkill(id: string): Promise<Skill> {
-    return this.fetch(`/api/skills/${id}`);
+    return normalizeSkill(await this.fetch<Skill>(`/api/skills/${id}`));
   }
 
   async createSkill(data: CreateSkillRequest): Promise<Skill> {
-    return this.fetch("/api/skills", {
+    const skill = await this.fetch<Skill>("/api/skills", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return normalizeSkill(skill);
   }
 
   async updateSkill(id: string, data: UpdateSkillRequest): Promise<Skill> {
-    return this.fetch(`/api/skills/${id}`, {
+    const skill = await this.fetch<Skill>(`/api/skills/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
+    return normalizeSkill(skill);
   }
 
   async deleteSkill(id: string): Promise<void> {
@@ -1480,7 +1521,8 @@ export class ApiClient {
   }
 
   async listAgentSkills(agentId: string): Promise<SkillSummary[]> {
-    return this.fetch(`/api/agents/${agentId}/skills`);
+    const skills = await this.fetch<SkillSummary[]>(`/api/agents/${agentId}/skills`);
+    return skills.map(normalizeSkillSummary);
   }
 
   async setAgentSkills(agentId: string, data: SetAgentSkillsRequest): Promise<void> {
@@ -1809,6 +1851,64 @@ export class ApiClient {
     });
   }
 
+  async createProjectVisualNode(
+    projectId: string,
+    data: CreateProjectVisualNodeRequest,
+  ): Promise<ProjectVisualBoard> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-nodes`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ProjectVisualBoardSchema, EMPTY_PROJECT_VISUAL_BOARD, {
+      endpoint: "POST /api/projects/{id}/visual-nodes",
+    });
+  }
+
+  async deleteProjectVisualNode(projectId: string, nodeId: string): Promise<ProjectVisualBoard> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-nodes/${nodeId}`, {
+      method: "DELETE",
+    });
+    return parseWithFallback(raw, ProjectVisualBoardSchema, EMPTY_PROJECT_VISUAL_BOARD, {
+      endpoint: "DELETE /api/projects/{id}/visual-nodes/{nodeId}",
+    });
+  }
+
+  async clearProjectVisualBoard(projectId: string): Promise<ProjectVisualBoard> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-board`, {
+      method: "DELETE",
+    });
+    return parseWithFallback(raw, ProjectVisualBoardSchema, EMPTY_PROJECT_VISUAL_BOARD, {
+      endpoint: "DELETE /api/projects/{id}/visual-board",
+    });
+  }
+
+  async listProjectVisualNodeGenerations(
+    projectId: string,
+    nodeId: string,
+  ): Promise<ListProjectVisualNodeGenerationsResponse> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-nodes/${nodeId}/generations`);
+    return parseWithFallback(
+      raw,
+      ListProjectVisualNodeGenerationsResponseSchema,
+      EMPTY_LIST_PROJECT_VISUAL_NODE_GENERATIONS_RESPONSE,
+      { endpoint: "GET /api/projects/{id}/visual-nodes/{nodeId}/generations" },
+    );
+  }
+
+  async restoreProjectVisualNodeGeneration(
+    projectId: string,
+    nodeId: string,
+    generationId: string,
+  ): Promise<ProjectVisualBoard> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-nodes/${nodeId}/generations/${generationId}/restore`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    return parseWithFallback(raw, ProjectVisualBoardSchema, EMPTY_PROJECT_VISUAL_BOARD, {
+      endpoint: "POST /api/projects/{id}/visual-nodes/{nodeId}/generations/{generationId}/restore",
+    });
+  }
+
   async generateProjectVisualNodes(projectId: string): Promise<GenerateProjectVisualNodesResponse> {
     const raw = await this.fetch<unknown>(`/api/projects/${projectId}/visual-board/generate-nodes`, {
       method: "POST",
@@ -1967,6 +2067,25 @@ export class ApiClient {
       ProjectKnowledgeSearchResponseSchema,
       EMPTY_PROJECT_KNOWLEDGE_SEARCH_RESPONSE,
       { endpoint: "POST /api/projects/{id}/knowledge/search" },
+    );
+  }
+
+  async backfillProjectKnowledgeEmbeddings(
+    projectId: string,
+    params?: { target_type?: "wiki_page" | "memory_item" | string },
+  ): Promise<ProjectKnowledgeEmbeddingBackfillResponse> {
+    const search = new URLSearchParams();
+    if (params?.target_type) search.set("target_type", params.target_type);
+    const suffix = search.toString() ? `?${search}` : "";
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/knowledge/embeddings/backfill${suffix}`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+    return parseWithFallback(
+      raw,
+      ProjectKnowledgeEmbeddingBackfillResponseSchema,
+      EMPTY_PROJECT_KNOWLEDGE_EMBEDDING_BACKFILL_RESPONSE,
+      { endpoint: "POST /api/projects/{id}/knowledge/embeddings/backfill" },
     );
   }
 

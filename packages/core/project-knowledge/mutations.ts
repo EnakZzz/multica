@@ -115,3 +115,17 @@ export function useUpdateProjectKnowledgeRetrievalLogFeedback(projectId: string)
     },
   });
 }
+
+export function useBackfillProjectKnowledgeEmbeddings(projectId: string) {
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (params?: { target_type?: "wiki_page" | "memory_item" | string }) =>
+      api.backfillProjectKnowledgeEmbeddings(projectId, params),
+    onSettled: () => {
+      qc.invalidateQueries({
+        queryKey: projectKnowledgeKeys.retrievalLogs(wsId, projectId),
+      });
+    },
+  });
+}

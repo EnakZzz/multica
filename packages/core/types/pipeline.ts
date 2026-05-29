@@ -1,4 +1,11 @@
-export type PipelineNodeType = "issue" | "manual" | "check" | "spec_review" | "code_review";
+export type PipelineNodeType =
+  | "issue"
+  | "manual"
+  | "check"
+  | "spec_review"
+  | "code_review"
+  | "merge"
+  | "subagent-driven-development";
 
 export interface PipelineNode {
   id: string;

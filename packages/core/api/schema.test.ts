@@ -485,7 +485,7 @@ describe("ApiClient schema fallback", () => {
       expect(res).toEqual({ pipelines: [], total: 0 });
     });
 
-    it("accepts review gate node types and downgrades unknown node types", async () => {
+    it("accepts workflow node types and downgrades unknown node types", async () => {
       stubFetchJson({
         pipelines: [
           {
@@ -495,14 +495,26 @@ describe("ApiClient schema fallback", () => {
             nodes: [
               { id: "node-1", pipeline_id: "pipe-1", key: "spec", type: "spec_review", title: "Spec review" },
               { id: "node-2", pipeline_id: "pipe-1", key: "code", type: "code_review", title: "Code review" },
-              { id: "node-3", pipeline_id: "pipe-1", key: "future", type: "future_gate", title: "Future gate" },
+              {
+                id: "node-3",
+                pipeline_id: "pipe-1",
+                key: "subagents",
+                type: "subagent-driven-development",
+                title: "Subagent development",
+              },
+              { id: "node-4", pipeline_id: "pipe-1", key: "future", type: "future_gate", title: "Future gate" },
             ],
           },
         ],
       });
       const client = new ApiClient("https://api.example.test");
       const res = await client.listPipelines();
-      expect(res.pipelines[0]?.nodes.map((node) => node.type)).toEqual(["spec_review", "code_review", "issue"]);
+      expect(res.pipelines[0]?.nodes.map((node) => node.type)).toEqual([
+        "spec_review",
+        "code_review",
+        "subagent-driven-development",
+        "issue",
+      ]);
     });
   });
 
