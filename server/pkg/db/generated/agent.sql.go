@@ -14,7 +14,7 @@ import (
 const archiveAgent = `-- name: ArchiveAgent :one
 UPDATE agent SET archived_at = now(), archived_by = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 type ArchiveAgentParams struct {
@@ -49,6 +49,8 @@ func (q *Queries) ArchiveAgent(ctx context.Context, arg ArchiveAgentParams) (Age
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -57,7 +59,7 @@ const archiveAgentsByRuntime = `-- name: ArchiveAgentsByRuntime :many
 UPDATE agent
 SET archived_at = now(), archived_by = $1, updated_at = now()
 WHERE runtime_id = ANY($2::uuid[]) AND archived_at IS NULL
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 type ArchiveAgentsByRuntimeParams struct {
@@ -102,6 +104,8 @@ func (q *Queries) ArchiveAgentsByRuntime(ctx context.Context, arg ArchiveAgentsB
 			&i.Model,
 			&i.IsInternal,
 			&i.ThinkingLevel,
+			&i.BuiltinKey,
+			&i.DisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -515,7 +519,7 @@ func (q *Queries) ClaimAgentTask(ctx context.Context, agentID pgtype.UUID) (Agen
 const clearAgentMcpConfig = `-- name: ClearAgentMcpConfig :one
 UPDATE agent SET mcp_config = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 func (q *Queries) ClearAgentMcpConfig(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -545,6 +549,8 @@ func (q *Queries) ClearAgentMcpConfig(ctx context.Context, id pgtype.UUID) (Agen
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -552,7 +558,7 @@ func (q *Queries) ClearAgentMcpConfig(ctx context.Context, id pgtype.UUID) (Agen
 const clearAgentThinkingLevel = `-- name: ClearAgentThinkingLevel :one
 UPDATE agent SET thinking_level = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 // Explicit NULL-clear for thinking_level. COALESCE-based UpdateAgent cannot
@@ -585,6 +591,8 @@ func (q *Queries) ClearAgentThinkingLevel(ctx context.Context, id pgtype.UUID) (
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -656,9 +664,9 @@ const createAgent = `-- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, runtime_mode,
     runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal, builtin_key
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 type CreateAgentParams struct {
@@ -679,6 +687,7 @@ type CreateAgentParams struct {
 	Model              pgtype.Text `json:"model"`
 	ThinkingLevel      pgtype.Text `json:"thinking_level"`
 	IsInternal         bool        `json:"is_internal"`
+	BuiltinKey         pgtype.Text `json:"builtin_key"`
 }
 
 func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error) {
@@ -700,6 +709,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		arg.Model,
 		arg.ThinkingLevel,
 		arg.IsInternal,
+		arg.BuiltinKey,
 	)
 	var i Agent
 	err := row.Scan(
@@ -726,6 +736,8 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -1183,7 +1195,7 @@ func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) 
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name FROM agent
 WHERE id = $1
 `
 
@@ -1214,12 +1226,14 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
 
 const getAgentInWorkspace = `-- name: GetAgentInWorkspace :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name FROM agent
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -1255,6 +1269,8 @@ func (q *Queries) GetAgentInWorkspace(ctx context.Context, arg GetAgentInWorkspa
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -1296,9 +1312,56 @@ func (q *Queries) GetAgentTask(ctx context.Context, id pgtype.UUID) (AgentTaskQu
 	return i, err
 }
 
+const getBuiltInAgentByKey = `-- name: GetBuiltInAgentByKey :one
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name FROM agent
+WHERE workspace_id = $1 AND builtin_key = $2 AND is_internal = TRUE
+LIMIT 1
+`
+
+type GetBuiltInAgentByKeyParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	BuiltinKey  pgtype.Text `json:"builtin_key"`
+}
+
+func (q *Queries) GetBuiltInAgentByKey(ctx context.Context, arg GetBuiltInAgentByKeyParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, getBuiltInAgentByKey, arg.WorkspaceID, arg.BuiltinKey)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.AvatarUrl,
+		&i.RuntimeMode,
+		&i.RuntimeConfig,
+		&i.Visibility,
+		&i.Status,
+		&i.MaxConcurrentTasks,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Description,
+		&i.RuntimeID,
+		&i.Instructions,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.CustomEnv,
+		&i.CustomArgs,
+		&i.McpConfig,
+		&i.Model,
+		&i.IsInternal,
+		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
+	)
+	return i, err
+}
+
 const getInternalPlannerAgent = `-- name: GetInternalPlannerAgent :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level FROM agent
-WHERE workspace_id = $1 AND name = '规划Agent' AND is_internal = TRUE
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name FROM agent
+WHERE workspace_id = $1 AND (
+    (builtin_key = 'multica/planner' AND is_internal = TRUE)
+    OR (builtin_key IS NULL AND name = '规划Agent')
+)
 LIMIT 1
 `
 
@@ -1329,6 +1392,8 @@ func (q *Queries) GetInternalPlannerAgent(ctx context.Context, workspaceID pgtyp
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -1677,7 +1742,7 @@ func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]Ag
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name FROM agent
 WHERE workspace_id = $1 AND archived_at IS NULL
 ORDER BY created_at ASC
 `
@@ -1715,6 +1780,8 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 			&i.Model,
 			&i.IsInternal,
 			&i.ThinkingLevel,
+			&i.BuiltinKey,
+			&i.DisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -1727,7 +1794,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 }
 
 const listAllAgents = `-- name: ListAllAgents :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name FROM agent
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -1765,6 +1832,8 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 			&i.Model,
 			&i.IsInternal,
 			&i.ThinkingLevel,
+			&i.BuiltinKey,
+			&i.DisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -2085,7 +2154,7 @@ SET status = CASE WHEN EXISTS (
 ) THEN 'working' ELSE 'idle' END,
     updated_at = now()
 WHERE a.id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 func (q *Queries) RefreshAgentStatusFromTasks(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -2115,6 +2184,8 @@ func (q *Queries) RefreshAgentStatusFromTasks(ctx context.Context, id pgtype.UUI
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -2122,7 +2193,7 @@ func (q *Queries) RefreshAgentStatusFromTasks(ctx context.Context, id pgtype.UUI
 const restoreAgent = `-- name: RestoreAgent :one
 UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -2152,6 +2223,8 @@ func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -2214,7 +2287,7 @@ UPDATE agent SET
     thinking_level = COALESCE($16, thinking_level),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 type UpdateAgentParams struct {
@@ -2280,6 +2353,8 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -2287,7 +2362,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agent SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 type UpdateAgentStatusParams struct {
@@ -2322,6 +2397,8 @@ func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusPa
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }
@@ -2347,17 +2424,103 @@ func (q *Queries) UpdateAgentTaskSession(ctx context.Context, arg UpdateAgentTas
 	return err
 }
 
+const updateBuiltInAgent = `-- name: UpdateBuiltInAgent :one
+UPDATE agent SET
+    name = $2,
+    description = $3,
+    avatar_url = NULL,
+    runtime_config = '{}'::jsonb,
+    runtime_mode = $4,
+    runtime_id = $5,
+    visibility = 'workspace',
+    status = 'idle',
+    max_concurrent_tasks = $6,
+    owner_id = NULL,
+    instructions = $7,
+    display_name = $8,
+    custom_env = '{}'::jsonb,
+    custom_args = '[]'::jsonb,
+    mcp_config = NULL,
+    model = $10,
+    thinking_level = NULL,
+    archived_at = NULL,
+    archived_by = NULL,
+    is_internal = TRUE,
+    builtin_key = $9,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
+`
+
+type UpdateBuiltInAgentParams struct {
+	ID                 pgtype.UUID `json:"id"`
+	Name               string      `json:"name"`
+	Description        string      `json:"description"`
+	RuntimeMode        string      `json:"runtime_mode"`
+	RuntimeID          pgtype.UUID `json:"runtime_id"`
+	MaxConcurrentTasks int32       `json:"max_concurrent_tasks"`
+	Instructions       string      `json:"instructions"`
+	DisplayName        pgtype.Text `json:"display_name"`
+	BuiltinKey         pgtype.Text `json:"builtin_key"`
+	Model              pgtype.Text `json:"model"`
+}
+
+func (q *Queries) UpdateBuiltInAgent(ctx context.Context, arg UpdateBuiltInAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, updateBuiltInAgent,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.RuntimeMode,
+		arg.RuntimeID,
+		arg.MaxConcurrentTasks,
+		arg.Instructions,
+		arg.DisplayName,
+		arg.BuiltinKey,
+		arg.Model,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.AvatarUrl,
+		&i.RuntimeMode,
+		&i.RuntimeConfig,
+		&i.Visibility,
+		&i.Status,
+		&i.MaxConcurrentTasks,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Description,
+		&i.RuntimeID,
+		&i.Instructions,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.CustomEnv,
+		&i.CustomArgs,
+		&i.McpConfig,
+		&i.Model,
+		&i.IsInternal,
+		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
+	)
+	return i, err
+}
+
 const upsertInternalPlannerAgent = `-- name: UpsertInternalPlannerAgent :one
 INSERT INTO agent (
-    workspace_id, name, description, avatar_url, runtime_mode,
+    workspace_id, name, display_name, description, avatar_url, runtime_mode,
     runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal, builtin_key
 ) VALUES (
-    $1, '规划Agent', $2, NULL, $3,
+    $1, '规划Agent', '规划 Agent', $2, NULL, $3,
     '{}'::jsonb, $4, 'workspace', 1, NULL,
-    $5, '{}'::jsonb, '[]'::jsonb, NULL, $6, NULL, TRUE
+    $5, '{}'::jsonb, '[]'::jsonb, NULL, $6, NULL, TRUE, 'multica/planner'
 )
 ON CONFLICT (workspace_id, name) DO UPDATE SET
+    display_name = EXCLUDED.display_name,
     description = EXCLUDED.description,
     avatar_url = EXCLUDED.avatar_url,
     runtime_config = EXCLUDED.runtime_config,
@@ -2375,8 +2538,9 @@ ON CONFLICT (workspace_id, name) DO UPDATE SET
     archived_at = NULL,
     archived_by = NULL,
     is_internal = TRUE,
+    builtin_key = 'multica/planner',
     updated_at = now()
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, is_internal, thinking_level, builtin_key, display_name
 `
 
 type UpsertInternalPlannerAgentParams struct {
@@ -2422,6 +2586,8 @@ func (q *Queries) UpsertInternalPlannerAgent(ctx context.Context, arg UpsertInte
 		&i.Model,
 		&i.IsInternal,
 		&i.ThinkingLevel,
+		&i.BuiltinKey,
+		&i.DisplayName,
 	)
 	return i, err
 }

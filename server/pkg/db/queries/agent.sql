@@ -18,28 +18,37 @@ WHERE id = $1 AND workspace_id = $2;
 
 -- name: GetInternalPlannerAgent :one
 SELECT * FROM agent
-WHERE workspace_id = $1 AND name = '规划Agent' AND is_internal = TRUE
+WHERE workspace_id = $1 AND (
+    (builtin_key = 'multica/planner' AND is_internal = TRUE)
+    OR (builtin_key IS NULL AND name = '规划Agent')
+)
+LIMIT 1;
+
+-- name: GetBuiltInAgentByKey :one
+SELECT * FROM agent
+WHERE workspace_id = $1 AND builtin_key = $2 AND is_internal = TRUE
 LIMIT 1;
 
 -- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, runtime_mode,
     runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal, builtin_key
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, sqlc.narg('builtin_key'))
 RETURNING *;
 
 -- name: UpsertInternalPlannerAgent :one
 INSERT INTO agent (
-    workspace_id, name, description, avatar_url, runtime_mode,
+    workspace_id, name, display_name, description, avatar_url, runtime_mode,
     runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level, is_internal, builtin_key
 ) VALUES (
-    $1, '规划Agent', $2, NULL, $3,
+    $1, '规划Agent', '规划 Agent', $2, NULL, $3,
     '{}'::jsonb, $4, 'workspace', 1, NULL,
-    $5, '{}'::jsonb, '[]'::jsonb, NULL, sqlc.narg('model'), NULL, TRUE
+    $5, '{}'::jsonb, '[]'::jsonb, NULL, sqlc.narg('model'), NULL, TRUE, 'multica/planner'
 )
 ON CONFLICT (workspace_id, name) DO UPDATE SET
+    display_name = EXCLUDED.display_name,
     description = EXCLUDED.description,
     avatar_url = EXCLUDED.avatar_url,
     runtime_config = EXCLUDED.runtime_config,
@@ -57,7 +66,35 @@ ON CONFLICT (workspace_id, name) DO UPDATE SET
     archived_at = NULL,
     archived_by = NULL,
     is_internal = TRUE,
+    builtin_key = 'multica/planner',
     updated_at = now()
+RETURNING *;
+
+-- name: UpdateBuiltInAgent :one
+UPDATE agent SET
+    name = $2,
+    description = $3,
+    avatar_url = NULL,
+    runtime_config = '{}'::jsonb,
+    runtime_mode = $4,
+    runtime_id = $5,
+    visibility = 'workspace',
+    status = 'idle',
+    max_concurrent_tasks = $6,
+    owner_id = NULL,
+    instructions = $7,
+    display_name = $8,
+    custom_env = '{}'::jsonb,
+    custom_args = '[]'::jsonb,
+    mcp_config = NULL,
+    model = sqlc.narg('model'),
+    thinking_level = NULL,
+    archived_at = NULL,
+    archived_by = NULL,
+    is_internal = TRUE,
+    builtin_key = $9,
+    updated_at = now()
+WHERE id = $1
 RETURNING *;
 
 -- name: UpdateAgent :one

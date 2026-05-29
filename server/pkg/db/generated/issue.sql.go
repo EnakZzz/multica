@@ -155,7 +155,7 @@ INSERT INTO issue (
     parent_issue_id, position, start_date, due_date, number, project_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 `
 
 type CreateIssueParams struct {
@@ -219,6 +219,11 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
@@ -255,10 +260,10 @@ INSERT INTO issue (
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
     origin_type, origin_id
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date
+  ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+      $16, $17
+  ) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 `
 
 type CreateIssueWithOriginParams struct {
@@ -326,6 +331,100 @@ func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWith
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
+	)
+	return i, err
+}
+
+const createIssueWithOriginAndUnitTests = `-- name: CreateIssueWithOriginAndUnitTests :one
+INSERT INTO issue (
+    workspace_id, title, description, status, priority,
+    assignee_type, assignee_id, creator_type, creator_id,
+    parent_issue_id, position, start_date, due_date, number, project_id,
+    origin_type, origin_id, unit_test_checklist, unit_test_status
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+    $16, $17, $18::jsonb,
+    CASE WHEN jsonb_array_length($18::jsonb) > 0 THEN 'pending' ELSE 'not_required' END
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
+`
+
+type CreateIssueWithOriginAndUnitTestsParams struct {
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	Title             string             `json:"title"`
+	Description       pgtype.Text        `json:"description"`
+	Status            string             `json:"status"`
+	Priority          string             `json:"priority"`
+	AssigneeType      pgtype.Text        `json:"assignee_type"`
+	AssigneeID        pgtype.UUID        `json:"assignee_id"`
+	CreatorType       string             `json:"creator_type"`
+	CreatorID         pgtype.UUID        `json:"creator_id"`
+	ParentIssueID     pgtype.UUID        `json:"parent_issue_id"`
+	Position          float64            `json:"position"`
+	StartDate         pgtype.Timestamptz `json:"start_date"`
+	DueDate           pgtype.Timestamptz `json:"due_date"`
+	Number            int32              `json:"number"`
+	ProjectID         pgtype.UUID        `json:"project_id"`
+	OriginType        pgtype.Text        `json:"origin_type"`
+	OriginID          pgtype.UUID        `json:"origin_id"`
+	UnitTestChecklist []byte             `json:"unit_test_checklist"`
+}
+
+func (q *Queries) CreateIssueWithOriginAndUnitTests(ctx context.Context, arg CreateIssueWithOriginAndUnitTestsParams) (Issue, error) {
+	row := q.db.QueryRow(ctx, createIssueWithOriginAndUnitTests,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.Description,
+		arg.Status,
+		arg.Priority,
+		arg.AssigneeType,
+		arg.AssigneeID,
+		arg.CreatorType,
+		arg.CreatorID,
+		arg.ParentIssueID,
+		arg.Position,
+		arg.StartDate,
+		arg.DueDate,
+		arg.Number,
+		arg.ProjectID,
+		arg.OriginType,
+		arg.OriginID,
+		arg.UnitTestChecklist,
+	)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.ProjectID,
+		&i.OriginType,
+		&i.OriginID,
+		&i.FirstExecutedAt,
+		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
@@ -340,7 +439,7 @@ func (q *Queries) DeleteIssue(ctx context.Context, id pgtype.UUID) error {
 }
 
 const findActiveDuplicateIssue = `-- name: FindActiveDuplicateIssue :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at FROM issue
 WHERE workspace_id = $1
   AND status NOT IN ('done', 'cancelled')
   AND project_id IS NOT DISTINCT FROM $2::uuid
@@ -389,12 +488,17 @@ func (q *Queries) FindActiveDuplicateIssue(ctx context.Context, arg FindActiveDu
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
 
 const getIssue = `-- name: GetIssue :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at FROM issue
 WHERE id = $1
 `
 
@@ -425,12 +529,17 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
 
 const getIssueByNumber = `-- name: GetIssueByNumber :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at FROM issue
 WHERE workspace_id = $1 AND number = $2
 `
 
@@ -466,12 +575,17 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
 
 const getIssueByOrigin = `-- name: GetIssueByOrigin :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at FROM issue
 WHERE workspace_id = $1
   AND origin_type = $2
   AND origin_id = $3
@@ -516,12 +630,17 @@ func (q *Queries) GetIssueByOrigin(ctx context.Context, arg GetIssueByOriginPara
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
 
 const getIssueInWorkspace = `-- name: GetIssueInWorkspace :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at FROM issue
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -557,12 +676,17 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
 
 const listChildIssues = `-- name: ListChildIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at FROM issue
 WHERE parent_issue_id = $1
 ORDER BY position ASC, created_at DESC
 `
@@ -600,6 +724,11 @@ func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID pgtype.UUID
 			&i.OriginID,
 			&i.FirstExecutedAt,
 			&i.StartDate,
+			&i.UnitTestChecklist,
+			&i.UnitTestStatus,
+			&i.UnitTestIterationCount,
+			&i.UnitTestLastTaskID,
+			&i.UnitTestUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -706,7 +835,7 @@ func (q *Queries) ListIssueBlockedByDependencies(ctx context.Context, arg ListIs
 }
 
 const listIssueBlockingDependencies = `-- name: ListIssueBlockingDependencies :many
-SELECT dep.id, dep.workspace_id, dep.title, dep.description, dep.status, dep.priority, dep.assignee_type, dep.assignee_id, dep.creator_type, dep.creator_id, dep.parent_issue_id, dep.acceptance_criteria, dep.context_refs, dep.position, dep.due_date, dep.created_at, dep.updated_at, dep.number, dep.project_id, dep.origin_type, dep.origin_id, dep.first_executed_at, dep.start_date
+SELECT dep.id, dep.workspace_id, dep.title, dep.description, dep.status, dep.priority, dep.assignee_type, dep.assignee_id, dep.creator_type, dep.creator_id, dep.parent_issue_id, dep.acceptance_criteria, dep.context_refs, dep.position, dep.due_date, dep.created_at, dep.updated_at, dep.number, dep.project_id, dep.origin_type, dep.origin_id, dep.first_executed_at, dep.start_date, dep.unit_test_checklist, dep.unit_test_status, dep.unit_test_iteration_count, dep.unit_test_last_task_id, dep.unit_test_updated_at
 FROM issue_dependency d
 JOIN issue dep ON dep.id = d.depends_on_issue_id
 WHERE d.issue_id = $1
@@ -747,6 +876,11 @@ func (q *Queries) ListIssueBlockingDependencies(ctx context.Context, issueID pgt
 			&i.OriginID,
 			&i.FirstExecutedAt,
 			&i.StartDate,
+			&i.UnitTestChecklist,
+			&i.UnitTestStatus,
+			&i.UnitTestIterationCount,
+			&i.UnitTestLastTaskID,
+			&i.UnitTestUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -855,7 +989,8 @@ func (q *Queries) ListIssueBlocksDependencies(ctx context.Context, arg ListIssue
 const listIssues = `-- name: ListIssues :many
 SELECT id, workspace_id, title, description, status, priority,
        assignee_type, assignee_id, creator_type, creator_id,
-       parent_issue_id, position, start_date, due_date, created_at, updated_at, number, project_id
+       parent_issue_id, position, start_date, due_date, created_at, updated_at, number, project_id,
+       unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 FROM issue
 WHERE workspace_id = $1
   AND ($4::text IS NULL OR status = $4)
@@ -883,24 +1018,29 @@ type ListIssuesParams struct {
 }
 
 type ListIssuesRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	Title         string             `json:"title"`
-	Description   pgtype.Text        `json:"description"`
-	Status        string             `json:"status"`
-	Priority      string             `json:"priority"`
-	AssigneeType  pgtype.Text        `json:"assignee_type"`
-	AssigneeID    pgtype.UUID        `json:"assignee_id"`
-	CreatorType   string             `json:"creator_type"`
-	CreatorID     pgtype.UUID        `json:"creator_id"`
-	ParentIssueID pgtype.UUID        `json:"parent_issue_id"`
-	Position      float64            `json:"position"`
-	StartDate     pgtype.Timestamptz `json:"start_date"`
-	DueDate       pgtype.Timestamptz `json:"due_date"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
-	Number        int32              `json:"number"`
-	ProjectID     pgtype.UUID        `json:"project_id"`
+	ID                     pgtype.UUID        `json:"id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	Title                  string             `json:"title"`
+	Description            pgtype.Text        `json:"description"`
+	Status                 string             `json:"status"`
+	Priority               string             `json:"priority"`
+	AssigneeType           pgtype.Text        `json:"assignee_type"`
+	AssigneeID             pgtype.UUID        `json:"assignee_id"`
+	CreatorType            string             `json:"creator_type"`
+	CreatorID              pgtype.UUID        `json:"creator_id"`
+	ParentIssueID          pgtype.UUID        `json:"parent_issue_id"`
+	Position               float64            `json:"position"`
+	StartDate              pgtype.Timestamptz `json:"start_date"`
+	DueDate                pgtype.Timestamptz `json:"due_date"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	Number                 int32              `json:"number"`
+	ProjectID              pgtype.UUID        `json:"project_id"`
+	UnitTestChecklist      []byte             `json:"unit_test_checklist"`
+	UnitTestStatus         string             `json:"unit_test_status"`
+	UnitTestIterationCount int32              `json:"unit_test_iteration_count"`
+	UnitTestLastTaskID     pgtype.UUID        `json:"unit_test_last_task_id"`
+	UnitTestUpdatedAt      pgtype.Timestamptz `json:"unit_test_updated_at"`
 }
 
 func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListIssuesRow, error) {
@@ -942,6 +1082,11 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 			&i.UpdatedAt,
 			&i.Number,
 			&i.ProjectID,
+			&i.UnitTestChecklist,
+			&i.UnitTestStatus,
+			&i.UnitTestIterationCount,
+			&i.UnitTestLastTaskID,
+			&i.UnitTestUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -954,7 +1099,7 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 }
 
 const listIssuesUnblockedByIssue = `-- name: ListIssuesUnblockedByIssue :many
-SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.unit_test_checklist, i.unit_test_status, i.unit_test_iteration_count, i.unit_test_last_task_id, i.unit_test_updated_at
 FROM issue_dependency d
 JOIN issue i ON i.id = d.issue_id
 WHERE d.depends_on_issue_id = $1
@@ -1004,6 +1149,11 @@ func (q *Queries) ListIssuesUnblockedByIssue(ctx context.Context, dependsOnIssue
 			&i.OriginID,
 			&i.FirstExecutedAt,
 			&i.StartDate,
+			&i.UnitTestChecklist,
+			&i.UnitTestStatus,
+			&i.UnitTestIterationCount,
+			&i.UnitTestLastTaskID,
+			&i.UnitTestUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1018,7 +1168,8 @@ func (q *Queries) ListIssuesUnblockedByIssue(ctx context.Context, dependsOnIssue
 const listOpenIssues = `-- name: ListOpenIssues :many
 SELECT id, workspace_id, title, description, status, priority,
        assignee_type, assignee_id, creator_type, creator_id,
-       parent_issue_id, position, start_date, due_date, created_at, updated_at, number, project_id
+       parent_issue_id, position, start_date, due_date, created_at, updated_at, number, project_id,
+       unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 FROM issue
 WHERE workspace_id = $1
   AND status NOT IN ('done', 'cancelled')
@@ -1040,24 +1191,29 @@ type ListOpenIssuesParams struct {
 }
 
 type ListOpenIssuesRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	Title         string             `json:"title"`
-	Description   pgtype.Text        `json:"description"`
-	Status        string             `json:"status"`
-	Priority      string             `json:"priority"`
-	AssigneeType  pgtype.Text        `json:"assignee_type"`
-	AssigneeID    pgtype.UUID        `json:"assignee_id"`
-	CreatorType   string             `json:"creator_type"`
-	CreatorID     pgtype.UUID        `json:"creator_id"`
-	ParentIssueID pgtype.UUID        `json:"parent_issue_id"`
-	Position      float64            `json:"position"`
-	StartDate     pgtype.Timestamptz `json:"start_date"`
-	DueDate       pgtype.Timestamptz `json:"due_date"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
-	Number        int32              `json:"number"`
-	ProjectID     pgtype.UUID        `json:"project_id"`
+	ID                     pgtype.UUID        `json:"id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	Title                  string             `json:"title"`
+	Description            pgtype.Text        `json:"description"`
+	Status                 string             `json:"status"`
+	Priority               string             `json:"priority"`
+	AssigneeType           pgtype.Text        `json:"assignee_type"`
+	AssigneeID             pgtype.UUID        `json:"assignee_id"`
+	CreatorType            string             `json:"creator_type"`
+	CreatorID              pgtype.UUID        `json:"creator_id"`
+	ParentIssueID          pgtype.UUID        `json:"parent_issue_id"`
+	Position               float64            `json:"position"`
+	StartDate              pgtype.Timestamptz `json:"start_date"`
+	DueDate                pgtype.Timestamptz `json:"due_date"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	Number                 int32              `json:"number"`
+	ProjectID              pgtype.UUID        `json:"project_id"`
+	UnitTestChecklist      []byte             `json:"unit_test_checklist"`
+	UnitTestStatus         string             `json:"unit_test_status"`
+	UnitTestIterationCount int32              `json:"unit_test_iteration_count"`
+	UnitTestLastTaskID     pgtype.UUID        `json:"unit_test_last_task_id"`
+	UnitTestUpdatedAt      pgtype.Timestamptz `json:"unit_test_updated_at"`
 }
 
 func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) ([]ListOpenIssuesRow, error) {
@@ -1095,6 +1251,11 @@ func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) 
 			&i.UpdatedAt,
 			&i.Number,
 			&i.ProjectID,
+			&i.UnitTestChecklist,
+			&i.UnitTestStatus,
+			&i.UnitTestIterationCount,
+			&i.UnitTestLastTaskID,
+			&i.UnitTestUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1107,7 +1268,7 @@ func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) 
 }
 
 const listOpenReviewGateRepairIssues = `-- name: ListOpenReviewGateRepairIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 FROM issue
 WHERE origin_type = 'review_gate_repair'
   AND origin_id = $1
@@ -1148,6 +1309,11 @@ func (q *Queries) ListOpenReviewGateRepairIssues(ctx context.Context, originID p
 			&i.OriginID,
 			&i.FirstExecutedAt,
 			&i.StartDate,
+			&i.UnitTestChecklist,
+			&i.UnitTestStatus,
+			&i.UnitTestIterationCount,
+			&i.UnitTestLastTaskID,
+			&i.UnitTestUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1217,7 +1383,7 @@ UPDATE issue SET
     project_id = $12,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 `
 
 type UpdateIssueParams struct {
@@ -1275,6 +1441,11 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
@@ -1284,7 +1455,7 @@ UPDATE issue SET
     status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
 `
 
 type UpdateIssueStatusParams struct {
@@ -1319,6 +1490,73 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		&i.OriginID,
 		&i.FirstExecutedAt,
 		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
+	)
+	return i, err
+}
+
+const updateIssueUnitTests = `-- name: UpdateIssueUnitTests :one
+UPDATE issue
+SET unit_test_checklist = $1::jsonb,
+    unit_test_status = $2::text,
+    unit_test_iteration_count = $3::integer,
+    unit_test_last_task_id = $4,
+    unit_test_updated_at = now(),
+    updated_at = now()
+WHERE id = $5
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, unit_test_checklist, unit_test_status, unit_test_iteration_count, unit_test_last_task_id, unit_test_updated_at
+`
+
+type UpdateIssueUnitTestsParams struct {
+	UnitTestChecklist      []byte      `json:"unit_test_checklist"`
+	UnitTestStatus         string      `json:"unit_test_status"`
+	UnitTestIterationCount int32       `json:"unit_test_iteration_count"`
+	UnitTestLastTaskID     pgtype.UUID `json:"unit_test_last_task_id"`
+	ID                     pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateIssueUnitTests(ctx context.Context, arg UpdateIssueUnitTestsParams) (Issue, error) {
+	row := q.db.QueryRow(ctx, updateIssueUnitTests,
+		arg.UnitTestChecklist,
+		arg.UnitTestStatus,
+		arg.UnitTestIterationCount,
+		arg.UnitTestLastTaskID,
+		arg.ID,
+	)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.ProjectID,
+		&i.OriginType,
+		&i.OriginID,
+		&i.FirstExecutedAt,
+		&i.StartDate,
+		&i.UnitTestChecklist,
+		&i.UnitTestStatus,
+		&i.UnitTestIterationCount,
+		&i.UnitTestLastTaskID,
+		&i.UnitTestUpdatedAt,
 	)
 	return i, err
 }
