@@ -93,6 +93,9 @@ catalogs:
     unicode-animations:
       specifier: ^1.0.3
       version: 1.0.3
+    vite:
+      specifier: ^8.0.1
+      version: 8.0.1
     vitest:
       specifier: ^4.1.0
       version: 4.1.0
@@ -129,6 +132,21 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+
+  apps/browser-extension:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.5.0
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vite:
+        specifier: 'catalog:'
+        version: 8.0.1(@types/node@25.5.0)(jiti@2.6.1)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.0(@opentelemetry/api@1.9.1)(@types/node@25.5.0)(jsdom@29.0.1(@noble/hashes@1.8.0))(msw@2.12.14(@types/node@25.5.0)(typescript@5.9.3))(vite@8.0.1(@types/node@25.5.0)(jiti@2.6.1))
 
   apps/desktop:
     dependencies:
@@ -3323,6 +3341,7 @@ packages:
   '@xmldom/xmldom@0.8.12':
     resolution: {integrity: sha512-9k/gHF6n/pAi/9tqr3m3aqkuiNosYTurLLUtc7xQ9sxB/wm7WPygCv8GYa6mS0fLJEHhqMC1ATYhz++U/lRHqg==}
     engines: {node: '>=10.0.0'}
+    deprecated: this version has critical issues, please update to the latest version
 
   '@xyflow/react@12.10.2':
     resolution: {integrity: sha512-CgIi6HwlcHXwlkTpr0fxLv/0sRVNZ8IdwKLzzeCscaYBwpvfcH1QFOCeaTCuEn1FQEs/B8CjnTSjhs8udgmBgQ==}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multica Review Options</title>
+    <style>
+      body { margin: 0; font: 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; color: #111827; background: #f9fafb; }
+      main { max-width: 720px; margin: 40px auto; padding: 24px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; }
+      h1 { font-size: 22px; margin: 0 0 6px; }
+      p { color: #6b7280; margin: 0 0 18px; }
+      label { display: block; font-size: 12px; color: #374151; margin: 12px 0 4px; }
+      input, select { box-sizing: border-box; width: 100%; border: 1px solid #d1d5db; border-radius: 6px; padding: 8px 9px; background: #fff; color: #111827; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+      button { border: 1px solid #d1d5db; background: #fff; border-radius: 6px; padding: 8px 12px; color: #111827; cursor: pointer; }
+      button.primary { background: #111827; color: #fff; border-color: #111827; }
+      .status { min-height: 20px; margin-top: 12px; color: #4b5563; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Multica Review Capture</h1>
+      <p>Configure the Multica instance and default destination for browser review issues.</p>
+      <label for="server-url">Multica URL</label>
+      <input id="server-url" placeholder="https://app.multica.ai" />
+      <div class="row">
+        <button id="login">Sign in</button>
+        <button id="refresh">Refresh workspaces</button>
+      </div>
+      <label for="workspace">Workspace</label>
+      <select id="workspace"></select>
+      <label for="project">Project</label>
+      <select id="project"></select>
+      <div class="row">
+        <button id="save" class="primary">Save settings</button>
+        <button id="logout">Sign out</button>
+      </div>
+      <div id="status" class="status"></div>
+    </main>
+    <script type="module" src="./options.ts"></script>
+  </body>
+</html>

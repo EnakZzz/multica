@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multica Review Sign In</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; color: #111827; background: #f9fafb; }
+      main { width: min(420px, calc(100vw - 32px)); padding: 24px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 18px 50px rgba(17, 24, 39, 0.12); }
+      h1 { font-size: 18px; margin: 0 0 8px; }
+      p { margin: 0; color: #4b5563; }
+      .error { color: #b91c1c; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Multica Review</h1>
+      <p id="status">Completing sign in...</p>
+    </main>
+    <script type="module" src="./auth-callback.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "@multica/browser-extension",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

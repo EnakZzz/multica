@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Multica Review Capture",
+  "description": "Capture viewport annotations and submit them as Multica project issues.",
+  "version": "0.1.1",
+  "action": {
+    "default_title": "Multica Review",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["auth-callback.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "commands": {
+    "toggle-annotation": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "Start Multica annotation mode on the active tab"
+    }
+  }
+}
