@@ -52,6 +52,28 @@ function Get-EnvValue {
     return $value
 }
 
+function Import-GitProviderEnvFromEnvFile {
+    $loaded = @()
+    foreach ($name in @(
+        "GITLAB_BASE_URL",
+        "GITLAB_TOKEN",
+        "GLAB_TOKEN",
+        "GITLAB_PRIVATE_TOKEN",
+        "CI_JOB_TOKEN",
+        "CI_SERVER_URL"
+    )) {
+        $value = Get-EnvValue -Name $name -Default ""
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            continue
+        }
+
+        [Environment]::SetEnvironmentVariable($name, $value, "Process")
+        $loaded += $name
+    }
+
+    return $loaded
+}
+
 function New-HexSecret {
     $bytes = [byte[]]::new(32)
     [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
@@ -261,6 +283,11 @@ function Update-LocalDaemonCli {
     if ($SkipDaemonUpdate) {
         Write-Host "==> Skipping local CLI/daemon update."
         return
+    }
+
+    $gitProviderEnv = Import-GitProviderEnvFromEnvFile
+    if ($gitProviderEnv.Count -gt 0) {
+        Write-Host "==> Loaded Git provider env for local daemon: $($gitProviderEnv -join ', ')"
     }
 
     $builtCli = Build-LocalCli
