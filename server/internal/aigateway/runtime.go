@@ -449,8 +449,13 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 		WriteError(w, http.StatusBadRequest, "missing request body")
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 256<<20))
 	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			WriteError(w, http.StatusRequestEntityTooLarge, "request body too large (max 256MB)")
+			return
+		}
 		WriteError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
