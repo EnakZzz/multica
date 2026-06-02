@@ -1243,7 +1243,8 @@ Return a final JSON object with this exact shape:
   }
 }
 
-Use "pass" only when the implementation satisfies the requested spec. Use "fail" when downstream work must stay blocked.`
+Use "pass" only when the implementation satisfies the requested spec. Use "fail" when downstream work must stay blocked.
+For game, visual prototype, UI, Canvas, or other interactive product work, "pass" is forbidden when the reviewed result is text-only, list/card-driven, emoji-only, or lacks the visible interactive gameplay/visual interaction required by the spec. Treat that as a blocking finding.`
 	case "code_review":
 		return `Review gate output contract:
 Return a final JSON object with this exact shape:
@@ -1258,7 +1259,8 @@ Return a final JSON object with this exact shape:
   }
 }
 
-Use "pass" only when the code quality review has no blocking findings. Use "fail" when downstream work must stay blocked.`
+Use "pass" only when the code quality review has no blocking findings. Use "fail" when downstream work must stay blocked.
+For game, visual prototype, UI, Canvas, or other interactive product work, "pass" is forbidden when the reviewed result is text-only, list/card-driven, emoji-only, or lacks the visible interactive gameplay/visual interaction required by the spec. Treat that as a blocking finding.`
 	case "merge":
 		return `Merge / integrate output contract:
 Record the integration result in the issue comment or task output with these fields:

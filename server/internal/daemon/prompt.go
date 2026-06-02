@@ -69,12 +69,13 @@ func BuildPrompt(task Task, provider string) string {
 		}
 		b.WriteString("You must return the structured `review_gate` JSON required by the issue body. If you post a final issue comment, make that comment a single JSON object containing `review_gate` only: no markdown, no prose before or after it, and no natural-language PASS/FAIL as the automation contract. Your task completion output must be one JSON object containing the English `review_gate` plus `human_display_zh` with Chinese summary/findings for the human issue-detail UI.\n")
 		b.WriteString("Use `review_gate.status=\"pass\"` only when downstream work can continue. Use `review_gate.status=\"fail\"` when blocking findings require implementation repair.\n")
+		b.WriteString("For game, visual prototype, UI, Canvas, or other interactive product work, do not pass based only on prose summaries or text-card walkthroughs. If the reviewed result is text-only, list/card-driven, emoji-only, or lacks visible interactive gameplay required by the spec, return `review_gate.status=\"fail\"` with a blocking finding.\n")
 	} else if strings.TrimSpace(task.PublishBranchName) != "" {
 		checkoutRef := strings.TrimSpace(task.RepoCheckoutRef)
 		if checkoutRef == "" {
 			checkoutRef = strings.TrimSpace(task.PublishBranchName)
 		}
-		fmt.Fprintf(&b, "This issue is a review gate repair. Continue the existing target branch `%s`; do not create a separate repair branch for this work.\n", task.PublishBranchName)
+		fmt.Fprintf(&b, "Continue the inherited target branch `%s`; do not create a separate generated branch for this work.\n", task.PublishBranchName)
 		fmt.Fprintf(&b, "`multica repo checkout <url>` will default to ref `%s` and `multica repo publish` will push your HEAD back to `%s`. Your final issue comment must include `Branch: %s` and `Status: done` after publish succeeds, then mark the issue `done`.\n", checkoutRef, task.PublishBranchName, task.PublishBranchName)
 		writeWikiDeltaGuidance(&b, false)
 	} else if task.PlanItemExecutionKind == "agent_task" && len(task.UnitTestChecklist) > 0 {
@@ -142,9 +143,9 @@ func buildVisualNodePrompt(task Task) string {
 		if task.IssueIdentifier != "" {
 			fmt.Fprintf(&b, " (%s)", task.IssueIdentifier)
 		}
-		b.WriteString(". Generate or prepare the requested visual asset, upload the image attachment, and write the result back to the visual node.\n\n")
+		b.WriteString(". Generate or prepare the requested visual asset, upload the media attachment, and write the result back to the visual node.\n\n")
 	} else {
-		b.WriteString("There is no issue for this task. Generate or prepare the requested visual asset, upload the image attachment, and write the result back to the visual node.\n\n")
+		b.WriteString("There is no issue for this task. Generate or prepare the requested visual asset, upload the media attachment, and write the result back to the visual node.\n\n")
 	}
 	if task.ProjectTitle != "" {
 		fmt.Fprintf(&b, "Project: %s (%s)\n\n", task.ProjectTitle, task.ProjectID)
@@ -178,9 +179,9 @@ func buildVisualNodePrompt(task Task) string {
 	}
 	b.WriteString("\n")
 	b.WriteString("Completion contract:\n")
-	b.WriteString("- Upload the generated image as an attachment through the Multica CLI or API.\n")
+	b.WriteString("- Upload the generated image, video, or animation handoff asset as an attachment through the Multica CLI or API.\n")
 	b.WriteString("- Write automation fields in English for agent context, and also provide Chinese human-display text with `--note-zh` or `--error-zh`.\n")
-	b.WriteString("- Then run `multica visual-node complete <node-id> --project <project-id> --attachment <local-image-path> --note <short English note> --note-zh <short Chinese note>`.\n")
+	b.WriteString("- Then run `multica visual-node complete <node-id> --project <project-id> --attachment <local-asset-path> --note <short English note> --note-zh <short Chinese note>`.\n")
 	b.WriteString("- If generation fails, run `multica visual-node complete <node-id> --project <project-id> --error <English reason> --error-zh <Chinese reason>` so the node shows a failure state.\n")
 	b.WriteString("- Do not create an issue and do not call `multica issue create` for this task.\n")
 	return b.String()
@@ -204,8 +205,9 @@ func buildVisualBoardExtractPrompt(task Task) string {
 		fmt.Fprintf(&b, "Project ID: %s\n", task.ProjectID)
 	}
 	fmt.Fprintf(&b, "Visual board ID: %s\n\n", task.VisualBoardID)
-	b.WriteString("Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant, animation.\n")
+	b.WriteString("Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant, animation, video.\n")
 	b.WriteString("Create one node for each distinct visual thing a user should review or generate. Include gameplay_note only for mechanics that affect visual direction.\n")
+	b.WriteString("For selectable pet protagonists such as cat and dog player forms, create one character node per playable form; do not hide a dog or cat protagonist only as a generated_variant. Use generated_variant only for expressions, poses, or actions of an existing character and connect it with variant_of.\n")
 	b.WriteString("Nodes start as draft; do not mark anything adopted.\n\n")
 	b.WriteString("Language rules:\n")
 	b.WriteString("- Use English for automation fields consumed by agents: `title`, `description`, and `prompt`.\n")
@@ -220,7 +222,7 @@ func buildVisualBoardExtractPrompt(task Task) string {
 	b.WriteString("- Do not finish with a summary that points to an issue comment or a local artifact; the backend parses only the final JSON object to populate the visual board.\n")
 	b.WriteString("- Do not create implementation issues, planning artifacts, or branches from this extraction task.\n")
 	b.WriteString("\nSchema:\n")
-	b.WriteString(`{"nodes":[{"id":"stable_local_id","type":"character|scene|ui_element|prop|reference|gameplay_note|generated_variant|animation","title":"short English title","title_zh":"short Chinese display title","description":"English description of what this visual node represents","description_zh":"Chinese display description","prompt":"English suggested image-generation prompt","prompt_zh":"Chinese display version of the prompt","source_refs":[{"wiki_page_id":"...","wiki_slug":"...","title":"...","snippet":"..."}],"confidence":0.0,"position_x":0,"position_y":0}],"edges":[{"source":"stable_local_id","target":"stable_local_id","relation":"reference|contains|uses|variant_of|supports_gameplay"}]}` + "\n")
+	b.WriteString(`{"nodes":[{"id":"stable_local_id","type":"character|scene|ui_element|prop|reference|gameplay_note|generated_variant|animation|video","title":"short English title","title_zh":"short Chinese display title","description":"English description of what this visual node represents","description_zh":"Chinese display description","prompt":"English suggested image-or-video-generation prompt","prompt_zh":"Chinese display version of the prompt","implementation_path":"optional repo-relative path already integrated in the product","implementation_note":"optional note about current in-product usage","source_refs":[{"wiki_page_id":"...","wiki_slug":"...","title":"...","snippet":"..."}],"confidence":0.0,"position_x":0,"position_y":0}],"edges":[{"source":"stable_local_id","target":"stable_local_id","relation":"reference|contains|uses|variant_of|supports_gameplay|prerequisite"}]}` + "\n")
 	return b.String()
 }
 
@@ -595,6 +597,7 @@ func writeIssuePlanItemsQualityRules(b *strings.Builder) {
 	b.WriteString("- No hidden work: include setup, data/schema changes, migrations/backfills, UI/server integration, documentation, verification, release/deploy handoff, and cleanup only when they are required by the approved spec.\n")
 	b.WriteString("- For high-risk feature work, cross-module changes, migrations, auth/security, data-loss risk, public API changes, release/deploy risk, or work that needs explicit spec and code review gates, prefer a visible pipeline with spec_review and code_review nodes.\n")
 	b.WriteString("- Review gates must depend on the implementation or repair work they review. Use spec_review for checking the delivered behavior against the approved spec; use code_review for correctness, regression, maintainability, security, and test-risk review.\n")
+	b.WriteString("- For game, visual prototype, UI, Canvas, or other interactive product work, review/check gates must explicitly fail text-only, list/card-driven, emoji-only, or prose-summary implementations when the approved spec requires visible interactive gameplay or visual interaction.\n")
 	b.WriteString("- Create explicit dependencies for true blocking order: implementation before verification, data/schema before consumers, setup before integration, review before human handoff, and human_confirmation before work that needs that decision.\n")
 	b.WriteString("- Leave independent work dependency-free so it can run in parallel. Never add decorative dependencies, forward dependencies, cycles, or dependencies on items that are merely related but not blocking.\n")
 	b.WriteString("- Acceptance criteria should be 2-5 concrete checks per executable item when possible. Suggested test commands must be exact runnable commands when known; use [] instead of inventing commands.\n")

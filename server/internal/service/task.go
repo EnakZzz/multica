@@ -4984,6 +4984,7 @@ Return a final JSON object with this exact shape:
 }
 
 Use "pass" only when the implementation satisfies the requested spec. Use "fail" when downstream work must stay blocked.
+For game, visual prototype, UI, Canvas, or other interactive product work, "pass" is forbidden when the reviewed result is text-only, list/card-driven, emoji-only, or lacks the visible interactive gameplay/visual interaction required by the spec. Treat that as a blocking finding.
 Keep review_gate in English for automation and agent-to-agent handoff. Write human_display_zh in Chinese for the human issue-detail UI.`
 	case PipelineNodeTypeCodeReview:
 		return `Review gate output contract:
@@ -5006,6 +5007,7 @@ Return a final JSON object with this exact shape:
 }
 
 Use "pass" only when the code quality review has no blocking findings. Use "fail" when downstream work must stay blocked.
+For game, visual prototype, UI, Canvas, or other interactive product work, "pass" is forbidden when the reviewed result is text-only, list/card-driven, emoji-only, or lacks the visible interactive gameplay/visual interaction required by the spec. Treat that as a blocking finding.
 Keep review_gate in English for automation and agent-to-agent handoff. Write human_display_zh in Chinese for the human issue-detail UI.`
 	default:
 		return ""

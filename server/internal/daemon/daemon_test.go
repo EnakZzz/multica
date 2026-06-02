@@ -509,8 +509,7 @@ func TestBuildPromptReviewGateRepairUsesTargetBranch(t *testing.T) {
 	}, "claude")
 
 	for _, want := range []string{
-		"review gate repair",
-		"Continue the existing target branch `agent/backend-engineer/LOC-5`",
+		"Continue the inherited target branch `agent/backend-engineer/LOC-5`",
 		"will default to ref `agent/backend-engineer/LOC-5`",
 		"will push your HEAD back to `agent/backend-engineer/LOC-5`",
 		"Branch: agent/backend-engineer/LOC-5",

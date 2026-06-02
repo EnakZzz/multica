@@ -120,6 +120,26 @@ func TestBuildPromptIncludesRelevantProjectKnowledge(t *testing.T) {
 	}
 }
 
+func TestBuildPromptReviewGateRejectsTextOnlyInteractiveWork(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID:          "issue-123",
+		PlanItemNodeType: "code_review",
+	}, "codex")
+
+	mustContain := []string{
+		"blocking review gate",
+		"text-only",
+		"list/card-driven",
+		"lacks visible interactive gameplay",
+		"review_gate.status=\"fail\"",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("BuildPrompt review gate output missing %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
 func TestBuildChatPromptIncludesProjectWikiInstruction(t *testing.T) {
 	out := BuildPrompt(Task{
 		ChatSessionID: "chat-123",
@@ -163,9 +183,9 @@ func TestBuildVisualNodePromptRequiresNodeCompletion(t *testing.T) {
 		"local skill at `C:\\Users\\happyelements\\.codex\\skills\\game-asset-pipeline\\SKILL.md`",
 		"must preserve transparency: PNG/WebP with alpha and no baked scene/background",
 		"generate on a flat removable chroma-key background, remove the key locally",
-		"Upload the generated image as an attachment",
+		"Upload the generated image, video, or animation handoff asset as an attachment",
 		"also provide Chinese human-display text",
-		"multica visual-node complete <node-id> --project <project-id> --attachment <local-image-path>",
+		"multica visual-node complete <node-id> --project <project-id> --attachment <local-asset-path>",
 		"--note-zh",
 		"multica visual-node complete <node-id> --project <project-id> --error <English reason> --error-zh <Chinese reason>",
 		"Do not create an issue",
@@ -227,7 +247,9 @@ func TestBuildVisualBoardExtractPromptRequiresStrictJSON(t *testing.T) {
 	mustContain := []string{
 		"There is no issue for this task",
 		"Visual board ID: board-123",
-		"Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant, animation",
+		"Allowed node types: character, scene, ui_element, prop, reference, gameplay_note, generated_variant, animation, video",
+		"create one character node per playable form",
+		"do not hide a dog or cat protagonist only as a generated_variant",
 		"wiki_page id=wiki-1 slug=visual-brief",
 		"Use English for automation fields consumed by agents",
 		"`title_zh`, `description_zh`, and `prompt_zh`",
@@ -237,6 +259,8 @@ func TestBuildVisualBoardExtractPromptRequiresStrictJSON(t *testing.T) {
 		`"title_zh"`,
 		`"description_zh"`,
 		`"prompt_zh"`,
+		`"implementation_path"`,
+		`|prerequisite`,
 		`"edges"`,
 		"no markdown fences",
 	}
@@ -395,6 +419,7 @@ func TestBuildIssuePlanItemsPromptIncludesBuiltInPlannerQualityRules(t *testing.
 		"No hidden work:",
 		"prefer a visible pipeline with spec_review and code_review nodes.",
 		"Review gates must depend on the implementation or repair work they review.",
+		"review/check gates must explicitly fail text-only",
 		"Create explicit dependencies for true blocking order",
 		"Leave independent work dependency-free so it can run in parallel.",
 		"Recommend agents only from Available agents",

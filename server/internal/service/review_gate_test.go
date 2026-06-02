@@ -68,6 +68,22 @@ func TestFormatReviewGateCanonicalCommentOmitsHumanDisplayZh(t *testing.T) {
 	}
 }
 
+func TestReviewGateContractRejectsTextOnlyInteractiveWork(t *testing.T) {
+	for _, nodeType := range []string{PipelineNodeTypeSpecReview, PipelineNodeTypeCodeReview} {
+		contract := ReviewGateContract(nodeType)
+		for _, s := range []string{
+			"text-only",
+			"list/card-driven",
+			"lacks the visible interactive gameplay",
+			"blocking finding",
+		} {
+			if !strings.Contains(contract, s) {
+				t.Fatalf("ReviewGateContract(%s) missing %q\n--- contract ---\n%s", nodeType, s, contract)
+			}
+		}
+	}
+}
+
 func TestParseReviewGateOutputAcceptsFailFindings(t *testing.T) {
 	review, err := parseReviewGateOutput(`prefix {
 		"review_gate": {
