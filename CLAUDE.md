@@ -17,6 +17,50 @@ Read that page before:
 
 The legacy `packages/views/locales/glossary.md` is now a stub redirecting to the docs page; do not rely on it.
 
+## Local browser / E2E testing
+
+When testing a local or self-host page in the in-app browser, do not stop at
+the login screen and do not invent ad-hoc auth headers. Reuse the repo's dev
+verification-code login path through the UI:
+
+- If the backend was started with `MULTICA_DEV_VERIFICATION_CODE` from `.env`,
+  open `/login`, enter a local test email such as `local@multica.test`, then
+  use that 6-digit dev code. In this checkout the local `.env` commonly uses
+  `888888`.
+- Browser tests should exercise that same UI flow: email first, then the dev
+  code. Do not seed `localStorage` with `multica_token` as a shortcut unless an
+  existing repo helper explicitly does so for a narrow unit/integration setup.
+- For automated browser checks, use
+  [`microsoft/webwright`](https://github.com/microsoft/webwright) as the default
+  browser testing approach. Keep `PLAYWRIGHT_BASE_URL` pointed at the active
+  frontend port and set `MULTICA_E2E_USE_DEV_CODE=true` when using the repo's
+  existing E2E helpers in `e2e/helpers.ts` / `e2e/fixtures.ts`.
+- For authenticated API checks, reuse the CLI token from
+  `%USERPROFILE%\.multica\config.json` and pass `X-Workspace-Slug` matching the
+  URL, for example `local-agents`. Never print or paste the token value.
+
+For pages like `http://10.160.108.87:3001/local-agents/...`, the user is
+usually testing the local Docker self-host build from this checkout. After
+frontend or backend code changes, refresh that environment with:
+
+```powershell
+.\scripts\docker-selfhost.ps1 update
+```
+
+Do not start a separate Next.js dev server on another port unless the user
+explicitly asks for it; testing should stay on the same self-host URL.
+If the update script builds images and restarts `multica-backend-1` /
+`multica-frontend-1` successfully but later fails while stopping/replacing the
+local daemon or CLI (for example `OpenProcess: Access is denied` from
+`multica daemon stop`), treat that as a post-restart local-daemon issue, not as
+a frontend/backend deploy failure. Verify with:
+
+```powershell
+.\scripts\docker-selfhost.ps1 status
+Invoke-RestMethod http://127.0.0.1:8081/health
+Invoke-WebRequest http://127.0.0.1:3001
+```
+
 ## Project Context
 
 Multica is an AI-native task management platform — like Linear, but with AI agents as first-class citizens.
