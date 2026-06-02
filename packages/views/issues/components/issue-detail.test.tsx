@@ -109,6 +109,10 @@ vi.mock("../../navigation", () => ({
 vi.mock("../../editor", () => ({
   useFileDropZone: () => ({ isDragOver: false, dropZoneProps: {} }),
   FileDropOverlay: () => null,
+  AttachmentDownloadProvider: ({ children }: { children: React.ReactNode }) => children,
+  Attachment: ({ attachment }: { attachment: { attachment?: { filename?: string } } }) => (
+    <div>{attachment.attachment?.filename}</div>
+  ),
   // No-op so comment-card's AttachmentList can render without hitting the
   // real API singleton; tests that care about download wiring should write
   // dedicated specs against `use-download-attachment.test.tsx`.
@@ -531,6 +535,33 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+  });
+
+  it("renders standalone issue-level attachments below the description", async () => {
+    mockApiObj.listAttachments.mockResolvedValueOnce([
+      {
+        id: "att-1",
+        workspace_id: "ws-1",
+        issue_id: "issue-1",
+        comment_id: null,
+        chat_session_id: null,
+        chat_message_id: null,
+        uploader_type: "member",
+        uploader_id: "user-1",
+        filename: "review-screenshot.png",
+        url: "/uploads/review-screenshot.png",
+        download_url: "/uploads/review-screenshot.png",
+        content_type: "image/png",
+        size_bytes: 1234,
+        created_at: "2026-06-02T08:01:45Z",
+      },
+    ]);
+
+    renderIssueDetail();
+
+    await waitFor(() => {
+      expect(screen.getByText("review-screenshot.png")).toBeInTheDocument();
+    });
   });
 
   it("renders workspace name as breadcrumb link", async () => {
