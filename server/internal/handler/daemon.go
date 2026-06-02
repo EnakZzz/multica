@@ -191,6 +191,50 @@ func (h *Handler) latestCompletedIssueBranch(ctx context.Context, issueID pgtype
 	return nil, pgx.ErrNoRows
 }
 
+func (h *Handler) planItemBranchTargetForIssue(ctx context.Context, issue db.Issue) (*issueBranchTarget, error) {
+	item, err := h.Queries.GetPlanItemByGeneratedIssue(ctx, issue.ID)
+	if err != nil {
+		return nil, err
+	}
+	branch := strings.TrimSpace(item.BranchName)
+	if branch == "" {
+		branch = strings.TrimSpace(item.IterationBranchName)
+	}
+	if branch == "" {
+		return nil, pgx.ErrNoRows
+	}
+	return &issueBranchTarget{
+		IssueID:    uuidToString(issue.ID),
+		Number:     issue.Number,
+		Title:      issue.Title,
+		BranchName: branch,
+	}, nil
+}
+
+func (h *Handler) inheritedPlanBranchTargetForIssue(ctx context.Context, issue db.Issue) (*issueBranchTarget, error) {
+	visited := map[string]bool{}
+	cursor := issue.ParentIssueID
+	for cursor.Valid {
+		key := uuidToString(cursor)
+		if visited[key] {
+			return nil, pgx.ErrNoRows
+		}
+		visited[key] = true
+
+		parent, err := h.Queries.GetIssue(ctx, cursor)
+		if err != nil {
+			return nil, err
+		}
+		if target, err := h.planItemBranchTargetForIssue(ctx, parent); err == nil {
+			return target, nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		cursor = parent.ParentIssueID
+	}
+	return nil, pgx.ErrNoRows
+}
+
 func (h *Handler) reviewGateNodeTypeForIssue(ctx context.Context, issueID pgtype.UUID) (string, bool) {
 	stage, err := h.Queries.GetPipelineRunStageForIssue(ctx, issueID)
 	if err == nil {
@@ -277,7 +321,14 @@ func (h *Handler) repairIssueBranchTarget(ctx context.Context, repairIssue db.Is
 	if !ok {
 		return nil, pgx.ErrNoRows
 	}
-	return h.latestCompletedIssueBranch(ctx, sourceIssue.ID)
+	target, err := h.latestCompletedIssueBranch(ctx, sourceIssue.ID)
+	if err == nil {
+		return target, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	return h.planItemBranchTargetForIssue(ctx, sourceIssue)
 }
 
 // requireDaemonTaskAccess looks up a task and verifies the caller owns its workspace.
@@ -1544,11 +1595,13 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.PlanItemExecutionKind = normalizePlanItemExecutionKind(item.ExecutionKind)
 			resp.PlanItemRequiresGitCommit = item.RequiresGitCommit
 			resp.PlanItemBranchName = strings.TrimSpace(item.BranchName)
-			if resp.PlanItemNodeType == service.PipelineNodeTypeMerge && resp.PlanItemBranchName == "" {
+			if resp.PlanItemBranchName == "" && (resp.PlanItemNodeType == service.PipelineNodeTypeMerge || resp.PlanItemExecutionKind == service.PlanItemExecutionKindHumanConfirmation) {
 				resp.PlanItemBranchName = strings.TrimSpace(item.IterationBranchName)
 			}
 			if resp.PlanItemRequiresGitCommit && resp.PlanItemBranchName != "" {
 				resp.PublishBranchName = resp.PlanItemBranchName
+			} else if resp.PlanItemBranchName != "" && resp.RepoCheckoutRef == "" {
+				resp.RepoCheckoutRef = resp.PlanItemBranchName
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			slog.Warn("failed to load plan item execution contract", "issue_id", uuidToString(task.IssueID), "error", err)
@@ -1587,6 +1640,15 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				resp.PublishBranchName = target.BranchName
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				slog.Warn("failed to load repair branch target", "issue_id", uuidToString(task.IssueID), "error", err)
+			}
+		} else if hasClaimedIssue && resp.PublishBranchName == "" && !service.IsReviewGateNodeType(resp.PlanItemNodeType) {
+			if target, err := h.inheritedPlanBranchTargetForIssue(r.Context(), claimedIssue); err == nil {
+				resp.PlanItemRequiresGitCommit = true
+				resp.PlanItemBranchName = target.BranchName
+				resp.RepoCheckoutRef = target.BranchName
+				resp.PublishBranchName = target.BranchName
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				slog.Warn("failed to load inherited plan branch target", "issue_id", uuidToString(task.IssueID), "error", err)
 			}
 		}
 

@@ -1776,6 +1776,245 @@ func TestClaimTask_ProjectGitReposOverrideWorkspaceRepos(t *testing.T) {
 	}
 }
 
+func TestClaimTask_ManualChildInheritsParentPlanBranch(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
+		testWorkspaceID,
+	).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	parentNumber, err := testHandler.Queries.IncrementIssueCounter(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("allocate parent issue number: %v", err)
+	}
+	childNumber, err := testHandler.Queries.IncrementIssueCounter(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("allocate child issue number: %v", err)
+	}
+
+	var parentIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, title, description, status, priority,
+			creator_id, creator_type, number, position
+		) VALUES ($1, 'parent human gate', 'Human confirmation', 'done', 'none', $2, 'member', $3, 0)
+		RETURNING id
+	`, testWorkspaceID, testUserID, parentNumber).Scan(&parentIssueID); err != nil {
+		t.Fatalf("create parent issue: %v", err)
+	}
+
+	var childIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, title, description, status, priority,
+			assignee_type, assignee_id, creator_id, creator_type,
+			parent_issue_id, number, position
+		) VALUES ($1, 'manual feedback child', 'Follow-up fix', 'todo', 'none', 'agent', $2, $3, 'member', $4, $5, 0)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID, parentIssueID, childNumber).Scan(&childIssueID); err != nil {
+		t.Fatalf("create child issue: %v", err)
+	}
+
+	var planID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO plan (
+			workspace_id, title, prompt, status, planner_agent_id, created_by
+		) VALUES ($1, 'parent plan', 'plan prompt', 'committed', $2, $3)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID).Scan(&planID); err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO plan_item (
+			plan_id, position, title, description,
+			execution_kind, requires_git_commit,
+			iteration_index, iteration_title, iteration_branch_name,
+			branch_name, node_type, recommended_agent_id, match_score, match_reason,
+			depends_on_positions, selected, generated_issue_id
+		)
+		VALUES (
+			$1, 1, 'Human confirmation gate', 'Confirm the iteration',
+			'human_confirmation', false,
+			1, 'MVP loop', 'feature/protolab-web-run-allure-mvp',
+			'', 'manual', $2, 100, 'test fixture',
+			ARRAY[]::integer[], true, $3
+		)
+	`, planID, agentID, parentIssueID); err != nil {
+		t.Fatalf("create parent plan item: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id, status, priority
+		) VALUES ($1, $2, $3, 'queued', 0)
+		RETURNING id
+	`, agentID, runtimeID, childIssueID).Scan(&taskID); err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		testPool.Exec(context.Background(), `DELETE FROM plan WHERE id = $1`, planID)
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, childIssueID)
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, parentIssueID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-inherited-branch")
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: %d %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task *struct {
+			ID                        string `json:"id"`
+			PlanItemRequiresGitCommit bool   `json:"plan_item_requires_git_commit"`
+			PlanItemBranchName        string `json:"plan_item_branch_name"`
+			RepoCheckoutRef           string `json:"repo_checkout_ref"`
+			PublishBranchName         string `json:"publish_branch_name"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Task == nil {
+		t.Fatal("expected task in response")
+	}
+	if resp.Task.ID != taskID {
+		t.Fatalf("claimed task = %s, want %s", resp.Task.ID, taskID)
+	}
+	const wantBranch = "feature/protolab-web-run-allure-mvp"
+	if !resp.Task.PlanItemRequiresGitCommit ||
+		resp.Task.PlanItemBranchName != wantBranch ||
+		resp.Task.RepoCheckoutRef != wantBranch ||
+		resp.Task.PublishBranchName != wantBranch {
+		t.Fatalf("inherited branch fields = requires:%v plan:%q checkout:%q publish:%q, want all %q",
+			resp.Task.PlanItemRequiresGitCommit,
+			resp.Task.PlanItemBranchName,
+			resp.Task.RepoCheckoutRef,
+			resp.Task.PublishBranchName,
+			wantBranch)
+	}
+}
+
+func TestClaimTask_HumanConfirmationSurfacesInheritedBranch(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
+		testWorkspaceID,
+	).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	issueNumber, err := testHandler.Queries.IncrementIssueCounter(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("allocate issue number: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, title, description, status, priority,
+			creator_id, creator_type, number, position
+		) VALUES ($1, 'human validation gate', 'Confirm implementation branch', 'todo', 'none', $2, 'member', $3, 0)
+		RETURNING id
+	`, testWorkspaceID, testUserID, issueNumber).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+
+	var planID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO plan (
+			workspace_id, title, prompt, status, planner_agent_id, created_by
+		) VALUES ($1, 'human branch plan', 'plan prompt', 'committed', $2, $3)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID).Scan(&planID); err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO plan_item (
+			plan_id, position, title, description,
+			execution_kind, requires_git_commit,
+			iteration_index, iteration_title, iteration_branch_name,
+			branch_name, node_type, recommended_agent_id, match_score, match_reason,
+			depends_on_positions, selected, generated_issue_id
+		)
+		VALUES (
+			$1, 1, 'Human validation gate', 'Inspect the implementation branch',
+			'human_confirmation', false,
+			1, 'MVP loop', 'feature/protolab-web-run-allure-mvp',
+			'', 'manual', NULL, 0, '',
+			ARRAY[]::integer[], true, $2
+		)
+	`, planID, issueID); err != nil {
+		t.Fatalf("create human confirmation plan item: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id, status, priority
+		) VALUES ($1, $2, $3, 'queued', 0)
+		RETURNING id
+	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		testPool.Exec(context.Background(), `DELETE FROM plan WHERE id = $1`, planID)
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-human-branch")
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: %d %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task *struct {
+			PlanItemExecutionKind     string `json:"plan_item_execution_kind"`
+			PlanItemRequiresGitCommit bool   `json:"plan_item_requires_git_commit"`
+			PlanItemBranchName        string `json:"plan_item_branch_name"`
+			RepoCheckoutRef           string `json:"repo_checkout_ref"`
+			PublishBranchName         string `json:"publish_branch_name"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Task == nil {
+		t.Fatal("expected task in response")
+	}
+	const wantBranch = "feature/protolab-web-run-allure-mvp"
+	if resp.Task.PlanItemExecutionKind != service.PlanItemExecutionKindHumanConfirmation ||
+		resp.Task.PlanItemRequiresGitCommit ||
+		resp.Task.PlanItemBranchName != wantBranch ||
+		resp.Task.RepoCheckoutRef != wantBranch ||
+		resp.Task.PublishBranchName != "" {
+		t.Fatalf("human branch fields = kind:%q requires:%v plan:%q checkout:%q publish:%q",
+			resp.Task.PlanItemExecutionKind,
+			resp.Task.PlanItemRequiresGitCommit,
+			resp.Task.PlanItemBranchName,
+			resp.Task.RepoCheckoutRef,
+			resp.Task.PublishBranchName)
+	}
+}
+
 // When the issue's project has no Git repo resources, the claim handler
 // must fall back to workspace repos (the pre-override behavior).
 func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {

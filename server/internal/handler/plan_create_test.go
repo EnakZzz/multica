@@ -183,6 +183,30 @@ func TestNormalizeUpdatePlanItemIterationsAddsHumanGatePerIteration(t *testing.T
 	}
 }
 
+func TestPlanItemIssueDescriptionHumanConfirmationIncludesInheritedBranch(t *testing.T) {
+	item := db.PlanItem{
+		Description:          "Human validation gate",
+		ExecutionKind:        service.PlanItemExecutionKindHumanConfirmation,
+		ConfirmationQuestion: "Accept this iteration?",
+		ConfirmationReason:   "Human must inspect the delivered UI.",
+		RequiredEvidence:     []string{"Open the running app."},
+		RequiresGitCommit:    false,
+		IterationBranchName:  "feature/protolab-web-run-allure-mvp",
+	}
+
+	description := planItemIssueDescription(item, service.PlanSpec{})
+	for _, want := range []string{
+		"Inherited implementation branch:",
+		"feature/protolab-web-run-allure-mvp",
+		"Git commit expected:",
+		"No",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description missing %q\n---\n%s", want, description)
+		}
+	}
+}
+
 func TestCreatePlanFromSourceIssueCreatesLinkedPlannerTask(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

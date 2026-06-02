@@ -1385,6 +1385,9 @@ func planItemIssueDescription(item db.PlanItem, spec service.PlanSpec) string {
 	if item.RequiresGitCommit {
 		appendPlanItemTextSection(&b, "Planned branch", item.BranchName)
 	} else {
+		if branch := strings.TrimSpace(item.IterationBranchName); branch != "" {
+			appendPlanItemTextSection(&b, "Inherited implementation branch", branch)
+		}
 		appendPlanItemTextSection(&b, "Git commit expected", "No")
 	}
 	appendPlanItemSection(&b, "Acceptance criteria", item.AcceptanceCriteria)

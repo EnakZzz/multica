@@ -784,7 +784,8 @@ func TestPlanItemCodeReviewFailCreatesRepairAndRerunsReview(t *testing.T) {
 		t.Fatalf("code review issue description missing review_gate contract:\n%s", codeReviewDescription)
 	}
 
-	completeAgentTaskWithBranchForTest(t, latestTaskForIssue(t, implementIssueID), "implementation completed", "agent/backend-engineer/LOC-5", "abc123")
+	implementTaskID := latestTaskForIssue(t, implementIssueID)
+	completeAgentTaskWithBranchForTest(t, implementTaskID, "implementation completed", "agent/backend-engineer/LOC-5", "abc123")
 	completeReviewGateTaskForTest(t, latestTaskForIssue(t, specReviewIssueID), `{
 		"review_gate": {
 			"status": "pass",
@@ -842,6 +843,28 @@ func TestPlanItemCodeReviewFailCreatesRepairAndRerunsReview(t *testing.T) {
 	}
 	if branchTarget.BranchName != "agent/backend-engineer/LOC-5" || branchTarget.CommitSHA != "abc123" {
 		t.Fatalf("repair branch target = %s/%s, want original implementation branch", branchTarget.BranchName, branchTarget.CommitSHA)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_task_queue
+		SET result = '{"output":"published branch was mentioned only in text"}'::jsonb
+		WHERE id = $1
+	`, implementTaskID); err != nil {
+		t.Fatalf("clear implementation task branch result: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE plan_item
+		SET branch_name = 'feature/review-repair-plan-branch',
+			iteration_branch_name = 'feature/review-repair-plan-branch'
+		WHERE generated_issue_id = $1
+	`, implementIssueID); err != nil {
+		t.Fatalf("set implementation plan branch fallback: %v", err)
+	}
+	branchTarget, err = testHandler.repairIssueBranchTarget(context.Background(), repairIssue)
+	if err != nil {
+		t.Fatalf("load repair branch target from plan item fallback: %v", err)
+	}
+	if branchTarget.BranchName != "feature/review-repair-plan-branch" || branchTarget.CommitSHA != "" {
+		t.Fatalf("repair fallback branch target = %s/%s, want plan item branch without commit", branchTarget.BranchName, branchTarget.CommitSHA)
 	}
 	var dependencyCount int
 	if err := testPool.QueryRow(context.Background(), `
