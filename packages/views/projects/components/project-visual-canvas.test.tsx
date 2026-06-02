@@ -28,7 +28,7 @@ vi.mock("@xyflow/react", () => ({
   Handle: () => null,
   Position: { Left: "left", Right: "right" },
   applyNodeChanges: (_changes: unknown, nodes: unknown) => nodes,
-  ReactFlow: ({ nodes, nodeTypes, onPaneContextMenu, onConnect, onConnectStart, onConnectEnd }: any) => (
+  ReactFlow: ({ nodes, edges, nodeTypes, onPaneContextMenu, onConnect, onConnectStart, onConnectEnd, onNodeDragStart, onNodeDrag, onNodeDragStop }: any) => (
     <div data-testid="visual-flow" onContextMenu={onPaneContextMenu}>
       <button
         type="button"
@@ -46,23 +46,73 @@ vi.mock("@xyflow/react", () => ({
           });
         }}
       />
+      <button
+        type="button"
+        data-testid="drag-variant-stack"
+        onClick={() => {
+          const groupNode = nodes.find((node: any) => node.id === "__variant-stack__node-character");
+          onNodeDragStart?.(new MouseEvent("mousedown"), groupNode, nodes);
+          onNodeDragStop?.(new MouseEvent("mouseup"), groupNode, groupNode ? [{
+            ...groupNode,
+            position: { x: groupNode.position.x + 100, y: groupNode.position.y + 50 },
+          }] : []);
+        }}
+      />
+      <button
+        type="button"
+        data-testid="drag-top-variant"
+        onClick={() => {
+          const topNode = nodes.find((node: any) => node.id === "node-expression");
+          onNodeDragStart?.(new MouseEvent("mousedown"), topNode, nodes);
+          onNodeDrag?.(new MouseEvent("mousemove"), topNode, topNode ? nodes.map((node: any) => (
+            node.id === topNode.id
+              ? { ...node, position: { x: node.position.x + 100, y: node.position.y + 50 } }
+              : node
+          )) : nodes);
+          onNodeDragStop?.(new MouseEvent("mouseup"), topNode, topNode ? nodes.map((node: any) => (
+            node.id === topNode.id
+              ? { ...node, position: { x: node.position.x + 100, y: node.position.y + 50 } }
+              : node
+          )) : nodes);
+        }}
+      />
       {nodes.map((node: any) => {
         const NodeComponent = nodeTypes[node.type];
         return (
-          <NodeComponent
+          <div
             key={node.id}
-            id={node.id}
-            type={node.type}
-            data={node.data}
-            selected={false}
-            isConnectable={false}
-            dragging={false}
-            zIndex={0}
-            xPos={node.position.x}
-            yPos={node.position.y}
-          />
+            data-testid={`flow-node-${node.id}`}
+            data-x={node.position.x}
+            data-y={node.position.y}
+            data-z-index={node.zIndex}
+            data-parent-id={node.parentId}
+            data-extent={node.extent ?? ""}
+            data-draggable={node.draggable === false ? "false" : "true"}
+          >
+            <NodeComponent
+              id={node.id}
+              type={node.type}
+              data={node.data}
+              selected={node.data?.isSelected ?? false}
+              isConnectable={false}
+              dragging={false}
+              zIndex={0}
+              xPos={node.position.x}
+              yPos={node.position.y}
+            />
+          </div>
         );
       })}
+      {edges?.map((edge: any) => (
+        <div
+          key={edge.id}
+          data-testid={`edge-${edge.id}`}
+          data-animated={edge.animated ? "true" : "false"}
+          data-stroke={edge.style?.stroke}
+          data-stroke-width={edge.style?.strokeWidth}
+          data-z-index={edge.zIndex}
+        />
+      ))}
     </div>
   ),
 }));
@@ -193,6 +243,8 @@ function makeNode(patch: Partial<ProjectVisualNode>): ProjectVisualNode {
     prompt_zh: "",
     position_x: 0,
     position_y: 0,
+    implementation_path: "",
+    implementation_note: "",
     source_refs: [],
     reference_attachment_ids: [],
     result_attachment_id: null,
@@ -458,6 +510,220 @@ describe("ProjectVisualCanvas", () => {
     );
   });
 
+  it("organizes visual nodes into semantic regions with variants near their parent", async () => {
+    visualMocks.board = {
+      ...makeBoard([
+        makeNode({
+          id: "node-reference",
+          type: "reference",
+          title: "Mood Reference",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-01T00:00:00Z",
+        }),
+        makeNode({
+          id: "node-character",
+          type: "character",
+          title: "Main Character",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-02T00:00:00Z",
+        }),
+        makeNode({
+          id: "node-expression",
+          type: "generated_variant",
+          title: "Main Character Smile",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-03T00:00:00Z",
+        }),
+        makeNode({
+          id: "node-expression-2",
+          type: "generated_variant",
+          title: "Main Character Happy",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-03T00:10:00Z",
+        }),
+        makeNode({
+          id: "node-pet",
+          type: "character",
+          title: "Pet Character",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-04T00:00:00Z",
+        }),
+        makeNode({
+          id: "node-scene",
+          type: "scene",
+          title: "Draft Scene",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-05T00:00:00Z",
+        }),
+        makeNode({
+          id: "node-pet-corner",
+          type: "scene",
+          title: "Pet Interaction Corner",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-05T00:10:00Z",
+        }),
+        makeNode({
+          id: "node-pet-foley",
+          type: "audio",
+          title: "Pet Interaction Corner Foley",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-05T00:20:00Z",
+        }),
+        makeNode({
+          id: "node-video",
+          type: "video",
+          title: "Opening Video",
+          position_x: 900,
+          position_y: 900,
+          created_at: "2026-01-06T00:00:00Z",
+        }),
+      ]),
+      edges: [
+        makeEdge("edge-reference-scene", "node-reference", "node-scene", "reference"),
+        makeEdge("edge-character-expression", "node-character", "node-expression", "variant_of"),
+        makeEdge("edge-character-expression-2", "node-character", "node-expression-2", "variant_of"),
+        makeEdge("edge-character-pet", "node-character", "node-pet", "variant_of"),
+        makeEdge("edge-scene-video", "node-scene", "node-video", "prerequisite"),
+        makeEdge("edge-pet-corner-foley", "node-pet-corner", "node-pet-foley", "uses"),
+      ],
+    };
+    renderCanvas();
+
+    await screen.findByText("Opening Video");
+    fireEvent.click(screen.getByRole("button", { name: /整理画板/i }));
+
+    const payload = visualMocks.updateBoardMutate.mock.calls[0]?.[0];
+    const reference = payload.nodes.find((node: any) => node.id === "node-reference");
+    const character = payload.nodes.find((node: any) => node.id === "node-character");
+    const expression = payload.nodes.find((node: any) => node.id === "node-expression");
+    const secondExpression = payload.nodes.find((node: any) => node.id === "node-expression-2");
+    const pet = payload.nodes.find((node: any) => node.id === "node-pet");
+    const scene = payload.nodes.find((node: any) => node.id === "node-scene");
+    const petCorner = payload.nodes.find((node: any) => node.id === "node-pet-corner");
+    const petFoley = payload.nodes.find((node: any) => node.id === "node-pet-foley");
+    const video = payload.nodes.find((node: any) => node.id === "node-video");
+    expect(reference.position_x).toBeLessThan(character.position_x);
+    expect(character.position_x).toBe(pet.position_x);
+    expect(character.position_y).toBeLessThan(pet.position_y);
+    expect(character.position_x).toBeLessThan(scene.position_x);
+    expect(scene.position_x).toBeLessThan(video.position_x);
+    expect(petFoley.position_x).toBe(petCorner.position_x + 320);
+    expect(Math.abs(petFoley.position_y - petCorner.position_y)).toBeLessThan(120);
+    expect(petFoley.position_x).toBeLessThan(1420);
+    expect(expression.position_x).toBeGreaterThan(character.position_x);
+    expect(expression.position_x).toBeLessThan(scene.position_x);
+    expect(secondExpression.position_x - expression.position_x).toBe(18);
+    expect(secondExpression.position_y - expression.position_y).toBe(18);
+    expect(Math.abs(expression.position_y - character.position_y)).toBeLessThan(120);
+    expect(visualMocks.toastSuccess).toHaveBeenCalledWith("Visual Board 已整理");
+  });
+
+  it("renders one edge for a stacked variant group and retargets it when cycling variants", async () => {
+    visualMocks.board = {
+      ...makeBoard([
+        makeNode({
+          id: "node-character",
+          type: "character",
+          title: "Main Character",
+        }),
+        makeNode({
+          id: "node-expression",
+          type: "generated_variant",
+          title: "Main Character Smile",
+          position_x: 740,
+          position_y: 0,
+        }),
+        makeNode({
+          id: "node-expression-2",
+          type: "generated_variant",
+          title: "Main Character Happy",
+          position_x: 758,
+          position_y: 18,
+        }),
+      ]),
+      edges: [
+        makeEdge("edge-character-expression", "node-character", "node-expression", "variant_of"),
+        makeEdge("edge-character-expression-2", "node-character", "node-expression-2", "variant_of"),
+      ],
+    };
+    renderCanvas();
+
+    await screen.findByText("Main Character Smile");
+    const stackGroup = screen.getByTestId("flow-node-__variant-stack__node-character");
+    expect(stackGroup).toHaveAttribute("data-x", "726");
+    expect(stackGroup).toHaveAttribute("data-y", "0");
+    expect(stackGroup).toHaveAttribute("data-draggable", "true");
+    expect(screen.getByTestId("flow-node-node-expression-2")).not.toHaveAttribute("data-parent-id");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-draggable", "true");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-extent", "");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-x", "740");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-y", "0");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-parent-id", "__variant-stack__node-character");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-draggable", "false");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-extent", "parent");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-x", "32");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-y", "18");
+    expect(screen.queryByTestId("edge-edge-character-expression")).not.toBeInTheDocument();
+    expect(screen.getByTestId("edge-edge-character-expression-2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "下一张变体" }));
+
+    expect(screen.getByTestId("flow-node-node-expression")).not.toHaveAttribute("data-parent-id");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-draggable", "true");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-extent", "");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-x", "740");
+    expect(screen.getByTestId("flow-node-node-expression")).toHaveAttribute("data-y", "0");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-parent-id", "__variant-stack__node-character");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-draggable", "false");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-extent", "parent");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-x", "32");
+    expect(screen.getByTestId("flow-node-node-expression-2")).toHaveAttribute("data-y", "18");
+    expect(screen.getByTestId("edge-edge-character-expression")).toBeInTheDocument();
+    expect(screen.queryByTestId("edge-edge-character-expression-2")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("drag-variant-stack"));
+
+    const payload = visualMocks.updateBoardMutate.mock.calls.at(-1)?.[0];
+    const firstExpression = payload.nodes.find((node: any) => node.id === "node-expression");
+    const secondExpression = payload.nodes.find((node: any) => node.id === "node-expression-2");
+    expect(firstExpression.position_x).toBe(840);
+    expect(firstExpression.position_y).toBe(50);
+    expect(secondExpression.position_x).toBe(858);
+    expect(secondExpression.position_y).toBe(68);
+
+    fireEvent.click(screen.getByTestId("drag-top-variant"));
+
+    const topDragPayload = visualMocks.updateBoardMutate.mock.calls.at(-1)?.[0];
+    const topDraggedExpression = topDragPayload.nodes.find((node: any) => node.id === "node-expression");
+    const topDraggedSecondExpression = topDragPayload.nodes.find((node: any) => node.id === "node-expression-2");
+    expect(topDraggedExpression.position_x).toBe(940);
+    expect(topDraggedExpression.position_y).toBe(100);
+    expect(topDraggedSecondExpression.position_x).toBe(958);
+    expect(topDraggedSecondExpression.position_y).toBe(118);
+  });
+
+  function makeEdge(id: string, source: string, target: string, relation: string) {
+    return {
+      id,
+      board_id: "board-1",
+      workspace_id: "ws-1",
+      project_id: "project-1",
+      source_node_id: source,
+      target_node_id: target,
+      relation,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+  }
+
   it("shows Chinese tooltips for node icon buttons", async () => {
     renderCanvas();
 
@@ -502,6 +768,116 @@ describe("ProjectVisualCanvas", () => {
     expect(await screen.findByText("Reference Library")).toBeInTheDocument();
     expect(container.querySelector('img[src="https://cdn.example.test/reference.png"]')).toBeNull();
     expect(screen.queryByRole("button", { name: "生成图片资源" })).not.toBeInTheDocument();
+  });
+
+  it("renders media previews without cropping", async () => {
+    visualMocks.board = makeBoard([
+      makeNode({
+        id: "node-video",
+        type: "video",
+        title: "Opening Video",
+        result_attachment_id: "att-video",
+        result_attachment: {
+          id: "att-video",
+          workspace_id: "ws-1",
+          issue_id: null,
+          comment_id: null,
+          chat_session_id: null,
+          chat_message_id: null,
+          uploader_type: "member",
+          uploader_id: "user-1",
+          filename: "opening.mp4",
+          url: "https://cdn.example.test/opening.mp4",
+          download_url: "https://cdn.example.test/opening.mp4",
+          content_type: "video/mp4",
+          size_bytes: 42,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      }),
+      makeNode({
+        id: "node-audio",
+        type: "audio",
+        title: "Hub Ambience",
+        result_attachment_id: "att-audio",
+        result_attachment: {
+          id: "att-audio",
+          workspace_id: "ws-1",
+          issue_id: null,
+          comment_id: null,
+          chat_session_id: null,
+          chat_message_id: null,
+          uploader_type: "member",
+          uploader_id: "user-1",
+          filename: "hub-ambience.wav",
+          url: "https://cdn.example.test/hub-ambience.wav",
+          download_url: "https://cdn.example.test/hub-ambience.wav",
+          content_type: "audio/wav",
+          size_bytes: 42,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      }),
+    ]);
+    const { container } = renderCanvas();
+
+    expect(await screen.findByText("Opening Video")).toBeInTheDocument();
+    const video = container.querySelector('video[src="https://cdn.example.test/opening.mp4"]');
+    expect(video).not.toBeNull();
+    expect(video).toHaveClass("object-contain");
+    expect(await screen.findByText("Hub Ambience")).toBeInTheDocument();
+    const audio = container.querySelector('audio[src="https://cdn.example.test/hub-ambience.wav"]');
+    expect(audio).not.toBeNull();
+    expect(audio).toHaveClass("w-full");
+  });
+
+  it("highlights the selected visual node, its prerequisites, and incoming edges", async () => {
+    visualMocks.board = {
+      ...makeBoard([
+        makeNode({
+          id: "node-reference",
+          type: "reference",
+          title: "Mood Reference",
+        }),
+        makeNode({
+          id: "node-draft",
+          type: "scene",
+          title: "Draft Forest",
+        }),
+        makeNode({
+          id: "node-other",
+          type: "prop",
+          title: "Unrelated Prop",
+        }),
+      ]),
+      edges: [
+        makeEdge("edge-reference-draft", "node-reference", "node-draft", "prerequisite"),
+        makeEdge("edge-other-reference", "node-other", "node-reference", "uses"),
+      ],
+    };
+    renderCanvas();
+
+    const selectedCard = (await screen.findByText("Draft Forest")).closest('[role="button"]');
+    const prerequisiteCard = screen.getByText("Mood Reference").closest('[role="button"]');
+    const unrelatedCard = screen.getByText("Unrelated Prop").closest('[role="button"]');
+    expect(selectedCard).not.toBeNull();
+    expect(prerequisiteCard).not.toBeNull();
+    expect(unrelatedCard).not.toBeNull();
+    fireEvent.click(selectedCard!);
+
+    expect(selectedCard).toHaveClass("border-blue-500");
+    expect(selectedCard).toHaveClass("border-2");
+    expect(prerequisiteCard).toHaveClass("border-blue-400/90");
+    expect(prerequisiteCard).toHaveClass("border-2");
+    expect(unrelatedCard).not.toHaveClass("border-blue-400/90");
+    expect(screen.getByTestId("edge-edge-reference-draft")).toHaveAttribute("data-animated", "false");
+    expect(screen.getByTestId("edge-edge-reference-draft")).toHaveAttribute("data-stroke", "rgba(59, 130, 246, 0.98)");
+    expect(screen.getByTestId("edge-edge-reference-draft")).toHaveAttribute("data-stroke-width", "2");
+    expect(Number(screen.getByTestId("edge-edge-reference-draft").dataset.zIndex)).toBeLessThan(
+      Number(screen.getByTestId("flow-node-node-draft").dataset.zIndex),
+    );
+    expect(Number(screen.getByTestId("edge-edge-reference-draft").dataset.zIndex)).toBeLessThan(
+      Number(screen.getByTestId("flow-node-node-reference").dataset.zIndex),
+    );
+    expect(screen.getByTestId("edge-edge-other-reference")).toHaveAttribute("data-animated", "false");
   });
 
   it("links a reference node to an asset node as a persisted reference edge", async () => {

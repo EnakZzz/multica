@@ -9,7 +9,9 @@ export type ProjectVisualNodeType =
   | "reference"
   | "gameplay_note"
   | "generated_variant"
-  | "animation";
+  | "animation"
+  | "video"
+  | "audio";
 
 export type ProjectVisualNodeStatus =
   | "draft"
@@ -37,6 +39,8 @@ export interface ProjectVisualNode {
   prompt_zh: string;
   position_x: number;
   position_y: number;
+  implementation_path: string;
+  implementation_note: string;
   source_refs: unknown[];
   reference_attachment_ids: string[];
   result_attachment_id: string | null;
@@ -101,7 +105,7 @@ export interface ListProjectVisualNodeGenerationsResponse {
 export interface UpdateProjectVisualBoardRequest {
   viewport?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  nodes?: Array<Pick<ProjectVisualNode, "id" | "type" | "status" | "title" | "title_zh" | "description" | "description_zh" | "prompt" | "prompt_zh" | "position_x" | "position_y" | "source_refs">>;
+  nodes?: Array<Pick<ProjectVisualNode, "id" | "type" | "status" | "title" | "title_zh" | "description" | "description_zh" | "prompt" | "prompt_zh" | "position_x" | "position_y" | "implementation_path" | "implementation_note" | "source_refs">>;
   edges?: Array<Pick<ProjectVisualEdge, "id" | "source_node_id" | "target_node_id" | "relation">>;
 }
 
@@ -115,6 +119,8 @@ export interface CreateProjectVisualNodeRequest {
   prompt_zh?: string;
   position_x?: number;
   position_y?: number;
+  implementation_path?: string;
+  implementation_note?: string;
   source_refs?: unknown[];
   source_node_id?: string;
   relation?: string;

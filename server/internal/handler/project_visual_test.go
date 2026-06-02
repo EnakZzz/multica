@@ -15,6 +15,17 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestProjectVisualInfersAudioNodesFromWikiText(t *testing.T) {
+	nodeType, ok := inferVisualNodeType("LOST COUNTER 音频需求\n轻微翻页声、笔尖划纸声和远处列车低频环境音")
+	if !ok || nodeType != "audio" {
+		t.Fatalf("inferVisualNodeType audio = %q, %v", nodeType, ok)
+	}
+
+	if normalized := normalizeVisualNodeType("sfx"); normalized != "audio" {
+		t.Fatalf("normalizeVisualNodeType(sfx) = %q", normalized)
+	}
+}
+
 func TestProjectVisualGenerateNodesFromWikiCreatesBoardNodes(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -201,6 +212,38 @@ func TestParseVisualBoardExtractOutputAcceptsCommentArtifactAliases(t *testing.T
 	}
 	if !strings.Contains(string(node.SourceRefs), "glossary") {
 		t.Fatalf("expected source_slugs alias to populate source refs, got %s", string(node.SourceRefs))
+	}
+}
+
+func TestParseVisualBoardExtractOutputPromotesPetProtagonistVariants(t *testing.T) {
+	output := `{
+  "nodes": [
+    {
+      "id": "dog-protagonist",
+      "title": "Dog wag action sprite",
+      "title_zh": "Lost Pet 小狗主角",
+      "type": "generated_variant",
+      "description": "Small dog playable protagonist sprite for the Lost Pet flow.",
+      "prompt": "Create the dog player character.",
+      "implementation_path": "src/assets/character-opening/pets/pet_dog_wag.png"
+    }
+  ],
+  "edges": []
+}`
+
+	got, err := parseVisualBoardExtractOutput(output)
+	if err != nil {
+		t.Fatalf("parseVisualBoardExtractOutput: %v", err)
+	}
+	if len(got.Nodes) != 1 {
+		t.Fatalf("expected one node, got %d", len(got.Nodes))
+	}
+	node := got.Nodes[0]
+	if node.Type != "character" {
+		t.Fatalf("expected pet protagonist asset to be promoted to character, got %q", node.Type)
+	}
+	if node.ImplementationPath != "src/assets/character-opening/pets/pet_dog_wag.png" {
+		t.Fatalf("implementation path was not preserved: %q", node.ImplementationPath)
 	}
 }
 

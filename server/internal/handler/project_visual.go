@@ -51,6 +51,8 @@ type visualNodeResponse struct {
 	PromptZh               string              `json:"prompt_zh"`
 	PositionX              float64             `json:"position_x"`
 	PositionY              float64             `json:"position_y"`
+	ImplementationPath     string              `json:"implementation_path"`
+	ImplementationNote     string              `json:"implementation_note"`
 	SourceRefs             json.RawMessage     `json:"source_refs"`
 	ReferenceAttachmentIDs []string            `json:"reference_attachment_ids"`
 	ResultAttachmentID     *string             `json:"result_attachment_id"`
@@ -125,6 +127,8 @@ type visualNodeRow struct {
 	PromptZh               string
 	PositionX              float64
 	PositionY              float64
+	ImplementationPath     string
+	ImplementationNote     string
 	SourceRefs             []byte
 	ReferenceAttachmentIDs []pgtype.UUID
 	ResultAttachmentID     pgtype.UUID
@@ -159,33 +163,37 @@ type updateVisualBoardRequest struct {
 }
 
 type updateVisualNodeRequest struct {
-	ID            string          `json:"id"`
-	Type          string          `json:"type"`
-	Status        string          `json:"status"`
-	Title         string          `json:"title"`
-	TitleZh       string          `json:"title_zh"`
-	Description   string          `json:"description"`
-	DescriptionZh string          `json:"description_zh"`
-	Prompt        string          `json:"prompt"`
-	PromptZh      string          `json:"prompt_zh"`
-	PositionX     float64         `json:"position_x"`
-	PositionY     float64         `json:"position_y"`
-	SourceRefs    json.RawMessage `json:"source_refs"`
+	ID                 string          `json:"id"`
+	Type               string          `json:"type"`
+	Status             string          `json:"status"`
+	Title              string          `json:"title"`
+	TitleZh            string          `json:"title_zh"`
+	Description        string          `json:"description"`
+	DescriptionZh      string          `json:"description_zh"`
+	Prompt             string          `json:"prompt"`
+	PromptZh           string          `json:"prompt_zh"`
+	PositionX          float64         `json:"position_x"`
+	PositionY          float64         `json:"position_y"`
+	ImplementationPath string          `json:"implementation_path"`
+	ImplementationNote string          `json:"implementation_note"`
+	SourceRefs         json.RawMessage `json:"source_refs"`
 }
 
 type createVisualNodeRequest struct {
-	Type          string          `json:"type"`
-	Title         string          `json:"title"`
-	TitleZh       string          `json:"title_zh"`
-	Description   string          `json:"description"`
-	DescriptionZh string          `json:"description_zh"`
-	Prompt        string          `json:"prompt"`
-	PromptZh      string          `json:"prompt_zh"`
-	PositionX     float64         `json:"position_x"`
-	PositionY     float64         `json:"position_y"`
-	SourceRefs    json.RawMessage `json:"source_refs"`
-	SourceNodeID  string          `json:"source_node_id"`
-	Relation      string          `json:"relation"`
+	Type               string          `json:"type"`
+	Title              string          `json:"title"`
+	TitleZh            string          `json:"title_zh"`
+	Description        string          `json:"description"`
+	DescriptionZh      string          `json:"description_zh"`
+	Prompt             string          `json:"prompt"`
+	PromptZh           string          `json:"prompt_zh"`
+	PositionX          float64         `json:"position_x"`
+	PositionY          float64         `json:"position_y"`
+	ImplementationPath string          `json:"implementation_path"`
+	ImplementationNote string          `json:"implementation_note"`
+	SourceRefs         json.RawMessage `json:"source_refs"`
+	SourceNodeID       string          `json:"source_node_id"`
+	Relation           string          `json:"relation"`
 }
 
 type updateVisualEdgeRequest struct {
@@ -293,12 +301,16 @@ func (h *Handler) UpdateProjectVisualBoard(w http.ResponseWriter, r *http.Reques
 			    description_zh = CASE WHEN $6 = '' THEN COALESCE(NULLIF(description_zh, ''), $5) ELSE $6 END,
 			    prompt = $7,
 			    prompt_zh = CASE WHEN $8 = '' THEN COALESCE(NULLIF(prompt_zh, ''), $7) ELSE $8 END,
-			    position_x = $9, position_y = $10, source_refs = $11, updated_at = now()
-			WHERE id = $12 AND board_id = $13 AND workspace_id = $14 AND project_id = $15
+			    position_x = $9, position_y = $10,
+			    implementation_path = $11, implementation_note = $12,
+			    source_refs = $13, updated_at = now()
+			WHERE id = $14 AND board_id = $15 AND workspace_id = $16 AND project_id = $17
 		`, nodeType, status, title, strings.TrimSpace(nodeReq.TitleZh),
 			nodeReq.Description, strings.TrimSpace(nodeReq.DescriptionZh),
 			nodeReq.Prompt, strings.TrimSpace(nodeReq.PromptZh),
-			nodeReq.PositionX, nodeReq.PositionY, normalizeJSONRaw(nodeReq.SourceRefs, "[]"),
+			nodeReq.PositionX, nodeReq.PositionY,
+			strings.TrimSpace(nodeReq.ImplementationPath), strings.TrimSpace(nodeReq.ImplementationNote),
+			normalizeJSONRaw(nodeReq.SourceRefs, "[]"),
 			nodeID, board.ID, project.WorkspaceID, project.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update visual node")
@@ -492,13 +504,14 @@ func (h *Handler) CreateProjectVisualNode(w http.ResponseWriter, r *http.Request
 	err = tx.QueryRow(r.Context(), `
 		INSERT INTO project_visual_node (
 			board_id, workspace_id, project_id, type, status, title, title_zh, description, description_zh, prompt, prompt_zh,
-			position_x, position_y, source_refs
+			position_x, position_y, implementation_path, implementation_note, source_refs
 		)
-		VALUES ($1, $2, $3, $4, 'draft', $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		VALUES ($1, $2, $3, $4, 'draft', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id
 	`, board.ID, project.WorkspaceID, project.ID, nodeType, truncateRunes(title, 160),
 		visualTextOrFallback(req.TitleZh, title), description, visualTextOrFallback(req.DescriptionZh, description),
 		prompt, visualTextOrFallback(req.PromptZh, prompt), req.PositionX, req.PositionY,
+		strings.TrimSpace(req.ImplementationPath), strings.TrimSpace(req.ImplementationNote),
 		normalizeJSONRaw(req.SourceRefs, "[]")).Scan(&inserted)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create visual node")
@@ -750,7 +763,7 @@ func (h *Handler) GenerateProjectVisualNodeImage(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "failed to allocate issue number")
 		return
 	}
-	issueTitle := "Generate visual asset: " + node.Title
+	issueTitle := "Generate " + visualNodeAssetKind(node.Type) + ": " + node.Title
 	issue, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
 		WorkspaceID:   project.WorkspaceID,
 		Title:         truncateRunes(issueTitle, 180),
@@ -1114,7 +1127,7 @@ func (h *Handler) listVisualNodes(r *http.Request, workspaceID, projectID pgtype
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT n.id, n.board_id, n.workspace_id, n.project_id, n.type, n.status, n.title,
 		       n.title_zh, n.description, n.description_zh, n.prompt, n.prompt_zh,
-		       n.position_x, n.position_y, n.source_refs,
+		       n.position_x, n.position_y, n.implementation_path, n.implementation_note, n.source_refs,
 		       n.reference_attachment_ids, n.result_attachment_id, n.result_note, n.result_note_zh,
 		       n.generation_agent_id, n.generation_task_id, n.generation_error, n.generation_error_zh,
 		       n.created_at, n.updated_at
@@ -1131,7 +1144,8 @@ func (h *Handler) listVisualNodes(r *http.Request, workspaceID, projectID pgtype
 		var n visualNodeRow
 		if err := rows.Scan(&n.ID, &n.BoardID, &n.WorkspaceID, &n.ProjectID, &n.Type, &n.Status, &n.Title,
 			&n.TitleZh, &n.Description, &n.DescriptionZh, &n.Prompt, &n.PromptZh,
-			&n.PositionX, &n.PositionY, &n.SourceRefs, &n.ReferenceAttachmentIDs,
+			&n.PositionX, &n.PositionY, &n.ImplementationPath, &n.ImplementationNote,
+			&n.SourceRefs, &n.ReferenceAttachmentIDs,
 			&n.ResultAttachmentID, &n.ResultNote, &n.ResultNoteZh,
 			&n.GenerationAgentID, &n.GenerationTaskID, &n.GenerationError, &n.GenerationErrorZh,
 			&n.CreatedAt, &n.UpdatedAt); err != nil {
@@ -1175,14 +1189,16 @@ func (h *Handler) loadVisualNode(w http.ResponseWriter, r *http.Request, workspa
 	var n visualNodeRow
 	err := h.DB.QueryRow(r.Context(), `
 		SELECT id, board_id, workspace_id, project_id, type, status, title, description,
-		       title_zh, description_zh, prompt, prompt_zh, position_x, position_y, source_refs, reference_attachment_ids,
+		       title_zh, description_zh, prompt, prompt_zh, position_x, position_y,
+		       implementation_path, implementation_note, source_refs, reference_attachment_ids,
 		       result_attachment_id, result_note, result_note_zh, generation_agent_id, generation_task_id,
 		       generation_error, generation_error_zh, created_at, updated_at
 		FROM project_visual_node
 		WHERE id = $1 AND workspace_id = $2 AND project_id = $3
 	`, nodeID, workspaceID, projectID).Scan(&n.ID, &n.BoardID, &n.WorkspaceID, &n.ProjectID, &n.Type, &n.Status,
 		&n.Title, &n.Description, &n.TitleZh, &n.DescriptionZh, &n.Prompt, &n.PromptZh,
-		&n.PositionX, &n.PositionY, &n.SourceRefs, &n.ReferenceAttachmentIDs,
+		&n.PositionX, &n.PositionY, &n.ImplementationPath, &n.ImplementationNote,
+		&n.SourceRefs, &n.ReferenceAttachmentIDs,
 		&n.ResultAttachmentID, &n.ResultNote, &n.ResultNoteZh, &n.GenerationAgentID, &n.GenerationTaskID,
 		&n.GenerationError, &n.GenerationErrorZh,
 		&n.CreatedAt, &n.UpdatedAt)
@@ -1213,6 +1229,8 @@ func (h *Handler) visualNodeToResponse(n visualNodeRow) visualNodeResponse {
 		PromptZh:               n.PromptZh,
 		PositionX:              n.PositionX,
 		PositionY:              n.PositionY,
+		ImplementationPath:     n.ImplementationPath,
+		ImplementationNote:     n.ImplementationNote,
 		SourceRefs:             json.RawMessage(defaultJSON(n.SourceRefs, "[]")),
 		ReferenceAttachmentIDs: uuidSliceToStrings(n.ReferenceAttachmentIDs),
 		ResultNote:             n.ResultNote,
@@ -1422,6 +1440,8 @@ type visualBoardExtractNode struct {
 	VisualBrief        string          `json:"visual_brief"`
 	Prompt             string          `json:"prompt"`
 	PromptZh           string          `json:"prompt_zh"`
+	ImplementationPath string          `json:"implementation_path"`
+	ImplementationNote string          `json:"implementation_note"`
 	SourceRefs         json.RawMessage `json:"source_refs"`
 	SourceSlugs        []string        `json:"source_slugs"`
 	ExtractedFacts     []string        `json:"extracted_facts"`
@@ -1481,6 +1501,10 @@ func inferVisualNodeType(text string) (string, bool) {
 	switch {
 	case strings.Contains(lower, "角色") || strings.Contains(lower, "主角") || strings.Contains(lower, "npc") || strings.Contains(lower, "character"):
 		return "character", true
+	case strings.Contains(lower, "视频") || strings.Contains(lower, "短片") || strings.Contains(lower, "过场") || strings.Contains(lower, "video") || strings.Contains(lower, "cinematic") || strings.Contains(lower, "cutscene"):
+		return "video", true
+	case strings.Contains(lower, "音频") || strings.Contains(lower, "声音") || strings.Contains(lower, "音效") || strings.Contains(lower, "音乐") || strings.Contains(lower, "环境音") || strings.Contains(lower, "声效") || strings.Contains(lower, "audio") || strings.Contains(lower, "sfx") || strings.Contains(lower, "sound") || strings.Contains(lower, "music") || strings.Contains(lower, "ambience") || strings.Contains(lower, "ambiance"):
+		return "audio", true
 	case strings.Contains(lower, "场景") || strings.Contains(lower, "关卡") || strings.Contains(lower, "地图") || strings.Contains(lower, "scene") || strings.Contains(lower, "level"):
 		return "scene", true
 	case strings.Contains(lower, "ui") || strings.Contains(lower, "界面") || strings.Contains(lower, "按钮") || strings.Contains(lower, "hud"):
@@ -1504,7 +1528,11 @@ func makeVisualNodeCandidate(nodeType, title, section string, page service.WikiP
 		"title":        page.Title,
 		"snippet":      truncateRunes(section, 220),
 	}})
-	prompt := fmt.Sprintf("Create a production-ready %s visual asset for %q. Preserve the project's Wiki context, visual intent, gameplay purpose, and any constraints from this source excerpt: %s", nodeType, title, truncateRunes(section, 360))
+	assetKind := nodeType + " visual asset"
+	if nodeType == "audio" {
+		assetKind = "audio asset or audio requirement"
+	}
+	prompt := fmt.Sprintf("Create a production-ready %s for %q. Preserve the project's Wiki context, gameplay purpose, and any constraints from this source excerpt: %s", assetKind, title, truncateRunes(section, 360))
 	return visualNodeCandidate{
 		NodeType:    nodeType,
 		Title:       truncateRunes(title, 120),
@@ -1536,16 +1564,43 @@ func visualNodeGenerateIssueDescription(projectTitle string, node visualNodeRow)
 	if title == "" {
 		title = "this project"
 	}
-	return strings.Join([]string{
-		fmt.Sprintf("Generate a visual asset for %s.", title),
-		"",
+	assetKind := visualNodeAssetKind(node.Type)
+	requiredPipeline := []string{
 		"Required pipeline:",
 		"- Use the `game-asset-pipeline` skill as the production contract for style docs, rule docs, manifest, bounded generation, deterministic validation, QA sheets, retry notes, and handoff.",
 		"- For character, generated-variant, and animation nodes, the selected handoff asset must preserve transparency: PNG/WebP with alpha and no baked scene/background unless the node explicitly asks for an environment background.",
 		"- When using GPT Image 2 for transparent game assets, generate on a flat removable chroma-key background and remove the key locally, matching the `game-asset-pipeline` transparency rule.",
 		"- For animation work, produce the same class of deliverables inside this visual-node workflow: animation manifest, spritesheet, per-action previews, validation output, QA notes, and final handoff paths.",
 		"- Keep the work inside the current Multica visual-node issue and completion flow.",
+	}
+	expectedOutput := []string{
+		"Expected output:",
+		"- Create or obtain a usable image or animation asset for this visual node.",
+		"- For character/animation deliverables, do not accept a baked background; verify alpha/transparent-pixel hygiene before completion.",
+		"- Upload the generated image through `multica visual-node complete`.",
+		"- If generation fails, complete the visual node with an explicit error.",
+	}
+	if node.Type == "audio" {
+		requiredPipeline = []string{
+			"Required pipeline:",
+			"- Treat this as an audio requirement or audio asset task inside the current Multica visual-node issue and completion flow.",
+			"- Produce a concise audio spec before generation: sound role, loop/one-shot intent, duration, mix priority, source references, and implementation path if known.",
+			"- If a usable audio file is produced or selected, validate that it matches the node prompt and leaves room for dialogue/UI where relevant.",
+		}
+		expectedOutput = []string{
+			"Expected output:",
+			"- Create or obtain a usable audio asset, or write a production-ready audio requirement if generation is not available.",
+			"- Include loop points or one-shot timing, duration, mix priority, source references, and final handoff path if integrated.",
+			"- Upload the generated audio through `multica visual-node complete` when an audio file exists.",
+			"- If generation fails, complete the visual node with an explicit error or requirement-only note.",
+		}
+	}
+	parts := []string{
+		fmt.Sprintf("Generate a %s for %s.", assetKind, title),
 		"",
+	}
+	parts = append(parts, requiredPipeline...)
+	parts = append(parts,
 		"Visual node:",
 		fmt.Sprintf("- ID: %s", uuidToString(node.ID)),
 		fmt.Sprintf("- Type: %s", node.Type),
@@ -1554,12 +1609,9 @@ func visualNodeGenerateIssueDescription(projectTitle string, node visualNodeRow)
 		"Prompt:",
 		strings.TrimSpace(node.Prompt),
 		"",
-		"Expected output:",
-		"- Create or obtain a usable image or animation asset for this visual node.",
-		"- For character/animation deliverables, do not accept a baked background; verify alpha/transparent-pixel hygiene before completion.",
-		"- Upload the generated image through `multica visual-node complete`.",
-		"- If generation fails, complete the visual node with an explicit error.",
-	}, "\n")
+	)
+	parts = append(parts, expectedOutput...)
+	return strings.Join(parts, "\n")
 }
 
 func visualWikiPageContexts(pages []service.WikiPage) []service.VisualWikiPageContext {
@@ -1616,7 +1668,7 @@ func normalizeVisualBoardExtractResult(result visualBoardExtractResult) visualBo
 		if strings.TrimSpace(node.Type) == "" {
 			node.Type = strings.TrimSpace(node.NodeType)
 		}
-		node.Type = normalizeVisualNodeType(strings.TrimSpace(node.Type))
+		node.Type = normalizeExtractedVisualNodeType(*node)
 		if strings.TrimSpace(node.Description) == "" {
 			node.Description = visualExtractDescriptionFallback(*node)
 		}
@@ -1663,6 +1715,42 @@ func visualExtractDescriptionFallback(node visualBoardExtractNode) string {
 		parts = append(parts, "Acceptance: "+strings.Join(criteria, "; "))
 	}
 	return strings.Join(parts, "\n")
+}
+
+func normalizeExtractedVisualNodeType(node visualBoardExtractNode) string {
+	nodeType := normalizeVisualNodeType(strings.TrimSpace(node.Type))
+	if nodeType == "generated_variant" && isPlayablePetCharacterNode(node) {
+		return "character"
+	}
+	return nodeType
+}
+
+func isPlayablePetCharacterNode(node visualBoardExtractNode) bool {
+	text := strings.ToLower(strings.Join([]string{
+		node.Title,
+		node.TitleZh,
+		node.Description,
+		node.DescriptionZh,
+		node.VisualBrief,
+		node.Prompt,
+		node.PromptZh,
+		node.ImplementationPath,
+		node.ImplementationNote,
+	}, "\n"))
+	hasPetSpecies := strings.Contains(text, "pet_cat") ||
+		strings.Contains(text, "pet_dog") ||
+		strings.Contains(text, "小猫") ||
+		strings.Contains(text, "小狗") ||
+		strings.Contains(text, " cat") ||
+		strings.Contains(text, " dog")
+	hasPlayableCue := strings.Contains(text, "主角") ||
+		strings.Contains(text, "protagonist") ||
+		strings.Contains(text, "playable") ||
+		strings.Contains(text, "player") ||
+		strings.Contains(text, "玩家") ||
+		strings.Contains(text, "pet_cat") ||
+		strings.Contains(text, "pet_dog")
+	return hasPetSpecies && hasPlayableCue
 }
 
 func compactStringList(values []string) []string {
@@ -1742,11 +1830,17 @@ func (h *Handler) applyVisualBoardExtractCompleted(ctx context.Context, task db.
 		description := strings.TrimSpace(node.Description)
 		prompt := strings.TrimSpace(node.Prompt)
 		if prompt == "" {
-			prompt = fmt.Sprintf("Create a production-ready %s visual asset for %q. Use the Project Wiki context and keep the result coherent with adjacent visual nodes.", nodeType, title)
+			assetKind := nodeType + " visual asset"
+			if nodeType == "audio" {
+				assetKind = "audio asset or audio requirement"
+			}
+			prompt = fmt.Sprintf("Create a production-ready %s for %q. Use the Project Wiki context and keep the result coherent with adjacent visual nodes.", assetKind, title)
 		}
 		titleZh := visualTextOrFallback(node.TitleZh, title)
 		descriptionZh := visualTextOrFallback(node.DescriptionZh, description)
 		promptZh := visualTextOrFallback(node.PromptZh, prompt)
+		implementationPath := strings.TrimSpace(node.ImplementationPath)
+		implementationNote := strings.TrimSpace(node.ImplementationNote)
 		x := node.PositionX
 		y := node.PositionY
 		if x == 0 && y == 0 {
@@ -1758,11 +1852,11 @@ func (h *Handler) applyVisualBoardExtractCompleted(ctx context.Context, task db.
 		err := tx.QueryRow(ctx, `
 			INSERT INTO project_visual_node (
 				board_id, workspace_id, project_id, type, status, title, title_zh, description, description_zh, prompt, prompt_zh,
-				position_x, position_y, source_refs
+				position_x, position_y, implementation_path, implementation_note, source_refs
 			)
-			VALUES ($1, $2, $3, $4, 'draft', $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			VALUES ($1, $2, $3, $4, 'draft', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			RETURNING id
-		`, boardID, workspaceID, projectID, nodeType, truncateRunes(title, 160), titleZh, description, descriptionZh, prompt, promptZh, x, y, sourceRefs).Scan(&inserted)
+		`, boardID, workspaceID, projectID, nodeType, truncateRunes(title, 160), titleZh, description, descriptionZh, prompt, promptZh, x, y, implementationPath, implementationNote, sourceRefs).Scan(&inserted)
 		if err != nil {
 			slog.Warn("visual board extract completion: insert node failed", "task_id", uuidToString(task.ID), "error", err)
 			return
@@ -1917,6 +2011,12 @@ func writeAdoptedVisualNodes(b *strings.Builder, nodes []visualNodeRow) {
 		if node.PromptZh != "" {
 			fmt.Fprintf(b, "  Prompt zh: %s\n", node.PromptZh)
 		}
+		if node.ImplementationPath != "" {
+			fmt.Fprintf(b, "  Current implementation path: %s\n", node.ImplementationPath)
+		}
+		if node.ImplementationNote != "" {
+			fmt.Fprintf(b, "  Implementation note: %s\n", node.ImplementationNote)
+		}
 		if node.ResultAttachmentID.Valid {
 			fmt.Fprintf(b, "  Result attachment id: %s\n", uuidToString(node.ResultAttachmentID))
 		}
@@ -1957,7 +2057,7 @@ func defaultJSON(raw []byte, fallback string) []byte {
 
 func normalizeVisualNodeType(value string) string {
 	switch value {
-	case "character", "scene", "ui_element", "prop", "reference", "gameplay_note", "generated_variant", "animation":
+	case "character", "scene", "ui_element", "prop", "reference", "gameplay_note", "generated_variant", "animation", "video", "audio":
 		return value
 	case "character_concept":
 		return "character"
@@ -1971,8 +2071,21 @@ func normalizeVisualNodeType(value string) string {
 		return "reference"
 	case "gameplay_note_concept", "mechanic_visual_note":
 		return "gameplay_note"
+	case "video_concept", "cinematic", "movie", "cutscene":
+		return "video"
+	case "audio_concept", "sound", "sound_effect", "sfx", "music", "ambience", "ambiance":
+		return "audio"
 	default:
 		return "reference"
+	}
+}
+
+func visualNodeAssetKind(nodeType string) string {
+	switch nodeType {
+	case "audio":
+		return "audio asset"
+	default:
+		return "visual asset"
 	}
 }
 

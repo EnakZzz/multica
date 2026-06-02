@@ -28,7 +28,7 @@ var visualNodeCompleteCmd = &cobra.Command{
 func init() {
 	visualNodeCmd.AddCommand(visualNodeCompleteCmd)
 	visualNodeCompleteCmd.Flags().String("project", "", "Project ID that owns the node")
-	visualNodeCompleteCmd.Flags().String("attachment", "", "Local generated image path to upload")
+	visualNodeCompleteCmd.Flags().String("attachment", "", "Local generated image, video, or animation handoff asset path to upload")
 	visualNodeCompleteCmd.Flags().String("note", "", "Short generation note")
 	visualNodeCompleteCmd.Flags().String("note-zh", "", "Short Chinese generation note for human display")
 	visualNodeCompleteCmd.Flags().String("error", "", "Failure reason")
