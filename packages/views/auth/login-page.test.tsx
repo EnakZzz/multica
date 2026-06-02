@@ -715,8 +715,30 @@ describe("validateCliCallback", () => {
     expect(validateCliCallback("http://192.168.0.1:8080/cb")).toBe(true);
   });
 
-  it("rejects https:// URLs", () => {
+  it("accepts Chromium extension identity redirects", () => {
+    expect(
+      validateCliCallback("https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.chromiumapp.org/multica-auth"),
+    ).toBe(true);
+  });
+
+  it("accepts Chromium extension page callbacks", () => {
+    expect(
+      validateCliCallback("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/auth-callback.html"),
+    ).toBe(true);
+  });
+
+  it("rejects non-extension https:// URLs", () => {
     expect(validateCliCallback("https://localhost:9876/callback")).toBe(false);
+    expect(validateCliCallback("https://evil.chromiumapp.org/callback")).toBe(false);
+  });
+
+  it("rejects arbitrary Chromium extension page callbacks", () => {
+    expect(
+      validateCliCallback("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/options.html"),
+    ).toBe(false);
+    expect(
+      validateCliCallback("chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/auth-callback.html"),
+    ).toBe(false);
   });
 
   it("rejects public IPs and domains", () => {

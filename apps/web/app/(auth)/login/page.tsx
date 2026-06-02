@@ -131,6 +131,12 @@ function LoginPageContent() {
   const googleState = [
     platform === "desktop" ? "platform:desktop" : "",
     nextUrl ? `next:${nextUrl}` : "",
+    cliCallbackRaw && validateCliCallback(cliCallbackRaw)
+      ? `cli_callback:${encodeURIComponent(cliCallbackRaw)}`
+      : "",
+    cliCallbackRaw && validateCliCallback(cliCallbackRaw)
+      ? `cli_state:${encodeURIComponent(cliState)}`
+      : "",
   ]
     .filter(Boolean)
     .join(",") || undefined;

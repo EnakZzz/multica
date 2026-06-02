@@ -7,6 +7,7 @@ import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { paths, resolvePostAuthDestination } from "@multica/core/paths";
 import { api } from "@multica/core/api";
+import { validateCliCallback } from "@multica/views/auth";
 import {
   Card,
   CardHeader,
@@ -42,6 +43,14 @@ function CallbackContent() {
     const stateParts = state.split(",");
     const isDesktop = stateParts.includes("platform:desktop");
     const nextPart = stateParts.find((p) => p.startsWith("next:"));
+    const cliCallbackPart = stateParts.find((p) => p.startsWith("cli_callback:"));
+    const cliStatePart = stateParts.find((p) => p.startsWith("cli_state:"));
+    const cliCallback = cliCallbackPart
+      ? decodeURIComponent(cliCallbackPart.slice("cli_callback:".length))
+      : "";
+    const cliState = cliStatePart
+      ? decodeURIComponent(cliStatePart.slice("cli_state:".length))
+      : "";
     // Strip "next:" prefix, then drop anything that isn't a safe relative path
     // so an attacker-controlled `state=next:https://evil` cannot redirect here.
     const nextUrl = sanitizeNextUrl(nextPart ? nextPart.slice(5) : null);
@@ -55,6 +64,16 @@ function CallbackContent() {
         .then(({ token }) => {
           setDesktopToken(token);
           window.location.href = `multica://auth/callback?token=${encodeURIComponent(token)}`;
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Login failed");
+        });
+    } else if (cliCallback && validateCliCallback(cliCallback)) {
+      loginWithGoogle(code, redirectUri)
+        .then(async () => {
+          const { token } = await api.issueCliToken();
+          const separator = cliCallback.includes("?") ? "&" : "?";
+          window.location.href = `${cliCallback}${separator}token=${encodeURIComponent(token)}&state=${encodeURIComponent(cliState)}`;
         })
         .catch((err) => {
           setError(err instanceof Error ? err.message : "Login failed");

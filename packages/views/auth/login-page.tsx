@@ -73,13 +73,27 @@ function redirectToCliCallback(url: string, token: string, state: string) {
 }
 
 /**
- * Validate that a CLI callback URL points to a safe host over HTTP.
+ * Validate that a CLI callback URL points to a safe callback target.
  * Allows localhost and private/LAN IPs (RFC 1918) to support self-hosted setups
- * on local VMs while blocking arbitrary public hosts.
+ * on local VMs, and Chromium extension callbacks for browser-extension auth,
+ * while blocking arbitrary public hosts.
  */
 export function validateCliCallback(cliCallback: string): boolean {
   try {
     const cbUrl = new URL(cliCallback);
+    if (
+      cbUrl.protocol === "https:" &&
+      /^[a-z]{32}\.chromiumapp\.org$/.test(cbUrl.hostname)
+    ) {
+      return true;
+    }
+    if (
+      cbUrl.protocol === "chrome-extension:" &&
+      /^[a-p]{32}$/.test(cbUrl.hostname) &&
+      cbUrl.pathname === "/auth-callback.html"
+    ) {
+      return true;
+    }
     if (cbUrl.protocol !== "http:") return false;
     const h = cbUrl.hostname;
     if (h === "localhost" || h === "127.0.0.1") return true;
