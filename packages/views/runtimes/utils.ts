@@ -120,7 +120,7 @@ export function formatTokens(n: number): string {
 
 // Pricing per million tokens (USD). Anthropic figures sourced from
 // https://platform.claude.com/docs/en/about-claude/pricing; OpenAI figures
-// from https://openai.com/api/pricing — keep in sync when providers release
+// from OpenAI's pricing and model docs — keep in sync when providers release
 // new models or adjust prices.
 //
 // Anthropic's cacheWrite reflects the 5-minute cache TTL (1.25× input); the
@@ -162,15 +162,34 @@ const MODEL_PRICING: Record<
   //    independently — no fallback to `gpt-5`. Entries track
   //    `server/pkg/agent/models.go` (Codex provider list).
   "gpt-5.5":            { input: 5,    output: 30,   cacheRead: 0.50,  cacheWrite: 5 },
+  "gpt-5.5-pro":        { input: 30,   output: 180,  cacheRead: 30,    cacheWrite: 30 },
   "gpt-5.4-mini":       { input: 0.75, output: 4.50, cacheRead: 0.075, cacheWrite: 0.75 },
+  "gpt-5.4-nano":       { input: 0.20, output: 1.25, cacheRead: 0.02,  cacheWrite: 0.20 },
   "gpt-5.4":            { input: 2.50, output: 15,   cacheRead: 0.25,  cacheWrite: 2.50 },
+  "gpt-5.4-pro":        { input: 30,   output: 180,  cacheRead: 30,    cacheWrite: 30 },
+  "gpt-5.3-chat-latest": { input: 1.75, output: 14,   cacheRead: 0.175, cacheWrite: 1.75 },
   "gpt-5.3-codex":      { input: 1.75, output: 14,   cacheRead: 0.175, cacheWrite: 1.75 },
+  "gpt-5.2-codex":      { input: 1.75, output: 14,   cacheRead: 0.175, cacheWrite: 1.75 },
+  "gpt-5.1-codex-max":  { input: 1.25, output: 10,   cacheRead: 0.125, cacheWrite: 1.25 },
+  "gpt-5.1-codex":      { input: 1.25, output: 10,   cacheRead: 0.125, cacheWrite: 1.25 },
 
   // -- OpenAI: GPT-5 family (Codex CLI's default is gpt-5-codex; -codex/-mini/-nano variants priced per OpenAI tiers) --
+  "gpt-5.2-chat-latest": { input: 1.75, output: 14,   cacheRead: 0.175, cacheWrite: 1.75 },
+  "gpt-5.2":            { input: 1.75, output: 14,   cacheRead: 0.175, cacheWrite: 1.75 },
+  "gpt-5.2-pro":        { input: 21,   output: 168,  cacheRead: 21,    cacheWrite: 21 },
+  "gpt-5.1-chat-latest": { input: 1.25, output: 10,   cacheRead: 0.125, cacheWrite: 1.25 },
+  "gpt-5.1":            { input: 1.25, output: 10,   cacheRead: 0.125, cacheWrite: 1.25 },
+  "gpt-5-chat-latest":  { input: 1.25, output: 10,   cacheRead: 0.125, cacheWrite: 1.25 },
   "gpt-5-codex":        { input: 1.25, output: 10,   cacheRead: 0.125, cacheWrite: 1.25 },
   "gpt-5-mini":         { input: 0.25, output: 2,    cacheRead: 0.025, cacheWrite: 0.25 },
   "gpt-5-nano":         { input: 0.05, output: 0.40, cacheRead: 0.005, cacheWrite: 0.05 },
+  "gpt-5-pro":          { input: 15,   output: 120,  cacheRead: 15,    cacheWrite: 15 },
   "gpt-5":              { input: 1.25, output: 10,   cacheRead: 0.125, cacheWrite: 1.25 },
+
+  // -- OpenAI: GPT-4.1 family --
+  "gpt-4.1":            { input: 2,    output: 8,    cacheRead: 0.50,  cacheWrite: 2 },
+  "gpt-4.1-mini":       { input: 0.40, output: 1.60, cacheRead: 0.10,  cacheWrite: 0.40 },
+  "gpt-4.1-nano":       { input: 0.10, output: 0.40, cacheRead: 0.025, cacheWrite: 0.10 },
 
   // -- OpenAI: o-series reasoning models --
   "o3-mini":            { input: 1.10, output: 4.40, cacheRead: 0.55,  cacheWrite: 1.10 },

@@ -126,8 +126,19 @@ describe("estimateCost", () => {
       estimateCost({ ...zeroUsage, model: "gpt-5.5", input_tokens: 1_000_000 }),
     ).toBeCloseTo(5, 5);
     expect(
+      estimateCost({ ...zeroUsage, model: "gpt-5.5-pro", output_tokens: 1_000_000 }),
+    ).toBeCloseTo(180, 5);
+    expect(
       estimateCost({ ...zeroUsage, model: "gpt-5.4", output_tokens: 1_000_000 }),
     ).toBeCloseTo(15, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.4-nano",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.2 + 1.25, 5);
     expect(
       estimateCost({
         ...zeroUsage,
@@ -139,11 +150,50 @@ describe("estimateCost", () => {
     expect(
       estimateCost({
         ...zeroUsage,
+        model: "gpt-5.3-chat-latest",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(1.75 + 14, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
         model: "gpt-5.3-codex",
         input_tokens: 1_000_000,
         output_tokens: 1_000_000,
       }),
     ).toBeCloseTo(1.75 + 14, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.2-codex",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(1.75 + 14, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.2-pro",
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(168, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.1-codex-max",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(1.25 + 10, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-4.1-mini",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.4 + 1.6, 5);
   });
 
   it("flags catalog SKUs without a published price (gpt-5.5-mini) as unmapped", () => {
@@ -189,8 +239,11 @@ describe("estimateCost", () => {
 describe("isModelPriced", () => {
   it("recognises both Claude and Codex/GPT families", () => {
     expect(isModelPriced("claude-sonnet-4-6")).toBe(true);
+    expect(isModelPriced("gpt-5.5-pro")).toBe(true);
+    expect(isModelPriced("gpt-5.2-codex")).toBe(true);
     expect(isModelPriced("gpt-5-codex")).toBe(true);
     expect(isModelPriced("gpt-5-mini")).toBe(true);
+    expect(isModelPriced("gpt-4.1-mini")).toBe(true);
     expect(isModelPriced("o3")).toBe(true);
     expect(isModelPriced("totally-made-up-model")).toBe(false);
   });

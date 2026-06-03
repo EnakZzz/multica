@@ -16,6 +16,36 @@ func TestResolveDefaultModelPricingCanonicalizesModelIDs(t *testing.T) {
 			wantOutput: 10_000_000,
 		},
 		{
+			name:       "pro sku",
+			model:      "gpt-5.5-pro",
+			wantInput:  30_000_000,
+			wantOutput: 180_000_000,
+		},
+		{
+			name:       "newer codex sku",
+			model:      "openai/gpt-5.2-codex",
+			wantInput:  1_750_000,
+			wantOutput: 14_000_000,
+		},
+		{
+			name:       "gpt 5.2 pro",
+			model:      "gpt-5.2-pro",
+			wantInput:  21_000_000,
+			wantOutput: 168_000_000,
+		},
+		{
+			name:       "nano sku",
+			model:      "gpt-5.4-nano",
+			wantInput:  200_000,
+			wantOutput: 1_250_000,
+		},
+		{
+			name:       "gpt 4.1 mini",
+			model:      "gpt-4.1-mini",
+			wantInput:  400_000,
+			wantOutput: 1_600_000,
+		},
+		{
 			name:       "claude dotted suffix",
 			model:      "anthropic/claude-sonnet-4.6-20260101",
 			wantInput:  3_000_000,
