@@ -5,6 +5,14 @@ WHERE workspace_id = $1
   AND (sqlc.narg('priority')::text IS NULL OR priority = sqlc.narg('priority'))
 ORDER BY created_at DESC;
 
+-- name: ListAccessibleProjects :many
+SELECT DISTINCT p.* FROM project p
+LEFT JOIN project_workspace_link pwl ON pwl.project_id = p.id
+WHERE (p.workspace_id = sqlc.arg('workspace_id') OR pwl.workspace_id = sqlc.arg('workspace_id'))
+  AND (sqlc.narg('status')::text IS NULL OR p.status = sqlc.narg('status'))
+  AND (sqlc.narg('priority')::text IS NULL OR p.priority = sqlc.narg('priority'))
+ORDER BY p.created_at DESC;
+
 -- name: GetProject :one
 SELECT * FROM project
 WHERE id = $1;
@@ -12,6 +20,29 @@ WHERE id = $1;
 -- name: GetProjectInWorkspace :one
 SELECT * FROM project
 WHERE id = $1 AND workspace_id = $2;
+
+-- name: GetProjectAccessibleInWorkspace :one
+SELECT p.* FROM project p
+LEFT JOIN project_workspace_link pwl ON pwl.project_id = p.id
+WHERE p.id = $1
+  AND (p.workspace_id = $2 OR pwl.workspace_id = $2)
+LIMIT 1;
+
+-- name: ListProjectWorkspaceLinks :many
+SELECT pwl.workspace_id, w.name, w.slug, pwl.created_at
+FROM project_workspace_link pwl
+JOIN workspace w ON w.id = pwl.workspace_id
+WHERE pwl.project_id = $1
+ORDER BY w.name ASC;
+
+-- name: CreateProjectWorkspaceLink :one
+INSERT INTO project_workspace_link (project_id, workspace_id)
+VALUES ($1, $2)
+RETURNING *;
+
+-- name: DeleteProjectWorkspaceLinks :exec
+DELETE FROM project_workspace_link
+WHERE project_id = $1;
 
 -- name: CreateProject :one
 INSERT INTO project (

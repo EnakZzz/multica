@@ -33,7 +33,13 @@ import { useT } from "../../i18n";
 // Today renders Git repo resources, but the rendering layer is type-dispatched
 // so adding a new type means: (1) extend the API validator, (2) add a render
 // case here. No changes to the schema or query layer.
-export function ProjectResourcesSection({ projectId }: { projectId: string }) {
+export function ProjectResourcesSection({
+  projectId,
+  readOnly = false,
+}: {
+  projectId: string;
+  readOnly?: boolean;
+}) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const workspace = useCurrentWorkspace();
@@ -100,10 +106,11 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
             <ResourceRow
               key={resource.id}
               resource={resource}
+              readOnly={readOnly}
               onRemove={() => handleRemove(resource)}
             />
           ))}
-          <Popover open={addOpen} onOpenChange={setAddOpen}>
+          {!readOnly && <Popover open={addOpen} onOpenChange={setAddOpen}>
             <PopoverTrigger
               render={
                 <Button
@@ -166,7 +173,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 }}
               />
             </PopoverContent>
-          </Popover>
+          </Popover>}
         </div>
       )}
     </div>
@@ -175,9 +182,11 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
 
 function ResourceRow({
   resource,
+  readOnly,
   onRemove,
 }: {
   resource: ProjectResource;
+  readOnly: boolean;
   onRemove: () => void;
 }) {
   const { t } = useT("projects");
@@ -194,14 +203,16 @@ function ResourceRow({
           />
           <TooltipContent side="top">{ref.url}</TooltipContent>
         </Tooltip>
-        <button
-          type="button"
-          onClick={onRemove}
-          className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
-          title={t(($) => $.resources.remove_tooltip)}
-        >
-          <Trash2 className="size-3 text-muted-foreground" />
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+            title={t(($) => $.resources.remove_tooltip)}
+          >
+            <Trash2 className="size-3 text-muted-foreground" />
+          </button>
+        )}
       </div>
     );
   }
@@ -210,14 +221,16 @@ function ResourceRow({
       <span className="truncate flex-1">
         {resource.label || resource.resource_type}
       </span>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="rounded-sm p-0.5 hover:bg-accent"
-        title={t(($) => $.resources.remove_tooltip)}
-      >
-        <Trash2 className="size-3" />
-      </button>
+      {!readOnly && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="rounded-sm p-0.5 hover:bg-accent"
+          title={t(($) => $.resources.remove_tooltip)}
+        >
+          <Trash2 className="size-3" />
+        </button>
+      )}
     </div>
   );
 }

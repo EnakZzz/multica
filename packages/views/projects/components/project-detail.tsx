@@ -6,9 +6,17 @@ import { BookOpen, Check, ChevronRight, Database, Download, Eye, FileText, Image
 import { useMutation, useQuery, type QueryKey } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
-import type { Issue, IssueAssigneeGroup, ProjectResource, ProjectStatus, ProjectPriority, ProjectWikiPage, SourceFileResourceRef, UpdateIssueRequest } from "@multica/core/types";
+import type { Issue, IssueAssigneeGroup, Project, ProjectResource, ProjectStatus, ProjectPriority, ProjectWikiPage, SourceFileResourceRef, UpdateIssueRequest } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
-import { projectDetailOptions, projectResourcesOptions, useCreateProjectResource, useUpdateProject, useDeleteProject } from "@multica/core/projects";
+import {
+  projectDetailOptions,
+  projectResourcesOptions,
+  projectWorkspaceLinksOptions,
+  useCreateProjectResource,
+  useUpdateProject,
+  useDeleteProject,
+  useUpdateProjectWorkspaceLinks,
+} from "@multica/core/projects";
 import { api } from "@multica/core/api";
 import {
   projectMemoryItemsOptions,
@@ -33,7 +41,7 @@ import {
 } from "@multica/core/issues/queries";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { useModalStore } from "@multica/core/modals";
-import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions, agentListOptions, workspaceListOptions } from "@multica/core/workspace/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -341,9 +349,11 @@ function ProjectIssuesSurface({
 function RetrievalLogCard({
   log,
   onFeedback,
+  readOnly = false,
 }: {
   log: ProjectKnowledgeRetrievalLog;
   onFeedback: (feedback: "useful" | "noisy") => void;
+  readOnly?: boolean;
 }) {
   const first = log.selected_items[0];
   const label = first?.title || log.query_text || log.status;
@@ -361,24 +371,102 @@ function RetrievalLogCard({
         {log.task_outcome && <span>· {log.task_outcome}</span>}
         {log.feedback && <span>· {log.feedback}</span>}
       </div>
-      <div className="mt-2 flex gap-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 text-[11px]"
-          onClick={() => onFeedback("useful")}
-        >
-          Useful
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 text-[11px]"
-          onClick={() => onFeedback("noisy")}
-        >
-          Noisy
-        </Button>
-      </div>
+      {!readOnly && (
+        <div className="mt-2 flex gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[11px]"
+            onClick={() => onFeedback("useful")}
+          >
+            Useful
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[11px]"
+            onClick={() => onFeedback("noisy")}
+          >
+            Noisy
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectWorkspaceLinksSection({
+  project,
+}: {
+  project: Project;
+}) {
+  const { t } = useT("projects");
+  const wsId = useWorkspaceId();
+  const [open, setOpen] = useState(true);
+  const { data: workspaces = [] } = useQuery(workspaceListOptions());
+  const { data: links = [] } = useQuery(projectWorkspaceLinksOptions(wsId, project.id));
+  const updateLinks = useUpdateProjectWorkspaceLinks();
+  const candidates = workspaces.filter((workspace) => workspace.id !== project.workspace_id);
+  const selected = new Set(links.map((link) => link.workspace_id));
+
+  const toggleWorkspace = (workspaceID: string) => {
+    const next = new Set(selected);
+    if (next.has(workspaceID)) {
+      next.delete(workspaceID);
+    } else {
+      next.add(workspaceID);
+    }
+    updateLinks.mutate(
+      { id: project.id, workspace_ids: Array.from(next) },
+      {
+        onSuccess: () => toast.success(t(($) => $.share.toast_saved)),
+        onError: (error) =>
+          toast.error(
+            error instanceof Error && error.message
+              ? error.message
+              : t(($) => $.share.toast_save_failed),
+          ),
+      },
+    );
+  };
+
+  return (
+    <div>
+      <button
+        className={`mb-2 flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors hover:bg-accent/70 ${open ? "" : "text-muted-foreground hover:text-foreground"}`}
+        onClick={() => setOpen(!open)}
+      >
+        {t(($) => $.share.section_header)}
+        <ChevronRight
+          className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="space-y-1 pl-2">
+          {candidates.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t(($) => $.share.empty)}</p>
+          ) : (
+            candidates.map((workspace) => {
+              const checked = selected.has(workspace.id);
+              return (
+                <button
+                  key={workspace.id}
+                  type="button"
+                  disabled={updateLinks.isPending}
+                  onClick={() => toggleWorkspace(workspace.id)}
+                  className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-60"
+                >
+                  <span className="flex size-4 shrink-0 items-center justify-center rounded border bg-background">
+                    {checked && <Check className="size-3" />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{workspace.name}</span>
+                  <span className="max-w-24 truncate text-muted-foreground">{workspace.slug}</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -512,7 +600,7 @@ function formatFileSize(sizeBytes: number): string {
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function SourceFileArchive({ projectId }: { projectId: string }) {
+function SourceFileArchive({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
   const wsId = useWorkspaceId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -575,21 +663,25 @@ function SourceFileArchive({ projectId }: { projectId: string }) {
           <FileText className="h-3.5 w-3.5" />
           Source files
         </div>
-        <input
-          ref={inputRef}
-          type="file"
-          className="hidden"
-          onChange={handleUpload}
-        />
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title="Archive source file"
-          disabled={uploading || createResource.isPending}
-          onClick={() => inputRef.current?.click()}
-        >
-          <Upload className="h-4 w-4" />
-        </Button>
+        {!readOnly && (
+          <>
+            <input
+              ref={inputRef}
+              type="file"
+              className="hidden"
+              onChange={handleUpload}
+            />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              title="Archive source file"
+              disabled={uploading || createResource.isPending}
+              onClick={() => inputRef.current?.click()}
+            >
+              <Upload className="h-4 w-4" />
+            </Button>
+          </>
+        )}
       </div>
       <div className="space-y-1.5">
         {sourceFiles.length === 0 ? (
@@ -627,7 +719,7 @@ function SourceFileArchive({ projectId }: { projectId: string }) {
   );
 }
 
-function ProjectKnowledgeSurface({ projectId }: { projectId: string }) {
+function ProjectKnowledgeSurface({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
   const newWikiPageId = "__new_wiki_page__";
   const wsId = useWorkspaceId();
   const { data: wikiPages = [], isLoading: wikiLoading } = useQuery(
@@ -695,6 +787,7 @@ function ProjectKnowledgeSurface({ projectId }: { projectId: string }) {
   });
 
   const handleNewPage = () => {
+    if (readOnly) return;
     setSelectedPageId(newWikiPageId);
     setDraftTitle("New knowledge page");
     setDraftSlug(`knowledge/new-page-${Date.now().toString(36)}`);
@@ -703,6 +796,7 @@ function ProjectKnowledgeSurface({ projectId }: { projectId: string }) {
   };
 
   const handleSavePage = () => {
+    if (readOnly) return;
     const payload = {
       title: draftTitle.trim(),
       body: draftBody,
@@ -745,9 +839,11 @@ function ProjectKnowledgeSurface({ projectId }: { projectId: string }) {
             <BookOpen className="h-3.5 w-3.5" />
             Wiki
           </div>
-          <Button variant="ghost" size="icon-sm" onClick={handleNewPage} title="New wiki page">
-            <Plus className="h-4 w-4" />
-          </Button>
+          {!readOnly && (
+            <Button variant="ghost" size="icon-sm" onClick={handleNewPage} title="New wiki page">
+              <Plus className="h-4 w-4" />
+            </Button>
+          )}
         </div>
         <div className="space-y-0.5">
           {wikiLoading ? (
@@ -803,7 +899,7 @@ function ProjectKnowledgeSurface({ projectId }: { projectId: string }) {
           )}
         </div>
 
-        <SourceFileArchive projectId={projectId} />
+        <SourceFileArchive projectId={projectId} readOnly={readOnly} />
 
         <div className="mt-6 mb-3 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
           <Database className="h-3.5 w-3.5" />
@@ -845,6 +941,7 @@ function ProjectKnowledgeSurface({ projectId }: { projectId: string }) {
               <RetrievalLogCard
                 key={log.id}
                 log={log}
+                readOnly={readOnly}
                 onFeedback={(feedback) =>
                   updateRetrievalFeedback.mutate({ logId: log.id, feedback })
                 }
@@ -908,18 +1005,20 @@ function ProjectKnowledgeSurface({ projectId }: { projectId: string }) {
                 {draftSlug.trim() || "unsaved"}
               </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsEditingPage((value) => !value)}
-            >
-              {isEditingPage ? (
-                <Eye className="mr-1.5 h-3.5 w-3.5" />
-              ) : (
-                <Pencil className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {isEditingPage ? "Preview" : "Edit"}
-            </Button>
+            {!readOnly && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsEditingPage((value) => !value)}
+              >
+                {isEditingPage ? (
+                  <Eye className="mr-1.5 h-3.5 w-3.5" />
+                ) : (
+                  <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                {isEditingPage ? "Preview" : "Edit"}
+              </Button>
+            )}
           </div>
 
           {isEditingPage ? (
@@ -1069,6 +1168,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
   const issueMetrics = getProjectIssueMetrics(project);
   const statusCfg = PROJECT_STATUS_CONFIG[project.status];
+  const canManageProject = project.workspace_id === wsId;
 
   const sidebarContent = (
     <div className="space-y-5">
@@ -1284,8 +1384,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         </div>}
       </div>
 
+      {canManageProject && <ProjectWorkspaceLinksSection project={project} />}
+
       {/* Resources */}
-      <ProjectResourcesSection projectId={projectId} />
+      <ProjectResourcesSection projectId={projectId} readOnly={!canManageProject} />
     </div>
   );
 
@@ -1407,9 +1509,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 />
               </ViewStoreProvider>
             ) : activeTab === "knowledge" ? (
-              <ProjectKnowledgeSurface projectId={projectId} />
+              <ProjectKnowledgeSurface projectId={projectId} readOnly={!canManageProject} />
             ) : (
-              <ProjectVisualCanvas projectId={projectId} />
+              <ProjectVisualCanvas projectId={projectId} readOnly={!canManageProject} />
             )}
           </div>
           </div>

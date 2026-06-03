@@ -2,7 +2,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { projectKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
-import type { Project, CreateProjectRequest, UpdateProjectRequest, ListProjectsResponse } from "../types";
+import type {
+  Project,
+  CreateProjectRequest,
+  UpdateProjectRequest,
+  UpdateProjectWorkspaceLinksRequest,
+  ListProjectsResponse,
+} from "../types";
 
 export function useCreateProject() {
   const qc = useQueryClient();
@@ -69,6 +75,19 @@ export function useDeleteProject() {
       if (ctx?.prevList) qc.setQueryData(projectKeys.list(wsId), ctx.prevList);
     },
     onSettled: () => {
+      qc.invalidateQueries({ queryKey: projectKeys.list(wsId) });
+    },
+  });
+}
+
+export function useUpdateProjectWorkspaceLinks() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: string } & UpdateProjectWorkspaceLinksRequest) =>
+      api.updateProjectWorkspaceLinks(id, data),
+    onSettled: (_data, _err, vars) => {
+      qc.invalidateQueries({ queryKey: projectKeys.workspaceLinks(wsId, vars.id) });
       qc.invalidateQueries({ queryKey: projectKeys.list(wsId) });
     },
   });

@@ -216,9 +216,16 @@ func isProjectGitRepoResource(resourceType string) bool {
 	return resourceType == "git_repo" || resourceType == "github_repo"
 }
 
-// loadProjectForResource resolves the project, enforces workspace ownership,
-// and returns its DB row. Used by all project_resource handlers.
+// loadProjectForResource resolves the project and enforces ownership by the
+// current workspace. Used by mutations and knowledge/visual surfaces that
+// write workspace-owned project data.
 func (h *Handler) loadProjectForResource(w http.ResponseWriter, r *http.Request, projectIDParam string) (db.Project, bool) {
+	return h.loadProjectForResourceAccess(w, r, projectIDParam, true)
+}
+
+// loadProjectForResourceAccess allows read paths to use project_workspace_link
+// grants while keeping mutations on the stricter owner-workspace rule.
+func (h *Handler) loadProjectForResourceAccess(w http.ResponseWriter, r *http.Request, projectIDParam string, requireOwnerWorkspace bool) (db.Project, bool) {
 	projectUUID, ok := parseUUIDOrBadRequest(w, projectIDParam, "project id")
 	if !ok {
 		return db.Project{}, false
@@ -227,9 +234,19 @@ func (h *Handler) loadProjectForResource(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return db.Project{}, false
 	}
-	project, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
-		ID: projectUUID, WorkspaceID: wsUUID,
-	})
+	var (
+		project db.Project
+		err     error
+	)
+	if requireOwnerWorkspace {
+		project, err = h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+			ID: projectUUID, WorkspaceID: wsUUID,
+		})
+	} else {
+		project, err = h.Queries.GetProjectAccessibleInWorkspace(r.Context(), db.GetProjectAccessibleInWorkspaceParams{
+			ID: projectUUID, WorkspaceID: wsUUID,
+		})
+	}
 	if err != nil {
 		writeError(w, http.StatusNotFound, "project not found")
 		return db.Project{}, false
@@ -239,7 +256,7 @@ func (h *Handler) loadProjectForResource(w http.ResponseWriter, r *http.Request,
 
 // ListProjectResources returns the resources attached to a project.
 func (h *Handler) ListProjectResources(w http.ResponseWriter, r *http.Request) {
-	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	project, ok := h.loadProjectForResourceAccess(w, r, chi.URLParam(r, "id"), false)
 	if !ok {
 		return
 	}

@@ -47,6 +47,22 @@ export interface ListProjectsResponse {
   total: number;
 }
 
+export interface ProjectWorkspaceLink {
+  workspace_id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+}
+
+export interface ProjectWorkspaceLinksResponse {
+  workspace_links: ProjectWorkspaceLink[];
+  total: number;
+}
+
+export interface UpdateProjectWorkspaceLinksRequest {
+  workspace_ids: string[];
+}
+
 // ProjectResource is a typed pointer from a project to an external resource.
 // The resource_ref shape depends on resource_type (e.g. git_repo carries
 // { url, default_branch_hint? }). New types add a case in

@@ -75,6 +75,12 @@
     "toast_removed": "Resource removed",
     "toast_remove_failed": "Failed to remove resource"
   },
+  "share": {
+    "section_header": "Shared workspaces",
+    "empty": "No other workspaces",
+    "toast_saved": "Workspace sharing updated",
+    "toast_save_failed": "Failed to update workspace sharing"
+  },
   "delete_dialog": {
     "title": "Delete project",
     "description": "This will delete the project. Issues will not be deleted but will be unlinked.",

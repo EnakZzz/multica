@@ -80,7 +80,7 @@ type updateRetrievalLogFeedbackRequest struct {
 }
 
 func (h *Handler) ListProjectWikiPages(w http.ResponseWriter, r *http.Request) {
-	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	project, ok := h.loadProjectForResourceAccess(w, r, chi.URLParam(r, "id"), false)
 	if !ok {
 		return
 	}
@@ -211,7 +211,7 @@ func (h *Handler) DeleteProjectWikiPage(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) ListProjectMemoryItems(w http.ResponseWriter, r *http.Request) {
-	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	project, ok := h.loadProjectForResourceAccess(w, r, chi.URLParam(r, "id"), false)
 	if !ok {
 		return
 	}
@@ -309,7 +309,7 @@ func (h *Handler) DeleteProjectMemoryItem(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) SearchProjectKnowledge(w http.ResponseWriter, r *http.Request) {
-	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	project, ok := h.loadProjectForResourceAccess(w, r, chi.URLParam(r, "id"), false)
 	if !ok {
 		return
 	}
@@ -354,7 +354,7 @@ func (h *Handler) BackfillProjectKnowledgeEmbeddings(w http.ResponseWriter, r *h
 }
 
 func (h *Handler) ListProjectKnowledgeRetrievalLogs(w http.ResponseWriter, r *http.Request) {
-	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	project, ok := h.loadProjectForResourceAccess(w, r, chi.URLParam(r, "id"), false)
 	if !ok {
 		return
 	}

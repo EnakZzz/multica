@@ -75,6 +75,12 @@
     "toast_removed": "已移除资源",
     "toast_remove_failed": "移除资源失败"
   },
+  "share": {
+    "section_header": "共享工作区",
+    "empty": "没有其他工作区",
+    "toast_saved": "已更新工作区共享",
+    "toast_save_failed": "更新工作区共享失败"
+  },
   "delete_dialog": {
     "title": "删除项目",
     "description": "将删除这个项目。issue 不会被删除，只会从项目中解除关联。",

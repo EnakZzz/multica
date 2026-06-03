@@ -633,6 +633,12 @@ type Project struct {
 	Priority    string             `json:"priority"`
 }
 
+type ProjectWorkspaceLink struct {
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type ProjectKnowledgeRetrievalLog struct {
 	ID                pgtype.UUID        `json:"id"`
 	WorkspaceID       pgtype.UUID        `json:"workspace_id"`

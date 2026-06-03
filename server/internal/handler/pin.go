@@ -112,7 +112,7 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "project":
-		if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+		if _, err := h.Queries.GetProjectAccessibleInWorkspace(r.Context(), db.GetProjectAccessibleInWorkspaceParams{
 			ID: itemUUID, WorkspaceID: wsUUID,
 		}); err != nil {
 			writeError(w, http.StatusNotFound, "project not found")

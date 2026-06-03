@@ -6,6 +6,8 @@ export const projectKeys = {
   list: (wsId: string) => [...projectKeys.all(wsId), "list"] as const,
   detail: (wsId: string, id: string) =>
     [...projectKeys.all(wsId), "detail", id] as const,
+  workspaceLinks: (wsId: string, id: string) =>
+    [...projectKeys.detail(wsId, id), "workspace-links"] as const,
   resources: (wsId: string, id: string) =>
     [...projectKeys.detail(wsId, id), "resources"] as const,
 };
@@ -31,5 +33,14 @@ export function projectResourcesOptions(wsId: string, id: string) {
     queryFn: () => api.listProjectResources(id),
     enabled: Boolean(id),
     select: (data) => data.resources,
+  });
+}
+
+export function projectWorkspaceLinksOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: projectKeys.workspaceLinks(wsId, id),
+    queryFn: () => api.listProjectWorkspaceLinks(id),
+    enabled: Boolean(id),
+    select: (data) => data.workspace_links,
   });
 }

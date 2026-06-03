@@ -1562,7 +1562,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+		if _, err := h.Queries.GetProjectAccessibleInWorkspace(r.Context(), db.GetProjectAccessibleInWorkspaceParams{
 			ID:          pid,
 			WorkspaceID: wsUUID,
 		}); err != nil {

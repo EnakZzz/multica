@@ -238,7 +238,7 @@ type visualTaskContext struct {
 }
 
 func (h *Handler) GetProjectVisualBoard(w http.ResponseWriter, r *http.Request) {
-	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
+	project, ok := h.loadProjectForResourceAccess(w, r, chi.URLParam(r, "id"), false)
 	if !ok {
 		return
 	}

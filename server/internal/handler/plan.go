@@ -702,8 +702,8 @@ func (h *Handler) parseOptionalProjectID(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return pgtype.UUID{}, false
 	}
-	if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{ID: id, WorkspaceID: workspaceID}); err != nil {
-		writeError(w, http.StatusBadRequest, "project_id does not refer to a project of this workspace")
+	if _, err := h.Queries.GetProjectAccessibleInWorkspace(r.Context(), db.GetProjectAccessibleInWorkspaceParams{ID: id, WorkspaceID: workspaceID}); err != nil {
+		writeError(w, http.StatusBadRequest, "project_id does not refer to a project accessible from this workspace")
 		return pgtype.UUID{}, false
 	}
 	return id, true

@@ -85,6 +85,7 @@ type VisualFlowData = {
   onGenerate: (node: ProjectVisualNode) => void;
   onDelete: (node: ProjectVisualNode) => void;
   onNextVariant: (node: ProjectVisualNode) => void;
+  readOnly: boolean;
 };
 
 type VariantStackNodeMeta = {
@@ -157,7 +158,7 @@ const TYPE_LABELS: Record<ProjectVisualNodeType, string> = {
   audio: "Audio",
 };
 
-export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
+export function ProjectVisualCanvas({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
   const wsId = useWorkspaceId();
   const { resolvedTheme } = useTheme();
   const { data: board } = useQuery(projectVisualBoardOptions(wsId, projectId));
@@ -244,13 +245,14 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
           onGenerate: handleGenerateRequest,
           onDelete: handleDeleteNode,
           onNextVariant: handleNextVariant,
+          readOnly,
         },
       }));
       const variantStackGroupNodes = [...variantStackGroups.values()];
       const groupNode = buildReferenceGroupNode([...variantStackGroupNodes, ...visualNodes]);
       return groupNode ? [groupNode, ...variantStackGroupNodes, ...visualNodes] : [...variantStackGroupNodes, ...visualNodes];
     });
-  }, [board, selectedArtAgentId, selectedId, variantStackTopByParentId, variantStackSwitchTickByParentId, handleNextVariant]);
+  }, [board, readOnly, selectedArtAgentId, selectedId, variantStackTopByParentId, variantStackSwitchTickByParentId, handleNextVariant]);
 
   useEffect(() => {
     syncBoardToFlow();
@@ -277,7 +279,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }, [board, variantStackTopByParentId]);
 
   const saveBoard = useCallback((nodesOverride?: VisualCanvasNode[]) => {
-    if (!board) return;
+    if (readOnly || !board) return;
     const positionById = visualNodeAbsolutePositions(nodesOverride ? mergeVisualCanvasNodes(flowNodes, nodesOverride) : flowNodes);
     updateBoard.mutate({
       viewport: board.viewport,
@@ -308,7 +310,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
         relation: edge.relation,
       })),
     });
-  }, [board, flowNodes, updateBoard]);
+  }, [board, flowNodes, readOnly, updateBoard]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setFlowNodes((prev) => applyNodeChanges(changes, prev) as VisualCanvasNode[]);
@@ -321,7 +323,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }, [reactFlow]);
 
   function handleStatusChange(node: ProjectVisualNode, status: ProjectVisualNodeStatus) {
-    if (!board) return;
+    if (readOnly || !board) return;
     updateBoard.mutate({
       viewport: board.viewport,
       metadata: board.metadata,
@@ -345,6 +347,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleGenerateRequest(node: ProjectVisualNode) {
+    if (readOnly) return;
     if (node.type === "reference") {
       return;
     }
@@ -366,7 +369,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleConnect(connection: Connection) {
-    if (!board || !connection.source || !connection.target || connection.source === connection.target) {
+    if (readOnly || !board || !connection.source || !connection.target || connection.source === connection.target) {
       return;
     }
     const source = board.nodes.find((node) => node.id === connection.source);
@@ -419,6 +422,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function openCreateNodeDialog(position: XYPosition, sourceNodeId = "") {
+    if (readOnly) return;
     const source = board?.nodes.find((node) => node.id === sourceNodeId) ?? null;
     const type: ProjectVisualNodeType = source && (source.type === "character" || source.type === "generated_variant")
       ? "animation"
@@ -449,7 +453,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function submitNodeDraft() {
-    if (!nodeDraft) return;
+    if (readOnly || !nodeDraft) return;
     const title = nodeDraft.title.trim();
     if (!title) {
       toast.message("Node title is required.");
@@ -480,6 +484,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleDeleteNode(node: ProjectVisualNode) {
+    if (readOnly) return;
     deleteNode.mutate(node.id, {
       onSuccess: () => {
         if (selectedId === node.id) {
@@ -492,6 +497,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleClearBoard() {
+    if (readOnly) return;
     clearBoard.mutate(undefined, {
       onSuccess: () => {
         setSelectedId("");
@@ -503,7 +509,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleOrganizeBoard() {
-    if (!board || board.nodes.length === 0) return;
+    if (readOnly || !board || board.nodes.length === 0) return;
     const positions = buildOrganizedNodePositions(board.nodes, board.edges);
     const stacks = buildVariantStacks(board.nodes, board.edges);
     const prerequisiteIds = buildSelectedPrerequisiteIds(board.edges, selectedId);
@@ -523,6 +529,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
         onGenerate: handleGenerateRequest,
         onDelete: handleDeleteNode,
         onNextVariant: handleNextVariant,
+        readOnly,
       },
     }));
     const variantStackGroupNodes = [...variantStackGroups.values()];
@@ -539,6 +546,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleNodeDragStop(_: ReactMouseEvent | MouseEvent, node: VisualCanvasNode, nodes: VisualCanvasNode[]) {
+    if (readOnly) return;
     const stackAdjusted = moveVariantStackDrag(node, nodes, dragStartNodesRef.current);
     dragStartNodesRef.current = [];
     if (stackAdjusted) {
@@ -550,6 +558,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleNodeDrag(_: ReactMouseEvent | MouseEvent, node: VisualCanvasNode, nodes: VisualCanvasNode[]) {
+    if (readOnly) return;
     const stackAdjusted = moveVariantStackDrag(node, nodes, dragStartNodesRef.current);
     if (stackAdjusted) {
       setFlowNodes(stackAdjusted);
@@ -557,7 +566,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleRestoreGeneration(generation: ProjectVisualNodeGeneration) {
-    if (!selectedNode || !generation.id || !generation.attachment_id) return;
+    if (readOnly || !selectedNode || !generation.id || !generation.attachment_id) return;
     restoreGeneration.mutate(
       { nodeId: selectedNode.id, generationId: generation.id },
       {
@@ -568,7 +577,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function updateSelectedNode(patch: Partial<ProjectVisualNode>) {
-    if (!board || !selectedNode) return;
+    if (readOnly || !board || !selectedNode) return;
     updateBoard.mutate({
       viewport: board.viewport,
       metadata: board.metadata,
@@ -592,6 +601,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
   }
 
   function handleCreatePlan(planMode: ProjectVisualPlanMode) {
+    if (readOnly) return;
     createPlan.mutate(
       { gameplay_notes: gameplayNotes, plan_mode: planMode },
       {
@@ -621,60 +631,67 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-11 shrink-0 items-center gap-2 overflow-x-auto border-b px-3">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={generateNodes.isPending}
-            onClick={() => generateNodes.mutate(undefined, {
-              onSuccess: (result) => {
-                const issueLabel = result.issue_identifier || result.issue_id;
-                toast.success(issueLabel ? `Visual extraction issue queued: ${issueLabel}` : "Visual extraction issue queued");
-              },
-              onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to generate nodes"),
-            })}
-          >
-            {generateNodes.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
-            Generate Nodes from Wiki
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!board || board.nodes.length === 0 || clearBoard.isPending}
-            onClick={() => setClearDialogOpen(true)}
-          >
-            {clearBoard.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1.5 h-3.5 w-3.5" />}
-            清空画板
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!board || board.nodes.length === 0 || updateBoard.isPending}
-            onClick={handleOrganizeBoard}
-          >
-            {updateBoard.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />}
-            整理画板
-          </Button>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            <Button
-              size="sm"
-              className="shrink-0"
-              disabled={adoptedCount === 0 || createPlan.isPending}
-              onClick={() => handleCreatePlan("playable_prototype")}
-            >
-              <Wand2 className="mr-1.5 h-3.5 w-3.5" />
-              Create Playable Prototype Plan
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="shrink-0"
-              disabled={adoptedCount === 0 || createPlan.isPending}
-              onClick={() => handleCreatePlan("production_asset_integration")}
-            >
-              <Image className="mr-1.5 h-3.5 w-3.5" />
-              Create Production Asset Integration Plan
-            </Button>
-          </div>
+          {!readOnly && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={generateNodes.isPending}
+                onClick={() => generateNodes.mutate(undefined, {
+                  onSuccess: (result) => {
+                    const issueLabel = result.issue_identifier || result.issue_id;
+                    toast.success(issueLabel ? `Visual extraction issue queued: ${issueLabel}` : "Visual extraction issue queued");
+                  },
+                  onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to generate nodes"),
+                })}
+              >
+                {generateNodes.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+                Generate Nodes from Wiki
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!board || board.nodes.length === 0 || clearBoard.isPending}
+                onClick={() => setClearDialogOpen(true)}
+              >
+                {clearBoard.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1.5 h-3.5 w-3.5" />}
+                清空画板
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!board || board.nodes.length === 0 || updateBoard.isPending}
+                onClick={handleOrganizeBoard}
+              >
+                {updateBoard.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />}
+                整理画板
+              </Button>
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                <Button
+                  size="sm"
+                  className="shrink-0"
+                  disabled={adoptedCount === 0 || createPlan.isPending}
+                  onClick={() => handleCreatePlan("playable_prototype")}
+                >
+                  <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+                  Create Playable Prototype Plan
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={adoptedCount === 0 || createPlan.isPending}
+                  onClick={() => handleCreatePlan("production_asset_integration")}
+                >
+                  <Image className="mr-1.5 h-3.5 w-3.5" />
+                  Create Production Asset Integration Plan
+                </Button>
+              </div>
+            </>
+          )}
+          {readOnly && (
+            <div className="text-xs text-muted-foreground">Shared project visual board is read-only in this workspace.</div>
+          )}
         </div>
         <AlertDialog open={clearDialogOpen} onOpenChange={(open) => {
           if (!clearBoard.isPending) {
@@ -720,22 +737,26 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
             minZoom={0.12}
             onInit={setReactFlow}
             onNodesChange={onNodesChange}
-            onConnect={handleConnect}
+            onConnect={readOnly ? undefined : handleConnect}
             onNodeDragStart={handleNodeDragStart}
             onNodeDrag={(event, node, nodes) => handleNodeDrag(event, node as VisualCanvasNode, nodes as VisualCanvasNode[])}
             onNodeDragStop={(event, node, nodes) => handleNodeDragStop(event, node as VisualCanvasNode, nodes as VisualCanvasNode[])}
             onPaneContextMenu={(event) => {
               event.preventDefault();
+              if (readOnly) return;
               openCreateNodeDialog(flowPositionFromEvent(event));
             }}
             onConnectStart={(_, params) => setConnectingSourceId(params.nodeId ?? "")}
             onConnectEnd={(event, connectionState: FinalConnectionState) => {
+              if (readOnly) return;
               if (connectionState.isValid) return;
               const sourceNodeId = connectionState.fromNode?.id ?? connectingSourceId;
               setConnectingSourceId("");
               if (!sourceNodeId || board?.nodes.find((node) => node.id === sourceNodeId)?.type === "reference") return;
               openCreateNodeDialog(flowPositionFromEvent(event), sourceNodeId);
             }}
+            nodesDraggable={!readOnly}
+            nodesConnectable={!readOnly}
             proOptions={{ hideAttribution: true }}
           >
             <Background color="hsl(var(--muted-foreground) / 0.18)" gap={20} size={1} />
@@ -754,6 +775,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
             id="visual-art-agent-select"
             className="h-9 rounded-md border bg-background px-2 text-sm"
             value={selectedAgentId}
+            disabled={readOnly}
             onChange={(event) => setSelectedAgentId(event.target.value)}
           >
             <option value="">Select agent</option>
@@ -768,13 +790,14 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
                   <div className="rounded-md border bg-muted/30 p-2 text-sm">{selectedTitle || "暂无标题"}</div>
                   <label className="grid gap-1 text-xs text-muted-foreground">
                     原文标题
-                    <Input value={selectedNode.title} onChange={(event) => updateSelectedNode({ title: event.target.value })} />
+                    <Input value={selectedNode.title} disabled={readOnly} onChange={(event) => updateSelectedNode({ title: event.target.value })} />
                   </label>
                   <label className="grid gap-1 text-xs text-muted-foreground">
                     类型
                     <select
                       className="h-9 rounded-md border bg-background px-2 text-sm text-foreground"
                       value={selectedNode.type}
+                      disabled={readOnly}
                       onChange={(event) => updateSelectedNode({ type: event.target.value as ProjectVisualNodeType })}
                     >
                       {Object.entries(TYPE_LABELS).map(([value, label]) => (
@@ -790,6 +813,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
                     <Textarea
                       className="min-h-24 resize-none text-foreground"
                       value={selectedNode.description}
+                      disabled={readOnly}
                       onChange={(event) => updateSelectedNode({ description: event.target.value })}
                     />
                   </label>
@@ -801,6 +825,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
                     <Textarea
                       className="min-h-40 resize-none font-mono text-xs text-foreground"
                       value={selectedNode.prompt}
+                      disabled={readOnly}
                       onChange={(event) => updateSelectedNode({ prompt: event.target.value })}
                     />
                   </label>
@@ -814,6 +839,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
                     <Input
                       placeholder="src/assets/..."
                       value={selectedNode.implementation_path}
+                      disabled={readOnly}
                       onChange={(event) => updateSelectedNode({ implementation_path: event.target.value })}
                     />
                   </label>
@@ -823,6 +849,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
                       className="min-h-20 resize-none text-foreground"
                       placeholder="说明这个资源在当前版本里的使用位置、状态或替换关系"
                       value={selectedNode.implementation_note}
+                      disabled={readOnly}
                       onChange={(event) => updateSelectedNode({ implementation_note: event.target.value })}
                     />
                   </label>
@@ -839,6 +866,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
                           key={generation.id || generation.task_id}
                           generation={generation}
                           restoring={restoreGeneration.isPending}
+                          readOnly={readOnly}
                           onRestore={handleRestoreGeneration}
                         />
                       ))}
@@ -851,27 +879,31 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
                 <DetailSection title="来源信息">
                   <ReadOnlyBlock mono>{formatSourceRefs(selectedNode.source_refs)}</ReadOnlyBlock>
                 </DetailSection>
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" size="sm" onClick={() => handleStatusChange(selectedNode, "adopted")}>Adopt</Button>
-                <Button variant="outline" size="sm" onClick={() => handleStatusChange(selectedNode, "rejected")}>Reject</Button>
-              </div>
-              {selectedNode.type === "character" || selectedNode.type === "generated_variant" ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={createNode.isPending}
-                  onClick={() => openCreateNodeDialog({ x: selectedNode.position_x + 340, y: selectedNode.position_y }, selectedNode.id)}
-                >
-                  <Film className="mr-1.5 h-3.5 w-3.5" />
-                  Add Animation Node
-                </Button>
-              ) : null}
-              {selectedNode.type !== "reference" ? (
-                <Button size="sm" disabled={!selectedArtAgentId || generateImage.isPending} onClick={() => handleGenerateRequest(selectedNode)}>
-                  {selectedNode.type === "video" ? <Film className="mr-1.5 h-3.5 w-3.5" /> : selectedNode.type === "audio" ? <Volume2 className="mr-1.5 h-3.5 w-3.5" /> : <Image className="mr-1.5 h-3.5 w-3.5" />}
-                  {generateButtonLabel(selectedNode.type)}
-                </Button>
-              ) : null}
+              {!readOnly && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button variant="outline" size="sm" onClick={() => handleStatusChange(selectedNode, "adopted")}>Adopt</Button>
+                    <Button variant="outline" size="sm" onClick={() => handleStatusChange(selectedNode, "rejected")}>Reject</Button>
+                  </div>
+                  {selectedNode.type === "character" || selectedNode.type === "generated_variant" ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={createNode.isPending}
+                      onClick={() => openCreateNodeDialog({ x: selectedNode.position_x + 340, y: selectedNode.position_y }, selectedNode.id)}
+                    >
+                      <Film className="mr-1.5 h-3.5 w-3.5" />
+                      Add Animation Node
+                    </Button>
+                  ) : null}
+                  {selectedNode.type !== "reference" ? (
+                    <Button size="sm" disabled={!selectedArtAgentId || generateImage.isPending} onClick={() => handleGenerateRequest(selectedNode)}>
+                      {selectedNode.type === "video" ? <Film className="mr-1.5 h-3.5 w-3.5" /> : selectedNode.type === "audio" ? <Volume2 className="mr-1.5 h-3.5 w-3.5" /> : <Image className="mr-1.5 h-3.5 w-3.5" />}
+                      {generateButtonLabel(selectedNode.type)}
+                    </Button>
+                  ) : null}
+                </>
+              )}
               </ContextMenuTrigger>
               <ContextMenuContent>
                 <ContextMenuItem onClick={() => setOriginalNode(selectedNode)}>
@@ -882,10 +914,10 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
             </ContextMenu>
           ) : (
             <div className="flex flex-1 items-center justify-center text-center text-xs text-muted-foreground">
-              Select a node to edit prompt and generation settings.
+              {readOnly ? "Select a node to view visual details." : "Select a node to edit prompt and generation settings."}
             </div>
           )}
-          <div className="mt-auto">
+          {!readOnly && <div className="mt-auto">
             <label className="text-xs text-muted-foreground" htmlFor="visual-gameplay-notes">Gameplay notes for Plan</label>
             <Textarea
               id="visual-gameplay-notes"
@@ -893,7 +925,7 @@ export function ProjectVisualCanvas({ projectId }: { projectId: string }) {
               value={gameplayNotes}
               onChange={(event) => setGameplayNotes(event.target.value)}
             />
-          </div>
+          </div>}
         </div>
       </aside>
       <Dialog open={nodeDraft !== null} onOpenChange={(open) => { if (!open) setNodeDraft(null); }}>
@@ -1076,33 +1108,39 @@ function VisualNodeCard({ data }: NodeProps<VisualFlowNode>) {
                 <ChevronRight className="h-3.5 w-3.5" />
               </NodeActionButton>
             ) : null}
-            <NodeActionButton label="采纳节点" onClick={() => data.onStatus(node, "adopted")}>
-              <Check className="h-3.5 w-3.5" />
-            </NodeActionButton>
-            <NodeActionButton label="拒绝节点" onClick={() => data.onStatus(node, "rejected")}>
-              <X className="h-3.5 w-3.5" />
-            </NodeActionButton>
-            {!isReference ? (
-              <NodeActionButton label={generateTooltip} className={variantStack && variantStack.count > 1 && variantStack.isTop ? "" : "ml-auto"} onClick={() => data.onGenerate(node)}>
-                <Wand2 className="h-3.5 w-3.5" />
-              </NodeActionButton>
-            ) : null}
+            {!data.readOnly && (
+              <>
+                <NodeActionButton label="采纳节点" onClick={() => data.onStatus(node, "adopted")}>
+                  <Check className="h-3.5 w-3.5" />
+                </NodeActionButton>
+                <NodeActionButton label="拒绝节点" onClick={() => data.onStatus(node, "rejected")}>
+                  <X className="h-3.5 w-3.5" />
+                </NodeActionButton>
+                {!isReference ? (
+                  <NodeActionButton label={generateTooltip} className={variantStack && variantStack.count > 1 && variantStack.isTop ? "" : "ml-auto"} onClick={() => data.onGenerate(node)}>
+                    <Wand2 className="h-3.5 w-3.5" />
+                  </NodeActionButton>
+                ) : null}
+              </>
+            )}
           </div>
         </div>
         <Handle type="source" position={Position.Right} />
       </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem
-          variant="destructive"
-          onClick={(event) => {
-            event.stopPropagation();
-            data.onDelete(node);
-          }}
-        >
-          <Trash2 className="h-4 w-4" />
-          删除节点
-        </ContextMenuItem>
-      </ContextMenuContent>
+      {!data.readOnly && (
+        <ContextMenuContent>
+          <ContextMenuItem
+            variant="destructive"
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onDelete(node);
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+            删除节点
+          </ContextMenuItem>
+        </ContextMenuContent>
+      )}
     </ContextMenu>
   );
 }
@@ -1127,10 +1165,12 @@ function VariantStackGroupNodeCard({ data }: NodeProps<VariantStackGroupNode>) {
 function GenerationHistoryItem({
   generation,
   restoring,
+  readOnly = false,
   onRestore,
 }: {
   generation: ProjectVisualNodeGeneration;
   restoring: boolean;
+  readOnly?: boolean;
   onRestore: (generation: ProjectVisualNodeGeneration) => void;
 }) {
   const previewUrl = generation.attachment?.download_url;
@@ -1173,16 +1213,18 @@ function GenerationHistoryItem({
         <span className="text-[11px] text-muted-foreground">
           {formatShortDate(generation.completed_at || generation.created_at)}
         </span>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 px-2 text-xs"
-          disabled={!canRestore || restoring}
-          onClick={() => onRestore(generation)}
-        >
-          {restoring ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-1 h-3 w-3" />}
-          回滚到此版本
-        </Button>
+        {!readOnly && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            disabled={!canRestore || restoring}
+            onClick={() => onRestore(generation)}
+          >
+            {restoring ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-1 h-3 w-3" />}
+            回滚到此版本
+          </Button>
+        )}
       </div>
     </div>
   );

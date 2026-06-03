@@ -75,7 +75,9 @@ import type {
   Project,
   CreateProjectRequest,
   UpdateProjectRequest,
+  UpdateProjectWorkspaceLinksRequest,
   ListProjectsResponse,
+  ProjectWorkspaceLinksResponse,
   ProjectResource,
   CreateProjectResourceRequest,
   ListProjectResourcesResponse,
@@ -1802,6 +1804,22 @@ export class ApiClient {
 
   async deleteProject(id: string): Promise<void> {
     await this.fetch(`/api/projects/${id}`, { method: "DELETE" });
+  }
+
+  async listProjectWorkspaceLinks(
+    projectId: string,
+  ): Promise<ProjectWorkspaceLinksResponse> {
+    return this.fetch(`/api/projects/${projectId}/workspace-links`);
+  }
+
+  async updateProjectWorkspaceLinks(
+    projectId: string,
+    data: UpdateProjectWorkspaceLinksRequest,
+  ): Promise<ProjectWorkspaceLinksResponse> {
+    return this.fetch(`/api/projects/${projectId}/workspace-links`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
   }
 
   // Project resources

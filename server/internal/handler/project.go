@@ -37,6 +37,17 @@ type ProjectResponse struct {
 	ResourceCount int64 `json:"resource_count"`
 }
 
+type ProjectWorkspaceLinkResponse struct {
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	CreatedAt   string `json:"created_at"`
+}
+
+type UpdateProjectWorkspaceLinksRequest struct {
+	WorkspaceIDs []string `json:"workspace_ids"`
+}
+
 func projectToResponse(p db.Project) ProjectResponse {
 	return ProjectResponse{
 		ID:          uuidToString(p.ID),
@@ -50,6 +61,15 @@ func projectToResponse(p db.Project) ProjectResponse {
 		LeadID:      uuidToPtr(p.LeadID),
 		CreatedAt:   timestampToString(p.CreatedAt),
 		UpdatedAt:   timestampToString(p.UpdatedAt),
+	}
+}
+
+func projectWorkspaceLinkToResponse(row db.ListProjectWorkspaceLinksRow) ProjectWorkspaceLinkResponse {
+	return ProjectWorkspaceLinkResponse{
+		WorkspaceID: uuidToString(row.WorkspaceID),
+		Name:        row.Name,
+		Slug:        row.Slug,
+		CreatedAt:   timestampToString(row.CreatedAt),
 	}
 }
 
@@ -114,7 +134,7 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	if p := r.URL.Query().Get("priority"); p != "" {
 		priorityFilter = pgtype.Text{String: p, Valid: true}
 	}
-	projects, err := h.Queries.ListProjects(r.Context(), db.ListProjectsParams{
+	projects, err := h.Queries.ListAccessibleProjects(r.Context(), db.ListAccessibleProjectsParams{
 		WorkspaceID: wsUUID,
 		Status:      statusFilter,
 		Priority:    priorityFilter,
@@ -169,7 +189,7 @@ func (h *Handler) GetProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	project, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+	project, err := h.Queries.GetProjectAccessibleInWorkspace(r.Context(), db.GetProjectAccessibleInWorkspaceParams{
 		ID: idUUID, WorkspaceID: wsUUID,
 	})
 	if err != nil {
@@ -180,6 +200,117 @@ func (h *Handler) GetProject(w http.ResponseWriter, r *http.Request) {
 	resp.IssueCount, resp.DoneCount = h.loadProjectIssueStats(r.Context(), project.ID)
 	resp.ResourceCount = h.loadProjectResourceCount(r.Context(), project.ID)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) ListProjectWorkspaceLinks(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	idUUID, ok := parseUUIDOrBadRequest(w, id, "project id")
+	if !ok {
+		return
+	}
+	project, err := h.Queries.GetProject(r.Context(), idUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if _, ok := h.requireWorkspaceRole(w, r, uuidToString(project.WorkspaceID), "project not found", "owner", "admin"); !ok {
+		return
+	}
+	links, err := h.Queries.ListProjectWorkspaceLinks(r.Context(), project.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list project workspace links")
+		return
+	}
+	resp := make([]ProjectWorkspaceLinkResponse, len(links))
+	for i, link := range links {
+		resp[i] = projectWorkspaceLinkToResponse(link)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workspace_links": resp, "total": len(resp)})
+}
+
+func (h *Handler) UpdateProjectWorkspaceLinks(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	idUUID, ok := parseUUIDOrBadRequest(w, id, "project id")
+	if !ok {
+		return
+	}
+	project, err := h.Queries.GetProject(r.Context(), idUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if _, ok := h.requireWorkspaceRole(w, r, uuidToString(project.WorkspaceID), "project not found", "owner", "admin"); !ok {
+		return
+	}
+	var req UpdateProjectWorkspaceLinksRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	targets := make([]pgtype.UUID, 0, len(req.WorkspaceIDs))
+	seen := make(map[string]struct{}, len(req.WorkspaceIDs))
+	for i, raw := range req.WorkspaceIDs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			writeError(w, http.StatusBadRequest, "workspace_ids["+strconv.Itoa(i)+"] is required")
+			return
+		}
+		target, ok := parseUUIDOrBadRequest(w, raw, "workspace_ids["+strconv.Itoa(i)+"]")
+		if !ok {
+			return
+		}
+		targetID := uuidToString(target)
+		if targetID == uuidToString(project.WorkspaceID) {
+			writeError(w, http.StatusBadRequest, "project owner workspace is already included")
+			return
+		}
+		if _, exists := seen[targetID]; exists {
+			continue
+		}
+		if _, err := h.Queries.GetWorkspace(r.Context(), target); err != nil {
+			writeError(w, http.StatusBadRequest, "workspace_ids["+strconv.Itoa(i)+"] does not refer to an existing workspace")
+			return
+		}
+		seen[targetID] = struct{}{}
+		targets = append(targets, target)
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+	if err := qtx.DeleteProjectWorkspaceLinks(r.Context(), project.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update project workspace links")
+		return
+	}
+	for _, target := range targets {
+		if _, err := qtx.CreateProjectWorkspaceLink(r.Context(), db.CreateProjectWorkspaceLinkParams{
+			ProjectID:   project.ID,
+			WorkspaceID: target,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update project workspace links")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit project workspace links")
+		return
+	}
+
+	links, err := h.Queries.ListProjectWorkspaceLinks(r.Context(), project.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list project workspace links")
+		return
+	}
+	resp := make([]ProjectWorkspaceLinkResponse, len(links))
+	for i, link := range links {
+		resp[i] = projectWorkspaceLinkToResponse(link)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workspace_links": resp, "total": len(resp)})
 }
 
 func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
@@ -584,10 +715,14 @@ func buildProjectSearchQuery(phrase string, terms []string, includeClosed bool) 
 		COUNT(*) OVER() AS total_count,
 		%s AS match_source
 	FROM project p
-	WHERE p.workspace_id = %s AND %s
+	WHERE (p.workspace_id = %s OR EXISTS (
+		SELECT 1 FROM project_workspace_link pwl
+		WHERE pwl.project_id = p.id AND pwl.workspace_id = %s
+	)) AND %s
 	ORDER BY %s, p.updated_at DESC
 	LIMIT %s OFFSET %s`,
 		matchSourceExpr,
+		wsParam,
 		wsParam,
 		whereClause,
 		rankExpr,
