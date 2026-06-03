@@ -255,6 +255,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// Public API
 	r.Get("/api/config", h.GetConfig)
+	r.Get("/api/public/ai-gateway/usage/summary", h.ListPublicAIGatewayUsageSummary)
 
 	registerAIGatewayRoutes(r, h)
 

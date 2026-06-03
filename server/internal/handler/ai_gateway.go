@@ -24,8 +24,9 @@ import (
 )
 
 const (
-	aiGatewayTokenPrefix = "mvk_"
-	aiGatewayDefaultURL  = "https://api.openai.com/v1"
+	aiGatewayTokenPrefix                = "mvk_"
+	aiGatewayDefaultURL                 = "https://api.openai.com/v1"
+	aiGatewayReportDefaultWorkspaceSlug = "local-agents"
 )
 
 type aiGatewayKeyResponse struct {
@@ -794,16 +795,65 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "workspace_id or workspace_slug is required")
 		return
 	}
+	days, ok := parseAIGatewayUsageSummaryDays(w, r)
+	if !ok {
+		return
+	}
+	resp, err := h.listAIGatewayUsageSummary(r.Context(), workspaceID, days)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) ListPublicAIGatewayUsageSummary(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil || h.Queries == nil {
+		writeError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	workspaceSlug := strings.TrimSpace(r.URL.Query().Get("workspace_slug"))
+	if workspaceSlug == "" {
+		workspaceSlug = aiGatewayReportDefaultWorkspaceSlug
+	}
+	days := int32(30)
+	if parsedDays, ok := parseAIGatewayUsageSummaryDays(w, r); ok {
+		days = parsedDays
+	} else {
+		return
+	}
+	workspace, err := h.Queries.GetWorkspaceBySlug(r.Context(), workspaceSlug)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	resp, err := h.listAIGatewayUsageSummary(r.Context(), uuidToString(workspace.ID), days)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
+		return
+	}
+	for i := range resp {
+		resp[i].CreatedByName = ""
+		resp[i].CreatedByEmail = ""
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func parseAIGatewayUsageSummaryDays(w http.ResponseWriter, r *http.Request) (int32, bool) {
 	days := int32(30)
 	if raw := r.URL.Query().Get("days"); raw != "" {
 		v, err := strconv.Atoi(raw)
 		if err != nil || v <= 0 || v > 365 {
 			writeError(w, http.StatusBadRequest, "days must be between 1 and 365")
-			return
+			return 0, false
 		}
 		days = int32(v)
 	}
-	rows, err := h.DB.Query(r.Context(), `
+	return days, true
+}
+
+func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID string, days int32) ([]aiGatewayUsageSummaryResponse, error) {
+	rows, err := h.DB.Query(ctx, `
 		SELECT
 			COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown') AS caller_id,
 			COALESCE(k.name, ''),
@@ -837,8 +887,7 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 		ORDER BY COALESCE(SUM(u.total_tokens), 0) DESC, COUNT(*) DESC
 	`, parseUUID(workspaceID), days)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -873,8 +922,7 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 			&lastRequestAt,
 			&upstreamModel,
 		); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
-			return
+			return nil, err
 		}
 		row.TotalCostMicros += aigateway.EstimateUsageCostMicros(upstreamModel, zeroCostPromptTokens, zeroCostCompletionTokens)
 		agg := summaryByCaller[row.CallerID]
@@ -902,8 +950,7 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
-		return
+		return nil, err
 	}
 	resp := []aiGatewayUsageSummaryResponse{}
 	for _, key := range order {
@@ -923,7 +970,7 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 	if len(resp) > 100 {
 		resp = resp[:100]
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp, nil
 }
 
 type aiGatewayVirtualKey = aigateway.VirtualKey
