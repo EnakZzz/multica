@@ -667,6 +667,7 @@ type aiGatewayUsageResponse struct {
 
 type aiGatewayUsageSummaryResponse struct {
 	CallerID                string `json:"caller_id"`
+	Model                   string `json:"model"`
 	KeyName                 string `json:"key_name,omitempty"`
 	KeyPrefix               string `json:"key_prefix,omitempty"`
 	CreatedByName           string `json:"created_by_name,omitempty"`
@@ -691,6 +692,7 @@ type aiGatewayUsageSummaryResponse struct {
 
 type aiGatewayPublicUsageSummaryResponse struct {
 	Email                   string `json:"email"`
+	Model                   string `json:"model"`
 	RequestCount            int64  `json:"request_count"`
 	SuccessCount            int64  `json:"success_count"`
 	ErrorCount              int64  `json:"error_count"`
@@ -867,6 +869,7 @@ func (h *Handler) ListPublicAIGatewayUsageSummary(w http.ResponseWriter, r *http
 		}
 		publicResp = append(publicResp, aiGatewayPublicUsageSummaryResponse{
 			Email:                   email,
+			Model:                   item.Model,
 			RequestCount:            item.RequestCount,
 			SuccessCount:            item.SuccessCount,
 			ErrorCount:              item.ErrorCount,
@@ -899,6 +902,22 @@ func parseAIGatewayUsageSummaryDays(w http.ResponseWriter, r *http.Request) (int
 		days = int32(v)
 	}
 	return days, true
+}
+
+func aiGatewayUsageModelLabel(model string) string {
+	model = strings.TrimSpace(strings.ToLower(model))
+	switch {
+	case strings.HasPrefix(model, "gpt-5.5"):
+		return "GPT-5.5"
+	case strings.HasPrefix(model, "gpt-5.4"):
+		return "GPT-5.4"
+	case strings.HasPrefix(model, "gpt-5"):
+		return "GPT-5"
+	case model == "":
+		return "unknown"
+	default:
+		return model
+	}
 }
 
 func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID string, days int32) ([]aiGatewayUsageSummaryResponse, error) {
@@ -990,6 +1009,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 			return nil, err
 		}
 		estimated := aigateway.EstimateUsageCostBreakdown(upstreamModel, zeroCostPromptTokens, zeroCostCompletionTokens, zeroCostCachedInputTokens)
+		row.Model = aiGatewayUsageModelLabel(upstreamModel)
 		row.InputCostMicros += estimated.InputCostMicros
 		row.CachedInputCostMicros += estimated.CachedInputCostMicros
 		row.OutputCostMicros += estimated.OutputCostMicros
@@ -1000,17 +1020,19 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 				row.BillableInputTokens = 0
 			}
 		}
-		agg := summaryByCaller[row.CallerID]
+		aggKey := row.CallerID + "\x00" + row.Model
+		agg := summaryByCaller[aggKey]
 		if agg == nil {
 			agg = &summaryAgg{item: aiGatewayUsageSummaryResponse{
 				CallerID:       row.CallerID,
+				Model:          row.Model,
 				KeyName:        row.KeyName,
 				KeyPrefix:      row.KeyPrefix,
 				CreatedByName:  row.CreatedByName,
 				CreatedByEmail: row.CreatedByEmail,
 			}}
-			summaryByCaller[row.CallerID] = agg
-			order = append(order, row.CallerID)
+			summaryByCaller[aggKey] = agg
+			order = append(order, aggKey)
 		}
 		agg.item.RequestCount += row.RequestCount
 		agg.item.SuccessCount += row.SuccessCount

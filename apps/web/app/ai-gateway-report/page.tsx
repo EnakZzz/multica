@@ -13,12 +13,14 @@ import {
   TableHeader,
   TableRow,
 } from "@multica/ui/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multica/ui/components/ui/tooltip";
 
 const WORKSPACE_SLUG = "local-agents";
 const DAY_OPTIONS = [7, 30, 90] as const;
 
 interface AIGatewayReportRow {
   email: string;
+  model: string;
   request_count: number;
   success_count: number;
   error_count: number;
@@ -36,6 +38,16 @@ interface AIGatewayReportRow {
   average_latency_ms: number;
   last_request_at: string;
 }
+
+const PRICING_HINTS = {
+  model: "按实际上游模型归类展示。GPT-5.5、GPT-5.4 会拆开统计；其他模型保留原模型名。",
+  input: "标准 GPT-5.5：输入 $5 / 1M tokens；缓存输入单独按 $0.50 / 1M tokens 计费。",
+  cachedInput: "缓存命中的输入 tokens。标准 GPT-5.5 缓存输入 $0.50 / 1M tokens；长上下文请求不再单独拆缓存价。",
+  output: "标准 GPT-5.5：输出 $30 / 1M tokens；reasoning tokens 按 output tokens 计费。",
+  reasoning: "reasoning tokens 来自 output_tokens_details.reasoning_tokens，已包含在输出计费里，这里单独展示便于核对。",
+  cost: "费用预估 = 输入费用 + 缓存输入费用 + 输出费用。历史缺少明细的行会按已有 token 和模型价格补估。",
+  longContext: "GPT-5.5 单次输入超过 272K tokens 时按长上下文价：输入 $10 / 1M，输出 $45 / 1M。",
+} as const;
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
@@ -174,7 +186,8 @@ export default function AIGatewayReportPage() {
   const reasoningTokens = formatCompactNumber(totals.reasoningTokens);
 
   return (
-    <main className="h-dvh overflow-y-auto bg-background text-foreground">
+    <TooltipProvider>
+      <main className="h-dvh overflow-y-auto bg-background text-foreground">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
           <div className="min-w-0">
@@ -225,10 +238,10 @@ export default function AIGatewayReportPage() {
             <CardContent>
               <div className="mb-3 text-xs font-medium text-muted-foreground">Token 明细</div>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <MiniMetric label="输入" value={inputTokens.value} unit={inputTokens.unit || "tokens"} />
-                <MiniMetric label="缓存输入" value={cachedTokens.value} unit={cachedTokens.unit || "tokens"} />
-                <MiniMetric label="输出" value={outputTokens.value} unit={outputTokens.unit || "tokens"} />
-                <MiniMetric label="Reasoning" value={reasoningTokens.value} unit={reasoningTokens.unit || "tokens"} />
+                <MiniMetric label="输入" value={inputTokens.value} unit={inputTokens.unit || "tokens"} tooltip={PRICING_HINTS.input} />
+                <MiniMetric label="缓存输入" value={cachedTokens.value} unit={cachedTokens.unit || "tokens"} tooltip={PRICING_HINTS.cachedInput} />
+                <MiniMetric label="输出" value={outputTokens.value} unit={outputTokens.unit || "tokens"} tooltip={PRICING_HINTS.output} />
+                <MiniMetric label="Reasoning" value={reasoningTokens.value} unit={reasoningTokens.unit || "tokens"} tooltip={PRICING_HINTS.reasoning} />
               </div>
             </CardContent>
           </Card>
@@ -236,10 +249,10 @@ export default function AIGatewayReportPage() {
             <CardContent>
               <div className="mb-3 text-xs font-medium text-muted-foreground">费用明细</div>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <MiniMetric label="输入" value={formatCost(totals.inputCostMicros)} />
-                <MiniMetric label="缓存输入" value={formatCost(totals.cachedInputCostMicros)} />
-                <MiniMetric label="输出" value={formatCost(totals.outputCostMicros)} />
-                <MiniMetric label="长上下文" value={formatNumber(totals.longContextRequests)} unit="次" />
+                <MiniMetric label="输入" value={formatCost(totals.inputCostMicros)} tooltip={PRICING_HINTS.input} />
+                <MiniMetric label="缓存输入" value={formatCost(totals.cachedInputCostMicros)} tooltip={PRICING_HINTS.cachedInput} />
+                <MiniMetric label="输出" value={formatCost(totals.outputCostMicros)} tooltip={PRICING_HINTS.output} />
+                <MiniMetric label="长上下文" value={formatNumber(totals.longContextRequests)} unit="次" tooltip={PRICING_HINTS.longContext} />
               </div>
             </CardContent>
           </Card>
@@ -270,23 +283,27 @@ export default function AIGatewayReportPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="min-w-56">邮箱</TableHead>
+                    <TableHead><HeaderWithTooltip label="模型" tooltip={PRICING_HINTS.model} /></TableHead>
                     <TableHead className="text-right">请求</TableHead>
                     <TableHead className="text-right">错误</TableHead>
-                    <TableHead className="text-right">输入</TableHead>
-                    <TableHead className="text-right">缓存</TableHead>
-                    <TableHead className="text-right">输出</TableHead>
-                    <TableHead className="text-right">Reasoning</TableHead>
-                    <TableHead className="text-right">费用</TableHead>
-                    <TableHead className="text-right">长上下文</TableHead>
+                    <TableHead className="text-right"><HeaderWithTooltip label="输入" tooltip={PRICING_HINTS.input} align="right" /></TableHead>
+                    <TableHead className="text-right"><HeaderWithTooltip label="缓存" tooltip={PRICING_HINTS.cachedInput} align="right" /></TableHead>
+                    <TableHead className="text-right"><HeaderWithTooltip label="输出" tooltip={PRICING_HINTS.output} align="right" /></TableHead>
+                    <TableHead className="text-right"><HeaderWithTooltip label="Reasoning" tooltip={PRICING_HINTS.reasoning} align="right" /></TableHead>
+                    <TableHead className="text-right"><HeaderWithTooltip label="费用" tooltip={PRICING_HINTS.cost} align="right" /></TableHead>
+                    <TableHead className="text-right"><HeaderWithTooltip label="长上下文" tooltip={PRICING_HINTS.longContext} align="right" /></TableHead>
                     <TableHead className="text-right">平均延迟</TableHead>
                     <TableHead className="text-right">最近调用</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {summary.map((item) => (
-                    <TableRow key={item.email}>
+                    <TableRow key={`${item.email}-${item.model}`}>
                       <TableCell>
                         <div className="max-w-72 truncate font-medium">{item.email || "unknown"}</div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="whitespace-nowrap text-sm">{item.model || "unknown"}</div>
                       </TableCell>
                       <TableCell className="text-right">{formatNumber(item.request_count)}</TableCell>
                       <TableCell className="text-right">{formatNumber(item.error_count)}</TableCell>
@@ -307,15 +324,54 @@ export default function AIGatewayReportPage() {
             <div className="rounded-lg border px-3 py-8 text-center text-sm text-muted-foreground">暂无统计数据</div>
           )}
         </section>
-      </div>
-    </main>
+        </div>
+      </main>
+    </TooltipProvider>
   );
 }
 
-function MiniMetric({ label, value, unit }: { label: string; value: string; unit?: string }) {
+function HeaderWithTooltip({
+  label,
+  tooltip,
+  align = "left",
+}: {
+  label: string;
+  tooltip: string;
+  align?: "left" | "right";
+}) {
+  const content = (
+    <span className={align === "right" ? "inline-flex w-full justify-end underline decoration-dotted underline-offset-4" : "inline-flex underline decoration-dotted underline-offset-4"}>
+      {label}
+    </span>
+  );
+  return (
+    <Tooltip>
+      <TooltipTrigger render={content} />
+      <TooltipContent side="top" align={align === "right" ? "end" : "start"} className="max-w-72 leading-relaxed">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function MiniMetric({ label, value, unit, tooltip }: { label: string; value: string; unit?: string; tooltip?: string }) {
+  const labelNode = (
+    <div className={tooltip ? "text-xs text-muted-foreground underline decoration-dotted underline-offset-4" : "text-xs text-muted-foreground"}>
+      {label}
+    </div>
+  );
   return (
     <div className="min-w-0">
-      <div className="text-xs text-muted-foreground">{label}</div>
+      {tooltip ? (
+        <Tooltip>
+          <TooltipTrigger render={labelNode} />
+          <TooltipContent side="top" align="start" className="max-w-72 leading-relaxed">
+            {tooltip}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        labelNode
+      )}
       <div className="mt-1 flex min-w-0 items-baseline gap-1">
         <span className="truncate text-sm font-semibold">{value}</span>
         {unit ? <span className="text-xs text-muted-foreground">{unit}</span> : null}

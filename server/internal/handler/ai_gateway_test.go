@@ -347,6 +347,9 @@ func TestListPublicAIGatewayUsageSummaryUsesWorkspaceSlugWithoutAuth(t *testing.
 	for _, item := range summary {
 		if item.Email == handlerTestEmail {
 			found = true
+			if item.Model != "GPT-5" {
+				t.Fatalf("unexpected public summary model: %+v", item)
+			}
 			if item.RequestCount < 1 || item.TotalTokens < 16 {
 				t.Fatalf("unexpected public summary item: %+v", item)
 			}
