@@ -892,7 +892,7 @@ export function AIGatewayTab() {
                       <div className="flex gap-2">
                         <Badge variant="secondary" className="gap-1">
                           <span>{totalTokens.value}</span>
-                          <span className="text-[10px] font-normal text-muted-foreground">
+                          <span className="font-normal text-muted-foreground">
                             {totalTokens.unit || t(($) => $.ai_gateway.tokens_unit)}
                           </span>
                         </Badge>
