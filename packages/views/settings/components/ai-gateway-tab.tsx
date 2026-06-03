@@ -1066,18 +1066,53 @@ export function AIGatewayTab() {
           <Card><CardContent><Skeleton className="h-4 w-64" /></CardContent></Card>
         ) : routes.length > 0 ? (
           <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.routes_list_hint)}</p>
             {routes.map((route) => (
               <Card key={route.id}>
-                <CardContent className="flex items-center gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-sm font-medium">{route.alias}</div>
-                      <Badge variant={route.enabled ? "secondary" : "outline"}>{route.strategy}</Badge>
+                <CardContent className="space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-medium">{route.alias}</div>
+                        <Badge variant={route.enabled ? "secondary" : "outline"}>{t(($) => $.ai_gateway.strategy[route.strategy as keyof typeof $.ai_gateway.strategy])}</Badge>
+                        <Badge variant="outline">{t(($) => $.ai_gateway.route_targets_count, { count: route.targets.length })}</Badge>
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">{route.targets.map(targetLabel).join(" -> ")}</div>
                     </div>
-                    <div className="truncate text-xs text-muted-foreground">{route.targets.map(targetLabel).join(" -> ")}</div>
+                    <div className="flex shrink-0 gap-2">
+                      <Button variant="outline" size="sm" onClick={() => editRoute(route)}>{t(($) => $.ai_gateway.edit_route)}</Button>
+                      <Button variant="ghost" size="icon-sm" onClick={() => deleteRoute(route.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                    </div>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => editRoute(route)}>{t(($) => $.ai_gateway.edit_route)}</Button>
-                  <Button variant="ghost" size="icon-sm" onClick={() => deleteRoute(route.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+
+                  <div className="space-y-2">
+                    {route.targets.map((target, index) => (
+                      <div key={target.id ?? `${route.id}-${index}`} className="rounded-md border bg-muted/20 px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="font-medium text-foreground">{t(($) => $.ai_gateway.target_label, { index: index + 1 })}</span>
+                          {index === 0 ? <Badge variant="secondary">{t(($) => $.ai_gateway.target_primary_badge)}</Badge> : null}
+                          <Badge variant="outline">{t(($) => $.ai_gateway.auth_mode[target.auth_mode ?? "api_key"])}</Badge>
+                          <Badge variant="outline">{t(($) => $.ai_gateway.upstream_api[target.upstream_api as keyof typeof $.ai_gateway.upstream_api])}</Badge>
+                          {!target.enabled ? <Badge variant="outline">{t(($) => $.ai_gateway.route_target_disabled)}</Badge> : null}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                          <span>{target.provider}</span>
+                          <span>{target.model || t(($) => $.ai_gateway.target_model_passthrough)}</span>
+                          <span>{t(($) => $.ai_gateway.route_target_auth_summary, {
+                            value: target.auth_mode === "custom_headers_cookie"
+                              ? [
+                                target.cookie_env ? `Cookie ${target.cookie_env}` : "",
+                                (target.custom_header_envs?.length ?? 0) > 0 ? t(($) => $.ai_gateway.route_target_header_count, { count: target.custom_header_envs?.length ?? 0 }) : "",
+                              ].filter(Boolean).join(" · ")
+                              : target.api_key_env,
+                          })}</span>
+                          <span>{t(($) => $.ai_gateway.route_target_timeout, { seconds: target.timeout_seconds })}</span>
+                          <span>{t(($) => $.ai_gateway.route_target_weight, { weight: target.weight })}</span>
+                          {target.reasoning_effort ? <span>{t(($) => $.ai_gateway.route_target_reasoning, { effort: t(($) => $.ai_gateway.reasoning_effort[target.reasoning_effort as keyof typeof $.ai_gateway.reasoning_effort]) })}</span> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
             ))}
