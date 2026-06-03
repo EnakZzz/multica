@@ -42,6 +42,8 @@ function injectStyles(target: ShadowRoot) {
     .toolbar strong { font-size: 13px; }
     .toolbar span { font-size: 12px; color: #6b7280; }
     .panel { right: 16px; top: 16px; width: min(360px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 12px; }
+    .overlay.capture-mode { cursor: default; pointer-events: none; }
+    .overlay.capture-mode .shade, .overlay.capture-mode .toolbar, .overlay.capture-mode .panel { display: none; }
     .panel h2 { font-size: 14px; margin: 0 0 8px; }
     .panel p { font-size: 12px; color: #6b7280; margin: 0 0 12px; line-height: 1.4; }
     .badge { position: fixed; min-width: 20px; height: 20px; box-sizing: border-box; background: #2563eb; color: #fff; font-size: 12px; line-height: 20px; text-align: center; padding: 0 6px; border-radius: 999px; pointer-events: none; }
@@ -237,6 +239,11 @@ function buildCapture(): ReviewCapture {
   };
 }
 
+function setCaptureMode(enabled: boolean) {
+  const overlay = shadow?.querySelector<HTMLElement>(".overlay");
+  overlay?.classList.toggle("capture-mode", enabled);
+}
+
 async function submitCapture() {
   if (!shadow) return;
   const status = shadow.querySelector<HTMLElement>(".status");
@@ -347,4 +354,7 @@ document.addEventListener("keydown", (event) => {
 chrome.runtime.onMessage.addListener((message: unknown) => {
   const msg = message as { type?: string };
   if (msg.type === "MULTICA_REVIEW_START") start();
+  if (msg.type === "MULTICA_REVIEW_CAPTURE_MODE") {
+    setCaptureMode(Boolean((msg as { enabled?: boolean }).enabled));
+  }
 });

@@ -106,6 +106,10 @@ function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return fetch(dataUrl).then((res) => res.blob());
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function getApiContext(): Promise<ApiContext> {
   const [config, token] = await Promise.all([getConfig(), getToken()]);
   if (!token) throw new Error("Please sign in to Multica first.");
@@ -174,7 +178,21 @@ async function startAnnotation(tabId?: number): Promise<void> {
   await chrome.tabs.sendMessage(tab.id, { type: "MULTICA_REVIEW_START" });
 }
 
-async function submitReview(capture: ReviewCapture, senderWindowId?: number): Promise<SubmitReviewResult> {
+async function setContentCaptureMode(tabId: number | undefined, enabled: boolean): Promise<void> {
+  if (tabId === undefined) return;
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "MULTICA_REVIEW_CAPTURE_MODE", enabled });
+    await delay(80);
+  } catch {
+    // If the content script went away, keep the submit flow best-effort.
+  }
+}
+
+async function submitReview(
+  capture: ReviewCapture,
+  senderWindowId?: number,
+  senderTabId?: number,
+): Promise<SubmitReviewResult> {
   const ctx = await getApiContext();
   const { workspaces, projects } = await refreshContext();
   const workspace = findSelectedWorkspace(workspaces, ctx.config.workspaceSlug);
@@ -185,12 +203,15 @@ async function submitReview(capture: ReviewCapture, senderWindowId?: number): Pr
   let screenshotFilename: string | undefined = `review-screenshot-${stamp}.png`;
   const stateFilename = `review-state-${stamp}.json`;
   let screenshotBlob: Blob | undefined;
+  await setContentCaptureMode(senderTabId, true);
   try {
     const tab = senderWindowId === undefined ? await getActiveTab() : { windowId: senderWindowId };
     const screenshotDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
     screenshotBlob = await dataUrlToBlob(screenshotDataUrl);
   } catch {
     screenshotFilename = undefined;
+  } finally {
+    await setContentCaptureMode(senderTabId, false);
   }
   const body = buildIssueBody({ workspace, project, capture, screenshotFilename, stateFilename });
   const title = buildIssueTitle({ project, capture });
@@ -260,7 +281,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         await startAnnotation();
         return { ok: true };
       case "SUBMIT_REVIEW":
-        return submitReview(msg.capture, sender.tab?.windowId);
+        return submitReview(msg.capture, sender.tab?.windowId, sender.tab?.id);
       default:
         throw new Error("Unsupported extension message");
     }
