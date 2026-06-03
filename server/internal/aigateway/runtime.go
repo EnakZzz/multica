@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,8 +26,15 @@ import (
 )
 
 const (
-	TokenPrefix = "mvk_"
-	DefaultURL  = "https://api.openai.com/v1"
+	TokenPrefix                 = "mvk_"
+	DefaultURL                  = "https://api.openai.com/v1"
+	AuthModeAPIKey              = "api_key"
+	AuthModeCustomHeadersCookie = "custom_headers_cookie"
+)
+
+var (
+	envNamePattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	headerNamePattern = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
 )
 
 type DB interface {
@@ -117,21 +125,29 @@ type Route struct {
 }
 
 type Target struct {
-	ID                          string `json:"id,omitempty"`
-	Provider                    string `json:"provider"`
-	BaseURL                     string `json:"base_url"`
-	APIKeyEnv                   string `json:"api_key_env"`
-	Model                       string `json:"model"`
-	UpstreamAPI                 string `json:"upstream_api,omitempty"`
-	ReasoningEffort             string `json:"reasoning_effort,omitempty"`
-	OrganizationEnv             string `json:"organization_env,omitempty"`
-	ProjectEnv                  string `json:"project_env,omitempty"`
-	TimeoutSeconds              int    `json:"timeout_seconds,omitempty"`
-	Weight                      int    `json:"weight,omitempty"`
-	Priority                    int    `json:"priority,omitempty"`
-	Enabled                     bool   `json:"enabled,omitempty"`
-	InputPricePerMillionMicros  int64  `json:"input_price_per_million_micros,omitempty"`
-	OutputPricePerMillionMicros int64  `json:"output_price_per_million_micros,omitempty"`
+	ID                          string            `json:"id,omitempty"`
+	Provider                    string            `json:"provider"`
+	BaseURL                     string            `json:"base_url"`
+	AuthMode                    string            `json:"auth_mode,omitempty"`
+	APIKeyEnv                   string            `json:"api_key_env"`
+	CookieEnv                   string            `json:"cookie_env,omitempty"`
+	CustomHeaderEnvs            []CustomHeaderEnv `json:"custom_header_envs,omitempty"`
+	Model                       string            `json:"model"`
+	UpstreamAPI                 string            `json:"upstream_api,omitempty"`
+	ReasoningEffort             string            `json:"reasoning_effort,omitempty"`
+	OrganizationEnv             string            `json:"organization_env,omitempty"`
+	ProjectEnv                  string            `json:"project_env,omitempty"`
+	TimeoutSeconds              int               `json:"timeout_seconds,omitempty"`
+	Weight                      int               `json:"weight,omitempty"`
+	Priority                    int               `json:"priority,omitempty"`
+	Enabled                     bool              `json:"enabled,omitempty"`
+	InputPricePerMillionMicros  int64             `json:"input_price_per_million_micros,omitempty"`
+	OutputPricePerMillionMicros int64             `json:"output_price_per_million_micros,omitempty"`
+}
+
+type CustomHeaderEnv struct {
+	HeaderName string `json:"header_name"`
+	EnvName    string `json:"env_name"`
 }
 
 type routeConfig struct {
@@ -204,6 +220,7 @@ func NormalizeRoutes(routes []Route) ([]Route, error) {
 			if t.BaseURL == "" {
 				t.BaseURL = DefaultURL
 			}
+			t.AuthMode = normalizeAuthMode(t.AuthMode)
 			t.UpstreamAPI = strings.TrimSpace(t.UpstreamAPI)
 			if t.UpstreamAPI == "" {
 				t.UpstreamAPI = "responses"
@@ -212,8 +229,52 @@ func NormalizeRoutes(routes []Route) ([]Route, error) {
 				return nil, fmt.Errorf("AI gateway route %q target %d has unsupported upstream_api %q", routes[i].Alias, j, t.UpstreamAPI)
 			}
 			t.APIKeyEnv = strings.TrimSpace(t.APIKeyEnv)
-			if t.APIKeyEnv == "" {
-				return nil, fmt.Errorf("AI gateway route %q target %d is missing api_key_env", routes[i].Alias, j)
+			t.OrganizationEnv = strings.TrimSpace(t.OrganizationEnv)
+			t.ProjectEnv = strings.TrimSpace(t.ProjectEnv)
+			t.CookieEnv = strings.TrimSpace(t.CookieEnv)
+			normalizedHeaders, err := normalizeCustomHeaderEnvs(t.CustomHeaderEnvs)
+			if err != nil {
+				return nil, fmt.Errorf("AI gateway route %q target %d has invalid custom_header_envs: %w", routes[i].Alias, j, err)
+			}
+			t.CustomHeaderEnvs = normalizedHeaders
+			switch t.AuthMode {
+			case AuthModeAPIKey:
+				if t.APIKeyEnv == "" {
+					return nil, fmt.Errorf("AI gateway route %q target %d is missing api_key_env", routes[i].Alias, j)
+				}
+				if err := validateEnvName(t.APIKeyEnv); err != nil {
+					return nil, fmt.Errorf("AI gateway route %q target %d api_key_env is invalid: %w", routes[i].Alias, j, err)
+				}
+				if t.CookieEnv != "" || len(t.CustomHeaderEnvs) > 0 {
+					return nil, fmt.Errorf("AI gateway route %q target %d cannot set cookie_env/custom_header_envs with auth_mode %q", routes[i].Alias, j, t.AuthMode)
+				}
+				if t.OrganizationEnv != "" {
+					if err := validateEnvName(t.OrganizationEnv); err != nil {
+						return nil, fmt.Errorf("AI gateway route %q target %d organization_env is invalid: %w", routes[i].Alias, j, err)
+					}
+				}
+				if t.ProjectEnv != "" {
+					if err := validateEnvName(t.ProjectEnv); err != nil {
+						return nil, fmt.Errorf("AI gateway route %q target %d project_env is invalid: %w", routes[i].Alias, j, err)
+					}
+				}
+			case AuthModeCustomHeadersCookie:
+				if t.APIKeyEnv != "" {
+					return nil, fmt.Errorf("AI gateway route %q target %d cannot set api_key_env with auth_mode %q", routes[i].Alias, j, t.AuthMode)
+				}
+				if t.OrganizationEnv != "" || t.ProjectEnv != "" {
+					return nil, fmt.Errorf("AI gateway route %q target %d cannot set organization_env/project_env with auth_mode %q", routes[i].Alias, j, t.AuthMode)
+				}
+				if t.CookieEnv == "" && len(t.CustomHeaderEnvs) == 0 {
+					return nil, fmt.Errorf("AI gateway route %q target %d must set cookie_env or custom_header_envs for auth_mode %q", routes[i].Alias, j, t.AuthMode)
+				}
+				if t.CookieEnv != "" {
+					if err := validateEnvName(t.CookieEnv); err != nil {
+						return nil, fmt.Errorf("AI gateway route %q target %d cookie_env is invalid: %w", routes[i].Alias, j, err)
+					}
+				}
+			default:
+				return nil, fmt.Errorf("AI gateway route %q target %d has unsupported auth_mode %q", routes[i].Alias, j, t.AuthMode)
 			}
 			t.Model = strings.TrimSpace(t.Model)
 			if t.Model == "" && routes[i].Alias != "*" {
@@ -231,6 +292,59 @@ func NormalizeRoutes(routes []Route) ([]Route, error) {
 		}
 	}
 	return routes, nil
+}
+
+func normalizeAuthMode(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "", AuthModeAPIKey:
+		return AuthModeAPIKey
+	case AuthModeCustomHeadersCookie:
+		return AuthModeCustomHeadersCookie
+	default:
+		return strings.TrimSpace(raw)
+	}
+}
+
+func validateEnvName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("environment variable name is required")
+	}
+	if strings.ContainsAny(name, "\r\n") || strings.HasPrefix(name, "sk-") {
+		return errors.New("must be an environment variable name, not a raw secret")
+	}
+	if !envNamePattern.MatchString(name) {
+		return errors.New("must look like OPENAI_API_KEY")
+	}
+	return nil
+}
+
+func normalizeCustomHeaderEnvs(items []CustomHeaderEnv) ([]CustomHeaderEnv, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	out := make([]CustomHeaderEnv, 0, len(items))
+	for _, item := range items {
+		headerName := strings.TrimSpace(item.HeaderName)
+		envName := strings.TrimSpace(item.EnvName)
+		if headerName == "" && envName == "" {
+			continue
+		}
+		if headerName == "" {
+			return nil, errors.New("header_name is required")
+		}
+		if !headerNamePattern.MatchString(headerName) {
+			return nil, fmt.Errorf("header_name %q is invalid", headerName)
+		}
+		if err := validateEnvName(envName); err != nil {
+			return nil, fmt.Errorf("env_name for %q is invalid: %w", headerName, err)
+		}
+		out = append(out, CustomHeaderEnv{
+			HeaderName: http.CanonicalHeaderKey(headerName),
+			EnvName:    envName,
+		})
+	}
+	return out, nil
 }
 
 func FindRoute(routes []Route, model string) (Route, bool) {
@@ -278,7 +392,8 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 	rows, err := rt.DB.Query(ctx, `
 		SELECT
 			r.id, r.alias, r.strategy, r.enabled, r.created_at, r.updated_at,
-			t.id, t.provider, t.base_url, t.api_key_env, t.model, t.upstream_api,
+			t.id, t.provider, t.base_url, COALESCE(t.auth_mode, ''), COALESCE(t.api_key_env, ''), COALESCE(t.cookie_env, ''), COALESCE(t.custom_header_envs, '[]'::jsonb),
+			t.model, t.upstream_api,
 			COALESCE(t.reasoning_effort, ''), COALESCE(t.organization_env, ''), COALESCE(t.project_env, ''),
 			t.timeout_seconds, t.weight, t.priority, t.enabled,
 			t.input_price_per_million_micros, t.output_price_per_million_micros
@@ -287,6 +402,23 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 		WHERE r.workspace_id = $1 `+enabledClause+`
 		ORDER BY r.alias ASC, t.priority ASC, t.created_at ASC
 	`, util.MustParseUUID(workspaceID))
+	legacyColumns := false
+	if err != nil && isAIGatewayAuthModeColumnError(err) {
+		legacyColumns = true
+		rows, err = rt.DB.Query(ctx, `
+			SELECT
+				r.id, r.alias, r.strategy, r.enabled, r.created_at, r.updated_at,
+				t.id, t.provider, t.base_url, COALESCE(t.api_key_env, ''),
+				t.model, t.upstream_api,
+				COALESCE(t.reasoning_effort, ''), COALESCE(t.organization_env, ''), COALESCE(t.project_env, ''),
+				t.timeout_seconds, t.weight, t.priority, t.enabled,
+				t.input_price_per_million_micros, t.output_price_per_million_micros
+			FROM ai_gateway_route r
+			JOIN ai_gateway_route_target t ON t.route_id = r.id
+			WHERE r.workspace_id = $1 `+enabledClause+`
+			ORDER BY r.alias ASC, t.priority ASC, t.created_at ASC
+		`, util.MustParseUUID(workspaceID))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -297,15 +429,33 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 	for rows.Next() {
 		var routeID, targetID pgtype.UUID
 		var createdAt, updatedAt pgtype.Timestamptz
+		var customHeaderEnvs []byte
 		var route Route
 		var target Target
-		if err := rows.Scan(
-			&routeID, &route.Alias, &route.Strategy, &route.Enabled, &createdAt, &updatedAt,
-			&targetID, &target.Provider, &target.BaseURL, &target.APIKeyEnv, &target.Model, &target.UpstreamAPI,
-			&target.ReasoningEffort, &target.OrganizationEnv, &target.ProjectEnv, &target.TimeoutSeconds, &target.Weight, &target.Priority, &target.Enabled,
-			&target.InputPricePerMillionMicros, &target.OutputPricePerMillionMicros,
-		); err != nil {
-			return nil, err
+		if legacyColumns {
+			target.AuthMode = AuthModeAPIKey
+			if err := rows.Scan(
+				&routeID, &route.Alias, &route.Strategy, &route.Enabled, &createdAt, &updatedAt,
+				&targetID, &target.Provider, &target.BaseURL, &target.APIKeyEnv, &target.Model, &target.UpstreamAPI,
+				&target.ReasoningEffort, &target.OrganizationEnv, &target.ProjectEnv, &target.TimeoutSeconds, &target.Weight, &target.Priority, &target.Enabled,
+				&target.InputPricePerMillionMicros, &target.OutputPricePerMillionMicros,
+			); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := rows.Scan(
+				&routeID, &route.Alias, &route.Strategy, &route.Enabled, &createdAt, &updatedAt,
+				&targetID, &target.Provider, &target.BaseURL, &target.AuthMode, &target.APIKeyEnv, &target.CookieEnv, &customHeaderEnvs, &target.Model, &target.UpstreamAPI,
+				&target.ReasoningEffort, &target.OrganizationEnv, &target.ProjectEnv, &target.TimeoutSeconds, &target.Weight, &target.Priority, &target.Enabled,
+				&target.InputPricePerMillionMicros, &target.OutputPricePerMillionMicros,
+			); err != nil {
+				return nil, err
+			}
+			if len(customHeaderEnvs) > 0 && string(customHeaderEnvs) != "null" {
+				if err := json.Unmarshal(customHeaderEnvs, &target.CustomHeaderEnvs); err != nil {
+					return nil, fmt.Errorf("decode ai gateway custom_header_envs: %w", err)
+				}
+			}
 		}
 		route.ID = util.UUIDToString(routeID)
 		route.CreatedAt = util.TimestampToString(createdAt)
@@ -320,6 +470,16 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 		}
 	}
 	return routes, rows.Err()
+}
+
+func isAIGatewayAuthModeColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "auth_mode") ||
+		strings.Contains(msg, "cookie_env") ||
+		strings.Contains(msg, "custom_header_envs")
 }
 
 func (rt *Runtime) Models(w http.ResponseWriter, r *http.Request) {
@@ -365,6 +525,65 @@ func (rt *Runtime) Models(w http.ResponseWriter, r *http.Request) {
 		"object": "list",
 		"data":   data,
 	})
+}
+
+type UpstreamAuth struct {
+	Headers http.Header
+}
+
+func ResolveUpstreamAuth(target Target) (UpstreamAuth, error) {
+	headers := make(http.Header)
+	switch normalizeAuthMode(target.AuthMode) {
+	case AuthModeAPIKey:
+		if err := validateEnvName(target.APIKeyEnv); err != nil {
+			return UpstreamAuth{}, err
+		}
+		apiKey := envValue(target.APIKeyEnv)
+		if apiKey == "" {
+			return UpstreamAuth{}, fmt.Errorf("environment variable %s is not set", target.APIKeyEnv)
+		}
+		headers.Set("Authorization", "Bearer "+apiKey)
+		if target.OrganizationEnv != "" {
+			if err := validateEnvName(target.OrganizationEnv); err != nil {
+				return UpstreamAuth{}, fmt.Errorf("organization_env is invalid: %w", err)
+			}
+		}
+		if org := envValue(target.OrganizationEnv); org != "" {
+			headers.Set("OpenAI-Organization", org)
+		}
+		if target.ProjectEnv != "" {
+			if err := validateEnvName(target.ProjectEnv); err != nil {
+				return UpstreamAuth{}, fmt.Errorf("project_env is invalid: %w", err)
+			}
+		}
+		if project := envValue(target.ProjectEnv); project != "" {
+			headers.Set("OpenAI-Project", project)
+		}
+	case AuthModeCustomHeadersCookie:
+		if target.CookieEnv != "" {
+			if err := validateEnvName(target.CookieEnv); err != nil {
+				return UpstreamAuth{}, err
+			}
+			cookieValue := envValue(target.CookieEnv)
+			if cookieValue == "" {
+				return UpstreamAuth{}, fmt.Errorf("environment variable %s is not set", target.CookieEnv)
+			}
+			headers.Set("Cookie", cookieValue)
+		}
+		if len(target.CustomHeaderEnvs) == 0 && target.CookieEnv == "" {
+			return UpstreamAuth{}, errors.New("cookie_env or custom_header_envs is required")
+		}
+		for _, item := range target.CustomHeaderEnvs {
+			value := envValue(item.EnvName)
+			if value == "" {
+				return UpstreamAuth{}, fmt.Errorf("environment variable %s is not set", item.EnvName)
+			}
+			headers.Set(http.CanonicalHeaderKey(item.HeaderName), value)
+		}
+	default:
+		return UpstreamAuth{}, fmt.Errorf("unsupported auth_mode %q", target.AuthMode)
+	}
+	return UpstreamAuth{Headers: headers}, nil
 }
 
 func modelListItem(model string) map[string]any {
@@ -507,9 +726,9 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 		return
 	}
 	for _, target := range targets {
-		apiKey := os.Getenv(target.APIKeyEnv)
-		if apiKey == "" {
-			lastErr = "upstream API key env is not set"
+		auth, err := ResolveUpstreamAuth(target)
+		if err != nil {
+			lastErr = err.Error()
 			continue
 		}
 		targetModel := target.Model
@@ -541,7 +760,7 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 			Target:             forwardTarget,
 			TargetModel:        targetModel,
 			PreviousResponseID: previousResponseID,
-			APIKey:             apiKey,
+			AuthHeaders:        auth.Headers,
 			Body:               upstreamBody,
 			Stream:             stream,
 		})
@@ -877,7 +1096,7 @@ type ForwardRequest struct {
 	TargetModel        string
 	PreviousResponseID string
 	ResponseSessionID  string
-	APIKey             string
+	AuthHeaders        http.Header
 	Body               []byte
 	Stream             bool
 }
@@ -909,18 +1128,16 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 		})
 		return http.StatusBadGateway, true, err.Error()
 	}
-	upstreamReq.Header.Set("Authorization", "Bearer "+req.APIKey)
+	for key, values := range req.AuthHeaders {
+		for _, value := range values {
+			upstreamReq.Header.Add(key, value)
+		}
+	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept-Encoding", "identity")
 	upstreamReq.Header.Set("Accept", r.Header.Get("Accept"))
 	if upstreamReq.Header.Get("Accept") == "" {
 		upstreamReq.Header.Set("Accept", "application/json")
-	}
-	if org := envValue(req.Target.OrganizationEnv); org != "" {
-		upstreamReq.Header.Set("OpenAI-Organization", org)
-	}
-	if project := envValue(req.Target.ProjectEnv); project != "" {
-		upstreamReq.Header.Set("OpenAI-Project", project)
 	}
 
 	start := time.Now()
@@ -1724,6 +1941,9 @@ var defaultModelPricing = map[string]defaultUsagePricing{
 }
 
 func effectiveUsagePricing(target Target, targetModel string) defaultUsagePricing {
+	if normalizeAuthMode(target.AuthMode) == AuthModeCustomHeadersCookie {
+		return defaultUsagePricing{}
+	}
 	pricing, _ := resolveDefaultModelPricing(targetModel, target.Model)
 	if target.InputPricePerMillionMicros > 0 {
 		pricing.InputPricePerMillionMicros = target.InputPricePerMillionMicros
@@ -2001,7 +2221,7 @@ func (rt *Runtime) repriceLongContextSession(ctx context.Context, sessionID stri
 		return
 	}
 	rows, err := rt.DB.Query(ctx, `
-		SELECT id, COALESCE(upstream_model, ''), prompt_tokens, completion_tokens, cached_input_tokens
+		SELECT id, COALESCE(auth_mode, ''), COALESCE(upstream_model, ''), prompt_tokens, completion_tokens, cached_input_tokens
 		FROM ai_gateway_usage
 		WHERE response_session_id = $1
 	`, sessionID)
@@ -2017,10 +2237,14 @@ func (rt *Runtime) repriceLongContextSession(ctx context.Context, sessionID stri
 	updates := []update{}
 	for rows.Next() {
 		var id pgtype.UUID
+		var authMode string
 		var model string
 		var promptTokens, completionTokens, cachedInputTokens int64
-		if err := rows.Scan(&id, &model, &promptTokens, &completionTokens, &cachedInputTokens); err != nil {
+		if err := rows.Scan(&id, &authMode, &model, &promptTokens, &completionTokens, &cachedInputTokens); err != nil {
 			return
+		}
+		if normalizeAuthMode(authMode) == AuthModeCustomHeadersCookie {
+			continue
 		}
 		pricing, ok := resolveDefaultModelPricing(model)
 		if !ok || pricing.LongInputPricePerMillionMicros == 0 || pricing.LongOutputPricePerMillionMicros == 0 {
@@ -2081,49 +2305,131 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 	billableInputTokens := breakdown.BillableInputTokens
 	cachedInputTokens := breakdown.CachedInputTokens
 	reasoningEffort := strings.TrimSpace(record.Target.ReasoningEffort)
-	_, err := rt.DB.Exec(ctx, `
-		INSERT INTO ai_gateway_usage (
-			virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
-			upstream_provider, upstream_model, reasoning_effort, status_code, prompt_tokens,
-			completion_tokens, total_tokens, latency_ms, error,
-			input_cost_micros, output_cost_micros, total_cost_micros,
-			cached_input_tokens, billable_input_tokens, reasoning_tokens, long_context,
-			cached_input_cost_micros, response_id, previous_response_id, response_session_id
+	authMode := normalizeAuthMode(record.Target.AuthMode)
+	insertUsageWithResponseSession := func(includeAuthMode bool) error {
+		if includeAuthMode {
+			_, err := rt.DB.Exec(ctx, `
+				INSERT INTO ai_gateway_usage (
+					virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
+					upstream_provider, upstream_model, auth_mode, reasoning_effort, status_code, prompt_tokens,
+					completion_tokens, total_tokens, latency_ms, error,
+					input_cost_micros, output_cost_micros, total_cost_micros,
+					cached_input_tokens, billable_input_tokens, reasoning_tokens, long_context,
+					cached_input_cost_micros, response_id, previous_response_id, response_session_id
+				)
+				VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, $15, NULLIF($16, ''), $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+			`,
+				util.MustParseUUID(record.Key.ID),
+				util.MustParseUUID(record.Key.WorkspaceID),
+				record.RequestID,
+				record.CallerID,
+				record.Endpoint,
+				record.ModelAlias,
+				record.Target.Provider,
+				record.TargetModel,
+				authMode,
+				reasoningEffort,
+				int32(record.StatusCode),
+				record.PromptTokens,
+				record.CompletionTokens,
+				record.TotalTokens,
+				record.LatencyMs,
+				errText,
+				inputCost,
+				outputCost,
+				totalCost,
+				cachedInputTokens,
+				billableInputTokens,
+				record.ReasoningTokens,
+				breakdown.LongContext,
+				breakdown.CachedInputCostMicros,
+				record.ResponseID,
+				record.PreviousResponseID,
+				record.ResponseSessionID,
+			)
+			return err
+		}
+		_, err := rt.DB.Exec(ctx, `
+			INSERT INTO ai_gateway_usage (
+				virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
+				upstream_provider, upstream_model, reasoning_effort, status_code, prompt_tokens,
+				completion_tokens, total_tokens, latency_ms, error,
+				input_cost_micros, output_cost_micros, total_cost_micros,
+				cached_input_tokens, billable_input_tokens, reasoning_tokens, long_context,
+				cached_input_cost_micros, response_id, previous_response_id, response_session_id
+			)
+			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+		`,
+			util.MustParseUUID(record.Key.ID),
+			util.MustParseUUID(record.Key.WorkspaceID),
+			record.RequestID,
+			record.CallerID,
+			record.Endpoint,
+			record.ModelAlias,
+			record.Target.Provider,
+			record.TargetModel,
+			reasoningEffort,
+			int32(record.StatusCode),
+			record.PromptTokens,
+			record.CompletionTokens,
+			record.TotalTokens,
+			record.LatencyMs,
+			errText,
+			inputCost,
+			outputCost,
+			totalCost,
+			cachedInputTokens,
+			billableInputTokens,
+			record.ReasoningTokens,
+			breakdown.LongContext,
+			breakdown.CachedInputCostMicros,
+			record.ResponseID,
+			record.PreviousResponseID,
+			record.ResponseSessionID,
 		)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
-	`,
-		util.MustParseUUID(record.Key.ID),
-		util.MustParseUUID(record.Key.WorkspaceID),
-		record.RequestID,
-		record.CallerID,
-		record.Endpoint,
-		record.ModelAlias,
-		record.Target.Provider,
-		record.TargetModel,
-		reasoningEffort,
-		int32(record.StatusCode),
-		record.PromptTokens,
-		record.CompletionTokens,
-		record.TotalTokens,
-		record.LatencyMs,
-		errText,
-		inputCost,
-		outputCost,
-		totalCost,
-		cachedInputTokens,
-		billableInputTokens,
-		record.ReasoningTokens,
-		breakdown.LongContext,
-		breakdown.CachedInputCostMicros,
-		record.ResponseID,
-		record.PreviousResponseID,
-		record.ResponseSessionID,
-	)
-	if err == nil && breakdown.LongContext && record.ResponseSessionID != "" {
-		rt.repriceLongContextSession(ctx, record.ResponseSessionID)
+		return err
 	}
-	if err != nil && isResponseSessionUsageInsertError(err) {
-		_, err = rt.DB.Exec(ctx, `
+	insertUsageLegacyResponseSession := func(includeAuthMode bool) error {
+		if includeAuthMode {
+			_, err := rt.DB.Exec(ctx, `
+				INSERT INTO ai_gateway_usage (
+					virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
+					upstream_provider, upstream_model, auth_mode, reasoning_effort, status_code, prompt_tokens,
+					completion_tokens, total_tokens, latency_ms, error,
+					input_cost_micros, output_cost_micros, total_cost_micros,
+					cached_input_tokens, billable_input_tokens, reasoning_tokens, long_context,
+					cached_input_cost_micros
+				)
+				VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, $15, NULLIF($16, ''), $17, $18, $19, $20, $21, $22, $23, $24)
+			`,
+				util.MustParseUUID(record.Key.ID),
+				util.MustParseUUID(record.Key.WorkspaceID),
+				record.RequestID,
+				record.CallerID,
+				record.Endpoint,
+				record.ModelAlias,
+				record.Target.Provider,
+				record.TargetModel,
+				authMode,
+				reasoningEffort,
+				int32(record.StatusCode),
+				record.PromptTokens,
+				record.CompletionTokens,
+				record.TotalTokens,
+				record.LatencyMs,
+				errText,
+				inputCost,
+				outputCost,
+				totalCost,
+				cachedInputTokens,
+				billableInputTokens,
+				record.ReasoningTokens,
+				breakdown.LongContext,
+				breakdown.CachedInputCostMicros,
+			)
+			return err
+		}
+		_, err := rt.DB.Exec(ctx, `
 			INSERT INTO ai_gateway_usage (
 				virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
 				upstream_provider, upstream_model, reasoning_effort, status_code, prompt_tokens,
@@ -2158,6 +2464,19 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 			breakdown.LongContext,
 			breakdown.CachedInputCostMicros,
 		)
+		return err
+	}
+	includeAuthMode := true
+	err := insertUsageWithResponseSession(includeAuthMode)
+	if err != nil && isAIGatewayAuthModeColumnError(err) {
+		includeAuthMode = false
+		err = insertUsageWithResponseSession(includeAuthMode)
+	}
+	if err == nil && breakdown.LongContext && record.ResponseSessionID != "" {
+		rt.repriceLongContextSession(ctx, record.ResponseSessionID)
+	}
+	if err != nil && isResponseSessionUsageInsertError(err) {
+		err = insertUsageLegacyResponseSession(includeAuthMode)
 	}
 	if err != nil && isLegacyUsageInsertError(err) {
 		_, _ = rt.DB.Exec(ctx, `
@@ -2193,7 +2512,8 @@ func isResponseSessionUsageInsertError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "response_id") ||
 		strings.Contains(msg, "previous_response_id") ||
-		strings.Contains(msg, "response_session_id")
+		strings.Contains(msg, "response_session_id") ||
+		strings.Contains(msg, "auth_mode")
 }
 
 func isLegacyUsageInsertError(err error) bool {
@@ -2205,6 +2525,7 @@ func isLegacyUsageInsertError(err error) bool {
 		"reasoning_effort",
 		"input_cost_micros",
 		"cached_input_tokens",
+		"auth_mode",
 		"response_id",
 		"response_session_id",
 	} {

@@ -17,6 +17,25 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+func hasAIGatewayUsageAuthModeColumn(t *testing.T) bool {
+	t.Helper()
+	if testPool == nil {
+		return false
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_name = 'ai_gateway_usage'
+			  AND column_name = 'auth_mode'
+		)
+	`).Scan(&exists); err != nil {
+		t.Fatalf("check ai_gateway_usage.auth_mode column: %v", err)
+	}
+	return exists
+}
+
 func TestLoadAIGatewayRoutesFromEnvParsesFallbackTargets(t *testing.T) {
 	t.Setenv("AI_GATEWAY_ROUTES", `[
 		{
@@ -307,6 +326,79 @@ func TestListAIGatewayUsagePaginatesRecentRowsOnly(t *testing.T) {
 	}
 	if !oldExists {
 		t.Fatal("old usage row should be retained for aggregate reporting")
+	}
+}
+
+func TestListAIGatewayUsageDoesNotEstimateCustomHeadersCookieCosts(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	if !hasAIGatewayUsageAuthModeColumn(t) {
+		t.Skip("ai_gateway_usage.auth_mode column not migrated in test database")
+	}
+	_, keyID := createAIGatewayTestKey(t)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_usage WHERE virtual_key_id = $1`, keyID)
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_virtual_key WHERE id = $1`, keyID)
+	})
+
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO ai_gateway_usage (
+			virtual_key_id, workspace_id, request_id, endpoint, model_alias,
+			upstream_provider, upstream_model, auth_mode, status_code, prompt_tokens,
+			completion_tokens, total_tokens, total_cost_micros, latency_ms, created_at
+		)
+		VALUES ($1, $2, 'usage-cookie-auth', '/responses', 'team-agent', 'openai', 'gpt-5.5', 'custom_headers_cookie', 200, 120, 8, 128, 0, 15, now())
+	`, keyID, testWorkspaceID); err != nil {
+		t.Fatalf("insert custom auth usage: %v", err)
+	}
+
+	req := newRequest(http.MethodGet, "/api/ai-gateway/usage?limit=10", nil)
+	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{}))
+	rec := httptest.NewRecorder()
+	testHandler.ListAIGatewayUsage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("usage: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var usage []aiGatewayUsageResponse
+	if err := json.NewDecoder(rec.Body).Decode(&usage); err != nil {
+		t.Fatalf("decode usage: %v", err)
+	}
+	foundUsage := false
+	for _, item := range usage {
+		if item.RequestID == "usage-cookie-auth" {
+			foundUsage = true
+			if item.TotalCostMicros != 0 {
+				t.Fatalf("custom header/cookie usage should stay zero-cost, got %+v", item)
+			}
+		}
+	}
+	if !foundUsage {
+		t.Fatalf("usage did not include custom auth row: %+v", usage)
+	}
+
+	summaryReq := newRequest(http.MethodGet, "/api/ai-gateway/usage/summary?days=30", nil)
+	summaryReq = summaryReq.WithContext(middleware.SetMemberContext(summaryReq.Context(), testWorkspaceID, db.Member{}))
+	summaryRec := httptest.NewRecorder()
+	testHandler.ListAIGatewayUsageSummary(summaryRec, summaryReq)
+	if summaryRec.Code != http.StatusOK {
+		t.Fatalf("summary: expected 200, got %d: %s", summaryRec.Code, summaryRec.Body.String())
+	}
+	var summary []aiGatewayUsageSummaryResponse
+	if err := json.NewDecoder(summaryRec.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	foundSummary := false
+	for _, item := range summary {
+		if item.KeyName == "proxy-test" && item.Model == "gpt-5.5" {
+			foundSummary = true
+			if item.TotalCostMicros != 0 {
+				t.Fatalf("custom header/cookie summary should stay zero-cost, got %+v", item)
+			}
+		}
+	}
+	if !foundSummary {
+		t.Fatalf("summary did not include custom auth row: %+v", summary)
 	}
 }
 
@@ -776,6 +868,75 @@ func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("summary did not include caller_id alice@example.com: %+v", summary)
+	}
+}
+
+func TestAIGatewayProxyResponsesUsesCustomHeadersCookieAuth(t *testing.T) {
+	t.Setenv("AI_GATEWAY_CHATGPT_COOKIE_MAIN", "__Secure-next-auth.session-token=abc")
+	t.Setenv("AI_GATEWAY_CHATGPT_HEADER_TOKEN", "header-token")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("caller Authorization should not be forwarded, got %q", got)
+		}
+		if got := r.Header.Get("Cookie"); got != "__Secure-next-auth.session-token=abc" {
+			t.Fatalf("upstream cookie auth: %q", got)
+		}
+		if got := r.Header.Get("X-Test-Token"); got != "header-token" {
+			t.Fatalf("upstream custom header auth: %q", got)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":     "resp_cookie_auth",
+			"object": "response",
+			"usage": map[string]any{
+				"input_tokens":  4,
+				"output_tokens": 2,
+				"total_tokens":  6,
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("AI_GATEWAY_ROUTES", fmt.Sprintf(`[
+		{"alias":"team-agent","targets":[{"provider":"test","base_url":%q,"auth_mode":"custom_headers_cookie","cookie_env":"AI_GATEWAY_CHATGPT_COOKIE_MAIN","custom_header_envs":[{"header_name":"X-Test-Token","env_name":"AI_GATEWAY_CHATGPT_HEADER_TOKEN"}],"model":"gpt-5.5","upstream_api":"responses"}]}
+	]`, upstream.URL))
+
+	rawToken, keyID := createAIGatewayTestKey(t)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_usage WHERE virtual_key_id = $1`, keyID)
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_virtual_key WHERE id = $1`, keyID)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"team-agent","input":"hello"}`))
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	req.Header.Set("Cookie", "spoof=1")
+	req.Header.Set("X-Test-Token", "spoof")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	testHandler.AIGatewayResponses(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if !hasAIGatewayUsageAuthModeColumn(t) {
+		t.Skip("ai_gateway_usage.auth_mode column not migrated in test database")
+	}
+	var authMode string
+	var totalCostMicros int64
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COALESCE(auth_mode, ''), total_cost_micros
+		FROM ai_gateway_usage
+		WHERE virtual_key_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, keyID).Scan(&authMode, &totalCostMicros); err != nil {
+		t.Fatalf("load usage row: %v", err)
+	}
+	if authMode != "custom_headers_cookie" {
+		t.Fatalf("auth_mode: want custom_headers_cookie, got %q", authMode)
+	}
+	if totalCostMicros != 0 {
+		t.Fatalf("custom header/cookie mode should not auto-price, got %d", totalCostMicros)
 	}
 }
 

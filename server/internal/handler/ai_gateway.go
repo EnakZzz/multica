@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/mail"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,21 +72,24 @@ type aiGatewayRouteResponse struct {
 }
 
 type aiGatewayTargetResponse struct {
-	ID                          string `json:"id"`
-	Provider                    string `json:"provider"`
-	BaseURL                     string `json:"base_url"`
-	APIKeyEnv                   string `json:"api_key_env"`
-	Model                       string `json:"model"`
-	UpstreamAPI                 string `json:"upstream_api"`
-	ReasoningEffort             string `json:"reasoning_effort,omitempty"`
-	OrganizationEnv             string `json:"organization_env,omitempty"`
-	ProjectEnv                  string `json:"project_env,omitempty"`
-	TimeoutSeconds              int    `json:"timeout_seconds"`
-	Weight                      int    `json:"weight"`
-	Priority                    int    `json:"priority"`
-	Enabled                     bool   `json:"enabled"`
-	InputPricePerMillionMicros  int64  `json:"input_price_per_million_micros"`
-	OutputPricePerMillionMicros int64  `json:"output_price_per_million_micros"`
+	ID                          string                      `json:"id"`
+	Provider                    string                      `json:"provider"`
+	BaseURL                     string                      `json:"base_url"`
+	AuthMode                    string                      `json:"auth_mode,omitempty"`
+	APIKeyEnv                   string                      `json:"api_key_env"`
+	CookieEnv                   string                      `json:"cookie_env,omitempty"`
+	CustomHeaderEnvs            []aigateway.CustomHeaderEnv `json:"custom_header_envs,omitempty"`
+	Model                       string                      `json:"model"`
+	UpstreamAPI                 string                      `json:"upstream_api"`
+	ReasoningEffort             string                      `json:"reasoning_effort,omitempty"`
+	OrganizationEnv             string                      `json:"organization_env,omitempty"`
+	ProjectEnv                  string                      `json:"project_env,omitempty"`
+	TimeoutSeconds              int                         `json:"timeout_seconds"`
+	Weight                      int                         `json:"weight"`
+	Priority                    int                         `json:"priority"`
+	Enabled                     bool                        `json:"enabled"`
+	InputPricePerMillionMicros  int64                       `json:"input_price_per_million_micros"`
+	OutputPricePerMillionMicros int64                       `json:"output_price_per_million_micros"`
 }
 
 type saveAIGatewayRouteRequest struct {
@@ -98,28 +100,34 @@ type saveAIGatewayRouteRequest struct {
 }
 
 type saveAIGatewayRouteTargetForm struct {
-	ID                          string `json:"id,omitempty"`
-	Provider                    string `json:"provider"`
-	BaseURL                     string `json:"base_url"`
-	APIKeyEnv                   string `json:"api_key_env"`
-	Model                       string `json:"model"`
-	UpstreamAPI                 string `json:"upstream_api"`
-	ReasoningEffort             string `json:"reasoning_effort,omitempty"`
-	OrganizationEnv             string `json:"organization_env,omitempty"`
-	ProjectEnv                  string `json:"project_env,omitempty"`
-	TimeoutSeconds              int    `json:"timeout_seconds,omitempty"`
-	Weight                      int    `json:"weight,omitempty"`
-	Priority                    int    `json:"priority,omitempty"`
-	Enabled                     *bool  `json:"enabled,omitempty"`
-	InputPricePerMillionMicros  int64  `json:"input_price_per_million_micros,omitempty"`
-	OutputPricePerMillionMicros int64  `json:"output_price_per_million_micros,omitempty"`
+	ID                          string                      `json:"id,omitempty"`
+	Provider                    string                      `json:"provider"`
+	BaseURL                     string                      `json:"base_url"`
+	AuthMode                    string                      `json:"auth_mode,omitempty"`
+	APIKeyEnv                   string                      `json:"api_key_env"`
+	CookieEnv                   string                      `json:"cookie_env,omitempty"`
+	CustomHeaderEnvs            []aigateway.CustomHeaderEnv `json:"custom_header_envs,omitempty"`
+	Model                       string                      `json:"model"`
+	UpstreamAPI                 string                      `json:"upstream_api"`
+	ReasoningEffort             string                      `json:"reasoning_effort,omitempty"`
+	OrganizationEnv             string                      `json:"organization_env,omitempty"`
+	ProjectEnv                  string                      `json:"project_env,omitempty"`
+	TimeoutSeconds              int                         `json:"timeout_seconds,omitempty"`
+	Weight                      int                         `json:"weight,omitempty"`
+	Priority                    int                         `json:"priority,omitempty"`
+	Enabled                     *bool                       `json:"enabled,omitempty"`
+	InputPricePerMillionMicros  int64                       `json:"input_price_per_million_micros,omitempty"`
+	OutputPricePerMillionMicros int64                       `json:"output_price_per_million_micros,omitempty"`
 }
 
 type aiGatewayProbeRequest struct {
-	BaseURL   string `json:"base_url"`
-	APIKeyEnv string `json:"api_key_env,omitempty"`
-	APIKey    string `json:"api_key,omitempty"`
-	Model     string `json:"model,omitempty"`
+	BaseURL          string                      `json:"base_url"`
+	AuthMode         string                      `json:"auth_mode,omitempty"`
+	APIKeyEnv        string                      `json:"api_key_env,omitempty"`
+	APIKey           string                      `json:"api_key,omitempty"`
+	CookieEnv        string                      `json:"cookie_env,omitempty"`
+	CustomHeaderEnvs []aigateway.CustomHeaderEnv `json:"custom_header_envs,omitempty"`
+	Model            string                      `json:"model,omitempty"`
 }
 
 type aiGatewayProbeResponse struct {
@@ -533,36 +541,53 @@ func (h *Handler) ProbeAIGatewayProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	req.BaseURL = strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	req.AuthMode = strings.TrimSpace(req.AuthMode)
 	req.APIKeyEnv = strings.TrimSpace(req.APIKeyEnv)
 	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.CookieEnv = strings.TrimSpace(req.CookieEnv)
 	req.Model = strings.TrimSpace(req.Model)
 	if req.BaseURL == "" {
 		writeError(w, http.StatusBadRequest, "base_url is required")
 		return
 	}
-	apiKey := req.APIKey
-	if apiKey == "" && req.APIKeyEnv != "" {
-		apiKey = os.Getenv(req.APIKeyEnv)
+	target := aigateway.Target{
+		BaseURL:          req.BaseURL,
+		AuthMode:         req.AuthMode,
+		APIKeyEnv:        req.APIKeyEnv,
+		CookieEnv:        req.CookieEnv,
+		CustomHeaderEnvs: req.CustomHeaderEnvs,
 	}
-	if apiKey == "" {
-		apiKey = "invalid-token"
+	authHeaders := make(http.Header)
+	if req.APIKey != "" {
+		authHeaders.Set("Authorization", "Bearer "+req.APIKey)
+	} else {
+		auth, err := aigateway.ResolveUpstreamAuth(target)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		authHeaders = auth.Headers
 	}
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp := aiGatewayProbeResponse{BaseURL: req.BaseURL}
-	resp.ModelsEndpoint, resp.Models = probeAIGatewayModels(r.Context(), client, req.BaseURL, apiKey)
+	resp.ModelsEndpoint, resp.Models = probeAIGatewayModels(r.Context(), client, req.BaseURL, authHeaders)
 	resp.Authenticated = resp.ModelsEndpoint.OK
-	resp.Responses = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/responses", apiKey, req.Model, "responses")
-	resp.ChatCompletions = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/chat/completions", apiKey, req.Model, "chat_completions")
-	resp.AnthropicMessages = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/messages", apiKey, req.Model, "anthropic_messages")
+	resp.Responses = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/responses", authHeaders, req.Model, "responses")
+	resp.ChatCompletions = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/chat/completions", authHeaders, req.Model, "chat_completions")
+	resp.AnthropicMessages = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/messages", authHeaders, req.Model, "anthropic_messages")
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func probeAIGatewayModels(ctx context.Context, client *http.Client, baseURL, apiKey string) (aiGatewayProbeEndpoint, []aiGatewayProbeModelInfo) {
+func probeAIGatewayModels(ctx context.Context, client *http.Client, baseURL string, authHeaders http.Header) (aiGatewayProbeEndpoint, []aiGatewayProbeModelInfo) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
 		return aiGatewayProbeEndpoint{Error: err.Error()}, nil
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	for key, values := range authHeaders {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
+	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return aiGatewayProbeEndpoint{Error: err.Error()}, nil
@@ -597,7 +622,7 @@ func probeAIGatewayModels(ctx context.Context, client *http.Client, baseURL, api
 	return endpoint, models
 }
 
-func probeAIGatewayJSONEndpoint(ctx context.Context, client *http.Client, url, apiKey, model, kind string) aiGatewayProbeEndpoint {
+func probeAIGatewayJSONEndpoint(ctx context.Context, client *http.Client, url string, authHeaders http.Header, model, kind string) aiGatewayProbeEndpoint {
 	var body string
 	switch kind {
 	case "responses":
@@ -623,8 +648,11 @@ func probeAIGatewayJSONEndpoint(ctx context.Context, client *http.Client, url, a
 	if err != nil {
 		return aiGatewayProbeEndpoint{Error: err.Error()}
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("x-api-key", apiKey)
+	for key, values := range authHeaders {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
+	}
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(httpReq)
@@ -750,6 +778,7 @@ func (h *Handler) ListAIGatewayUsage(w http.ResponseWriter, r *http.Request) {
 			u.model_alias,
 			u.upstream_provider,
 			u.upstream_model,
+			COALESCE(u.auth_mode, ''),
 			COALESCE(u.reasoning_effort, ''),
 			u.status_code,
 			u.prompt_tokens,
@@ -766,6 +795,37 @@ func (h *Handler) ListAIGatewayUsage(w http.ResponseWriter, r *http.Request) {
 		ORDER BY u.created_at DESC
 		LIMIT $2 OFFSET $3
 	`, parseUUID(workspaceID), limit, offset)
+	legacyColumns := false
+	if err != nil && isAIGatewayAuthModeColumnError(err) {
+		legacyColumns = true
+		rows, err = h.DB.Query(r.Context(), `
+			SELECT
+				u.id,
+				COALESCE(k.token_prefix, ''),
+				COALESCE(k.name, ''),
+				COALESCE(u.caller_id, ''),
+				u.request_id,
+				u.endpoint,
+				u.model_alias,
+				u.upstream_provider,
+				u.upstream_model,
+				COALESCE(u.reasoning_effort, ''),
+				u.status_code,
+				u.prompt_tokens,
+				u.completion_tokens,
+				u.total_tokens,
+				u.total_cost_micros,
+				u.latency_ms,
+				COALESCE(u.error, ''),
+				u.created_at
+			FROM ai_gateway_usage u
+			LEFT JOIN ai_gateway_virtual_key k ON k.id = u.virtual_key_id
+			WHERE u.workspace_id = $1
+			  AND u.created_at >= now() - interval '1 day'
+			ORDER BY u.created_at DESC
+			LIMIT $2 OFFSET $3
+		`, parseUUID(workspaceID), limit, offset)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage")
 		return
@@ -776,33 +836,62 @@ func (h *Handler) ListAIGatewayUsage(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id pgtype.UUID
 		var createdAt pgtype.Timestamptz
+		var authMode string
 		var item aiGatewayUsageResponse
-		if err := rows.Scan(
-			&id,
-			&item.KeyPrefix,
-			&item.KeyName,
-			&item.CallerID,
-			&item.RequestID,
-			&item.Endpoint,
-			&item.ModelAlias,
-			&item.UpstreamProvider,
-			&item.UpstreamModel,
-			&item.ReasoningEffort,
-			&item.StatusCode,
-			&item.PromptTokens,
-			&item.CompletionTokens,
-			&item.TotalTokens,
-			&item.TotalCostMicros,
-			&item.LatencyMs,
-			&item.Error,
-			&createdAt,
-		); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage")
-			return
+		if legacyColumns {
+			authMode = aigateway.AuthModeAPIKey
+			if err := rows.Scan(
+				&id,
+				&item.KeyPrefix,
+				&item.KeyName,
+				&item.CallerID,
+				&item.RequestID,
+				&item.Endpoint,
+				&item.ModelAlias,
+				&item.UpstreamProvider,
+				&item.UpstreamModel,
+				&item.ReasoningEffort,
+				&item.StatusCode,
+				&item.PromptTokens,
+				&item.CompletionTokens,
+				&item.TotalTokens,
+				&item.TotalCostMicros,
+				&item.LatencyMs,
+				&item.Error,
+				&createdAt,
+			); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage")
+				return
+			}
+		} else {
+			if err := rows.Scan(
+				&id,
+				&item.KeyPrefix,
+				&item.KeyName,
+				&item.CallerID,
+				&item.RequestID,
+				&item.Endpoint,
+				&item.ModelAlias,
+				&item.UpstreamProvider,
+				&item.UpstreamModel,
+				&authMode,
+				&item.ReasoningEffort,
+				&item.StatusCode,
+				&item.PromptTokens,
+				&item.CompletionTokens,
+				&item.TotalTokens,
+				&item.TotalCostMicros,
+				&item.LatencyMs,
+				&item.Error,
+				&createdAt,
+			); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage")
+				return
+			}
 		}
 		item.ID = uuidToString(id)
 		item.CreatedAt = timestampToString(createdAt)
-		if item.TotalCostMicros == 0 {
+		if item.TotalCostMicros == 0 && shouldEstimateAIGatewayUsageCost(authMode) {
 			item.TotalCostMicros = aigateway.EstimateUsageCostMicros(item.UpstreamModel, item.PromptTokens, item.CompletionTokens)
 		}
 		resp = append(resp, item)
@@ -912,6 +1001,20 @@ func aiGatewayUsageModelLabel(model string) string {
 	return model
 }
 
+func shouldEstimateAIGatewayUsageCost(authMode string) bool {
+	return strings.TrimSpace(authMode) != aigateway.AuthModeCustomHeadersCookie
+}
+
+func isAIGatewayAuthModeColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "auth_mode") ||
+		strings.Contains(msg, "cookie_env") ||
+		strings.Contains(msg, "custom_header_envs")
+}
+
 func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID string, days int32) ([]aiGatewayUsageSummaryResponse, error) {
 	rows, err := h.DB.Query(ctx, `
 		SELECT
@@ -939,6 +1042,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 			COALESCE(SUM(u.latency_ms), 0)::bigint,
 			MAX(u.created_at),
 			COALESCE(u.upstream_model, ''),
+			COALESCE(u.auth_mode, ''),
 			COUNT(*) FILTER (WHERE u.long_context)::bigint
 		FROM ai_gateway_usage u
 		LEFT JOIN ai_gateway_virtual_key k ON k.id = u.virtual_key_id
@@ -951,9 +1055,55 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 			k.token_prefix,
 			creator.name,
 			creator.email,
-			COALESCE(u.upstream_model, '')
+			COALESCE(u.upstream_model, ''),
+			COALESCE(u.auth_mode, '')
 		ORDER BY COALESCE(SUM(u.total_tokens), 0) DESC, COUNT(*) DESC
 	`, parseUUID(workspaceID), days)
+	legacyColumns := false
+	if err != nil && isAIGatewayAuthModeColumnError(err) {
+		legacyColumns = true
+		rows, err = h.DB.Query(ctx, `
+			SELECT
+				COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown') AS caller_id,
+				COALESCE(k.name, ''),
+				COALESCE(k.token_prefix, ''),
+				COALESCE(creator.name, ''),
+				COALESCE(creator.email, ''),
+				COUNT(*)::bigint,
+				COUNT(*) FILTER (WHERE u.status_code < 400)::bigint,
+				COUNT(*) FILTER (WHERE u.status_code >= 400)::bigint,
+				COALESCE(SUM(u.prompt_tokens), 0)::bigint,
+				COALESCE(SUM(u.completion_tokens), 0)::bigint,
+				COALESCE(SUM(u.cached_input_tokens), 0)::bigint,
+				COALESCE(SUM(u.billable_input_tokens), 0)::bigint,
+				COALESCE(SUM(u.reasoning_tokens), 0)::bigint,
+				COALESCE(SUM(u.total_tokens), 0)::bigint,
+				COALESCE(SUM(u.input_cost_micros), 0)::bigint,
+				COALESCE(SUM(u.cached_input_cost_micros), 0)::bigint,
+				COALESCE(SUM(u.output_cost_micros), 0)::bigint,
+				COALESCE(SUM(u.total_cost_micros), 0)::bigint,
+				COALESCE(SUM(u.prompt_tokens) FILTER (WHERE u.total_cost_micros = 0), 0)::bigint,
+				COALESCE(SUM(u.completion_tokens) FILTER (WHERE u.total_cost_micros = 0), 0)::bigint,
+				COALESCE(SUM(u.cached_input_tokens) FILTER (WHERE u.total_cost_micros = 0), 0)::bigint,
+				COALESCE(SUM(u.latency_ms), 0)::bigint,
+				MAX(u.created_at),
+				COALESCE(u.upstream_model, ''),
+				COUNT(*) FILTER (WHERE u.long_context)::bigint
+			FROM ai_gateway_usage u
+			LEFT JOIN ai_gateway_virtual_key k ON k.id = u.virtual_key_id
+			LEFT JOIN "user" creator ON creator.id = k.created_by
+			WHERE u.workspace_id = $1
+			  AND u.created_at >= now() - ($2::int * interval '1 day')
+			GROUP BY
+				COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown'),
+				k.name,
+				k.token_prefix,
+				creator.name,
+				creator.email,
+				COALESCE(u.upstream_model, '')
+			ORDER BY COALESCE(SUM(u.total_tokens), 0) DESC, COUNT(*) DESC
+		`, parseUUID(workspaceID), days)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -970,42 +1120,78 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 		var row aiGatewayUsageSummaryResponse
 		var lastRequestAt pgtype.Timestamptz
 		var zeroCostPromptTokens, zeroCostCompletionTokens, zeroCostCachedInputTokens, latencySum int64
-		var upstreamModel string
-		if err := rows.Scan(
-			&row.CallerID,
-			&row.KeyName,
-			&row.KeyPrefix,
-			&row.CreatedByName,
-			&row.CreatedByEmail,
-			&row.RequestCount,
-			&row.SuccessCount,
-			&row.ErrorCount,
-			&row.PromptTokens,
-			&row.CompletionTokens,
-			&row.CachedInputTokens,
-			&row.BillableInputTokens,
-			&row.ReasoningTokens,
-			&row.TotalTokens,
-			&row.InputCostMicros,
-			&row.CachedInputCostMicros,
-			&row.OutputCostMicros,
-			&row.TotalCostMicros,
-			&zeroCostPromptTokens,
-			&zeroCostCompletionTokens,
-			&zeroCostCachedInputTokens,
-			&latencySum,
-			&lastRequestAt,
-			&upstreamModel,
-			&row.LongContextRequestCount,
-		); err != nil {
-			return nil, err
+		var upstreamModel, authMode string
+		if legacyColumns {
+			authMode = aigateway.AuthModeAPIKey
+			if err := rows.Scan(
+				&row.CallerID,
+				&row.KeyName,
+				&row.KeyPrefix,
+				&row.CreatedByName,
+				&row.CreatedByEmail,
+				&row.RequestCount,
+				&row.SuccessCount,
+				&row.ErrorCount,
+				&row.PromptTokens,
+				&row.CompletionTokens,
+				&row.CachedInputTokens,
+				&row.BillableInputTokens,
+				&row.ReasoningTokens,
+				&row.TotalTokens,
+				&row.InputCostMicros,
+				&row.CachedInputCostMicros,
+				&row.OutputCostMicros,
+				&row.TotalCostMicros,
+				&zeroCostPromptTokens,
+				&zeroCostCompletionTokens,
+				&zeroCostCachedInputTokens,
+				&latencySum,
+				&lastRequestAt,
+				&upstreamModel,
+				&row.LongContextRequestCount,
+			); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := rows.Scan(
+				&row.CallerID,
+				&row.KeyName,
+				&row.KeyPrefix,
+				&row.CreatedByName,
+				&row.CreatedByEmail,
+				&row.RequestCount,
+				&row.SuccessCount,
+				&row.ErrorCount,
+				&row.PromptTokens,
+				&row.CompletionTokens,
+				&row.CachedInputTokens,
+				&row.BillableInputTokens,
+				&row.ReasoningTokens,
+				&row.TotalTokens,
+				&row.InputCostMicros,
+				&row.CachedInputCostMicros,
+				&row.OutputCostMicros,
+				&row.TotalCostMicros,
+				&zeroCostPromptTokens,
+				&zeroCostCompletionTokens,
+				&zeroCostCachedInputTokens,
+				&latencySum,
+				&lastRequestAt,
+				&upstreamModel,
+				&authMode,
+				&row.LongContextRequestCount,
+			); err != nil {
+				return nil, err
+			}
 		}
-		estimated := aigateway.EstimateUsageCostBreakdown(upstreamModel, zeroCostPromptTokens, zeroCostCompletionTokens, zeroCostCachedInputTokens)
 		row.Model = aiGatewayUsageModelLabel(upstreamModel)
-		row.InputCostMicros += estimated.InputCostMicros
-		row.CachedInputCostMicros += estimated.CachedInputCostMicros
-		row.OutputCostMicros += estimated.OutputCostMicros
-		row.TotalCostMicros += estimated.TotalCostMicros
+		if shouldEstimateAIGatewayUsageCost(authMode) {
+			estimated := aigateway.EstimateUsageCostBreakdown(upstreamModel, zeroCostPromptTokens, zeroCostCompletionTokens, zeroCostCachedInputTokens)
+			row.InputCostMicros += estimated.InputCostMicros
+			row.CachedInputCostMicros += estimated.CachedInputCostMicros
+			row.OutputCostMicros += estimated.OutputCostMicros
+			row.TotalCostMicros += estimated.TotalCostMicros
+		}
 		if row.BillableInputTokens == 0 && row.PromptTokens > 0 {
 			row.BillableInputTokens = row.PromptTokens - row.CachedInputTokens
 			if row.BillableInputTokens < 0 {
@@ -1167,7 +1353,10 @@ func normalizeAIGatewayRouteRequest(req saveAIGatewayRouteRequest) (aiGatewayRou
 			ID:                          strings.TrimSpace(raw.ID),
 			Provider:                    strings.TrimSpace(raw.Provider),
 			BaseURL:                     strings.TrimRight(strings.TrimSpace(raw.BaseURL), "/"),
+			AuthMode:                    strings.TrimSpace(raw.AuthMode),
 			APIKeyEnv:                   strings.TrimSpace(raw.APIKeyEnv),
+			CookieEnv:                   strings.TrimSpace(raw.CookieEnv),
+			CustomHeaderEnvs:            raw.CustomHeaderEnvs,
 			Model:                       strings.TrimSpace(raw.Model),
 			UpstreamAPI:                 strings.TrimSpace(raw.UpstreamAPI),
 			ReasoningEffort:             strings.TrimSpace(raw.ReasoningEffort),
@@ -1183,29 +1372,8 @@ func normalizeAIGatewayRouteRequest(req saveAIGatewayRouteRequest) (aiGatewayRou
 		if target.Provider == "" {
 			target.Provider = "openai-compatible"
 		}
-		if target.BaseURL == "" {
-			return aiGatewayRoute{}, fmt.Errorf("target %d base_url is required", i)
-		}
-		if target.APIKeyEnv == "" {
-			return aiGatewayRoute{}, fmt.Errorf("target %d api_key_env is required", i)
-		}
-		if target.Model == "" && route.Alias != "*" {
-			return aiGatewayRoute{}, fmt.Errorf("target %d model is required", i)
-		}
-		if target.UpstreamAPI == "" {
-			target.UpstreamAPI = "responses"
-		}
-		if target.UpstreamAPI != "responses" && target.UpstreamAPI != "chat_completions" {
-			return aiGatewayRoute{}, fmt.Errorf("target %d upstream_api is unsupported", i)
-		}
 		if target.ReasoningEffort != "" && !isAIGatewayReasoningEffort(target.ReasoningEffort) {
 			return aiGatewayRoute{}, fmt.Errorf("target %d reasoning_effort is unsupported", i)
-		}
-		if target.TimeoutSeconds <= 0 {
-			target.TimeoutSeconds = 60
-		}
-		if target.Weight <= 0 {
-			target.Weight = 1
 		}
 		if raw.Enabled != nil {
 			target.Enabled = *raw.Enabled
@@ -1215,7 +1383,11 @@ func normalizeAIGatewayRouteRequest(req saveAIGatewayRouteRequest) (aiGatewayRou
 		}
 		route.Targets = append(route.Targets, target)
 	}
-	return route, nil
+	routes, err := normalizeAIGatewayRoutes([]aiGatewayRoute{route})
+	if err != nil {
+		return aiGatewayRoute{}, err
+	}
+	return routes[0], nil
 }
 
 func insertAIGatewayRouteTarget(ctx context.Context, db dbExecutor, routeID pgtype.UUID, target aiGatewayTarget, fallbackPriority int) error {
@@ -1223,16 +1395,36 @@ func insertAIGatewayRouteTarget(ctx context.Context, db dbExecutor, routeID pgty
 	if priority == 0 {
 		priority = fallbackPriority
 	}
+	customHeaderEnvs := []byte("[]")
+	if len(target.CustomHeaderEnvs) > 0 {
+		data, err := json.Marshal(target.CustomHeaderEnvs)
+		if err != nil {
+			return fmt.Errorf("marshal custom_header_envs: %w", err)
+		}
+		customHeaderEnvs = data
+	}
 	_, err := db.Exec(ctx, `
 		INSERT INTO ai_gateway_route_target (
-			route_id, provider, base_url, api_key_env, model, upstream_api,
+			route_id, provider, base_url, auth_mode, api_key_env, cookie_env, custom_header_envs, model, upstream_api,
 			reasoning_effort, organization_env, project_env, timeout_seconds, weight, priority, enabled,
 			input_price_per_million_micros, output_price_per_million_micros
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), $10, $11, $12, $13, $14, $15)
-	`, routeID, target.Provider, target.BaseURL, target.APIKeyEnv, target.Model, target.UpstreamAPI,
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7::jsonb, $8, $9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), $13, $14, $15, $16, $17, $18)
+	`, routeID, target.Provider, target.BaseURL, target.AuthMode, target.APIKeyEnv, target.CookieEnv, string(customHeaderEnvs), target.Model, target.UpstreamAPI,
 		target.ReasoningEffort, target.OrganizationEnv, target.ProjectEnv, target.TimeoutSeconds, target.Weight, priority, target.Enabled,
 		target.InputPricePerMillionMicros, target.OutputPricePerMillionMicros)
+	if err != nil && isAIGatewayAuthModeColumnError(err) {
+		_, err = db.Exec(ctx, `
+			INSERT INTO ai_gateway_route_target (
+				route_id, provider, base_url, api_key_env, model, upstream_api,
+				reasoning_effort, organization_env, project_env, timeout_seconds, weight, priority, enabled,
+				input_price_per_million_micros, output_price_per_million_micros
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), $10, $11, $12, $13, $14, $15)
+		`, routeID, target.Provider, target.BaseURL, target.APIKeyEnv, target.Model, target.UpstreamAPI,
+			target.ReasoningEffort, target.OrganizationEnv, target.ProjectEnv, target.TimeoutSeconds, target.Weight, priority, target.Enabled,
+			target.InputPricePerMillionMicros, target.OutputPricePerMillionMicros)
+	}
 	return err
 }
 
@@ -1253,7 +1445,10 @@ func aiGatewayRoutesToResponse(routes []aiGatewayRoute) []aiGatewayRouteResponse
 				ID:                          target.ID,
 				Provider:                    target.Provider,
 				BaseURL:                     target.BaseURL,
+				AuthMode:                    target.AuthMode,
 				APIKeyEnv:                   target.APIKeyEnv,
+				CookieEnv:                   target.CookieEnv,
+				CustomHeaderEnvs:            target.CustomHeaderEnvs,
 				Model:                       target.Model,
 				UpstreamAPI:                 target.UpstreamAPI,
 				ReasoningEffort:             target.ReasoningEffort,

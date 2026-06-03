@@ -102,6 +102,57 @@ func TestEffectiveUsagePricingAllowsTargetOverrides(t *testing.T) {
 	}
 }
 
+func TestEffectiveUsagePricingDisablesEstimationForCustomHeadersCookie(t *testing.T) {
+	got := effectiveUsagePricing(Target{
+		AuthMode: AuthModeCustomHeadersCookie,
+		Model:    "gpt-5.5",
+	}, "")
+	if got != (defaultUsagePricing{}) {
+		t.Fatalf("custom header/cookie mode should not auto-price, got %+v", got)
+	}
+}
+
+func TestResolveUpstreamAuthSupportsCustomHeadersCookie(t *testing.T) {
+	t.Setenv("AI_GATEWAY_COOKIE", "__Secure-next-auth.session-token=abc")
+	t.Setenv("AI_GATEWAY_HEADER_TOKEN", "header-token")
+	auth, err := ResolveUpstreamAuth(Target{
+		AuthMode:  AuthModeCustomHeadersCookie,
+		CookieEnv: "AI_GATEWAY_COOKIE",
+		CustomHeaderEnvs: []CustomHeaderEnv{{
+			HeaderName: "X-Test-Token",
+			EnvName:    "AI_GATEWAY_HEADER_TOKEN",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ResolveUpstreamAuth: %v", err)
+	}
+	if got := auth.Headers.Get("Cookie"); got != "__Secure-next-auth.session-token=abc" {
+		t.Fatalf("Cookie header = %q", got)
+	}
+	if got := auth.Headers.Get("X-Test-Token"); got != "header-token" {
+		t.Fatalf("X-Test-Token header = %q", got)
+	}
+	if got := auth.Headers.Get("Authorization"); got != "" {
+		t.Fatalf("Authorization should not be set, got %q", got)
+	}
+}
+
+func TestNormalizeRoutesRejectsMixedAuthModeFields(t *testing.T) {
+	_, err := NormalizeRoutes([]Route{{
+		Alias: "team-agent",
+		Targets: []Target{{
+			Provider:  "test",
+			BaseURL:   "https://example.com/v1",
+			AuthMode:  AuthModeCustomHeadersCookie,
+			APIKeyEnv: "OPENAI_API_KEY",
+			Model:     "gpt-5.5",
+		}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "cannot set api_key_env") {
+		t.Fatalf("expected mixed auth_mode validation error, got %v", err)
+	}
+}
+
 func TestParseUsageIncludesCacheAndReasoningDetails(t *testing.T) {
 	usage := ParseUsage([]byte(`{
 		"usage": {
