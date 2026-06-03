@@ -135,8 +135,12 @@ async function refreshContext(): Promise<{
   const projects = selectedWorkspace
     ? normalizeProjects((await apiFetch<{ projects: StoredProject[] }>(ctx, "/api/projects?", {}, selectedWorkspace.slug)).projects)
     : [];
-  if (nextConfig.projectId && !findSelectedProject(projects, nextConfig.projectId)) {
-    nextConfig = await saveConfig({ ...nextConfig, projectId: "" });
+  if (selectedWorkspace) {
+    const selectedProject = findSelectedProject(projects, nextConfig.projectId);
+    const nextProjectId = selectedProject?.id ?? projects[0]?.id ?? "";
+    if (nextProjectId !== nextConfig.projectId) {
+      nextConfig = await saveConfig({ ...nextConfig, projectId: nextProjectId });
+    }
   }
   return { workspaces, projects, config: nextConfig };
 }

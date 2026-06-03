@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "package": "pnpm run build && powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-extension.ps1",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

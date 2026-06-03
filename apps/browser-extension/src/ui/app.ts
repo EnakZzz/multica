@@ -15,7 +15,7 @@ interface ViewRefs {
   status: HTMLElement;
   login: HTMLButtonElement;
   refresh: HTMLButtonElement;
-  save: HTMLButtonElement;
+  save?: HTMLButtonElement;
   start?: HTMLButtonElement;
   logout?: HTMLButtonElement;
 }
@@ -36,6 +36,11 @@ function option(value: string, label: string) {
 function setStatus(refs: ViewRefs, message: string, error = false) {
   refs.status.textContent = message;
   refs.status.style.color = error ? "#b91c1c" : "#4b5563";
+}
+
+function setSignedIn(refs: ViewRefs, signedIn: boolean) {
+  refs.login.hidden = signedIn;
+  if (refs.logout) refs.logout.hidden = !signedIn;
 }
 
 function renderSelects(refs: ViewRefs, context: ContextResponse) {
@@ -71,9 +76,11 @@ async function saveFromControls(refs: ViewRefs): Promise<ExtensionConfig> {
   });
 }
 
-async function refresh(refs: ViewRefs) {
+async function refresh(refs: ViewRefs, options: { saveControls?: boolean } = {}) {
   setStatus(refs, "Refreshing...");
-  await saveFromControls(refs);
+  if (options.saveControls ?? true) {
+    await saveFromControls(refs);
+  }
   const context = await send<ContextResponse>({ type: "REFRESH_CONTEXT" });
   renderSelects(refs, context);
   setStatus(refs, "Workspace and project list refreshed.");
@@ -83,8 +90,9 @@ export async function mountReviewExtensionUi(refs: ViewRefs) {
   try {
     const state = await send<{ config: ExtensionConfig; hasToken: boolean }>({ type: "GET_STATE" });
     refs.serverUrl.value = state.config.serverUrl;
+    setSignedIn(refs, state.hasToken);
     if (state.hasToken) {
-      await refresh(refs);
+      await refresh(refs, { saveControls: false });
     } else {
       refs.workspace.append(option("", "Sign in first"));
       refs.project.append(option("", "Sign in first"));
@@ -101,8 +109,9 @@ export async function mountReviewExtensionUi(refs: ViewRefs) {
         type: "START_AUTH",
         serverUrl: refs.serverUrl.value,
       });
+      setSignedIn(refs, state.hasToken);
       if (state.hasToken) {
-        await refresh(refs);
+        await refresh(refs, { saveControls: false });
         setStatus(refs, "Signed in.");
       } else {
         setStatus(refs, "Login tab opened. After signing in, reopen this panel and refresh.");
@@ -125,12 +134,21 @@ export async function mountReviewExtensionUi(refs: ViewRefs) {
     });
   });
 
-  refs.save.addEventListener("click", async () => {
+  refs.project.addEventListener("change", async () => {
     try {
       await saveFromControls(refs);
-      setStatus(refs, "Saved.");
+      setStatus(refs, "Project saved.");
     } catch (err) {
-      setStatus(refs, err instanceof Error ? err.message : "Save failed", true);
+      setStatus(refs, err instanceof Error ? err.message : "Project save failed", true);
+    }
+  });
+
+  refs.serverUrl.addEventListener("blur", async () => {
+    try {
+      await saveFromControls(refs);
+      setStatus(refs, "Settings saved.");
+    } catch (err) {
+      setStatus(refs, err instanceof Error ? err.message : "Settings save failed", true);
     }
   });
 
@@ -148,6 +166,7 @@ export async function mountReviewExtensionUi(refs: ViewRefs) {
   refs.logout?.addEventListener("click", async () => {
     try {
       await send({ type: "LOGOUT" });
+      setSignedIn(refs, false);
       refs.workspace.replaceChildren(option("", "Sign in first"));
       refs.project.replaceChildren(option("", "Sign in first"));
       setStatus(refs, "Signed out.");

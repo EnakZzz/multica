@@ -7,6 +7,5 @@ void mountReviewExtensionUi({
   status: document.querySelector<HTMLElement>("#status")!,
   login: document.querySelector<HTMLButtonElement>("#login")!,
   refresh: document.querySelector<HTMLButtonElement>("#refresh")!,
-  save: document.querySelector<HTMLButtonElement>("#save")!,
   logout: document.querySelector<HTMLButtonElement>("#logout")!,
 });
