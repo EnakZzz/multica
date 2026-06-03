@@ -16,7 +16,12 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multica/ui/components/ui/tooltip";
 
 const WORKSPACE_SLUG = "local-agents";
-const DAY_OPTIONS = [7, 30, 90] as const;
+const DAY_OPTIONS = [
+  { value: 1, label: "当天" },
+  { value: 7, label: "7 天" },
+  { value: 30, label: "30 天" },
+  { value: 90, label: "90 天" },
+] as const;
 
 interface AIGatewayReportRow {
   email: string;
@@ -41,7 +46,8 @@ interface AIGatewayReportRow {
 
 const PRICING_HINTS = {
   model: "按实际上游模型字段分组展示。字段不同就会自然拆开，例如 gpt-5.5 和 gpt-5.4。",
-  input: "标准 GPT-5.5：输入 $5 / 1M tokens；缓存输入单独按 $0.50 / 1M tokens 计费。",
+  rawInput: "审计口径。Prompt Total / Raw Input Total = 原始输入总 tokens，包含后续命中的缓存输入和实际计费输入。",
+  input: "计费口径。这里展示 billable input tokens，不含缓存命中的部分。标准 GPT-5.5：输入 $5 / 1M tokens。",
   cachedInput: "缓存命中的输入 tokens。标准 GPT-5.5 缓存输入 $0.50 / 1M tokens；长上下文请求不再单独拆缓存价。",
   output: "标准 GPT-5.5：输出 $30 / 1M tokens；reasoning tokens 按 output tokens 计费。",
   reasoning: "reasoning tokens 来自 output_tokens_details.reasoning_tokens，已包含在输出计费里，这里单独展示便于核对。",
@@ -147,7 +153,7 @@ export default function AIGatewayReportPage() {
         (acc, item) => {
           acc.requests += item.request_count;
           acc.errors += item.error_count;
-          acc.inputTokens += item.input_tokens;
+          acc.rawInputTokens += item.input_tokens;
           acc.cachedInputTokens += item.cached_input_tokens;
           acc.billableInputTokens += item.billable_input_tokens;
           acc.outputTokens += item.output_tokens;
@@ -163,7 +169,7 @@ export default function AIGatewayReportPage() {
         {
           requests: 0,
           errors: 0,
-          inputTokens: 0,
+          rawInputTokens: 0,
           cachedInputTokens: 0,
           billableInputTokens: 0,
           outputTokens: 0,
@@ -180,7 +186,8 @@ export default function AIGatewayReportPage() {
   );
 
   const totalTokens = formatCompactNumber(totals.tokens);
-  const inputTokens = formatCompactNumber(totals.inputTokens);
+  const rawInputTokens = formatCompactNumber(totals.rawInputTokens);
+  const inputTokens = formatCompactNumber(totals.billableInputTokens);
   const outputTokens = formatCompactNumber(totals.outputTokens);
   const cachedTokens = formatCompactNumber(totals.cachedInputTokens);
   const reasoningTokens = formatCompactNumber(totals.reasoningTokens);
@@ -198,17 +205,17 @@ export default function AIGatewayReportPage() {
             <h1 className="mt-1 text-xl font-semibold tracking-normal">AI 网关按人统计</h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex rounded-lg border bg-background p-0.5">
+              <div className="flex rounded-lg border bg-background p-0.5">
               {DAY_OPTIONS.map((option) => (
                 <Button
-                  key={option}
+                  key={option.value}
                   type="button"
                   size="sm"
-                  variant={days === option ? "secondary" : "ghost"}
-                  onClick={() => setDays(option)}
+                  variant={days === option.value ? "secondary" : "ghost"}
+                  onClick={() => setDays(option.value)}
                   className="h-7"
                 >
-                  {option} 天
+                  {option.label}
                 </Button>
               ))}
             </div>
@@ -234,10 +241,11 @@ export default function AIGatewayReportPage() {
         </section>
 
         <section className="grid gap-3 md:grid-cols-2">
-          <Card size="sm" className="rounded-lg">
+            <Card size="sm" className="rounded-lg">
             <CardContent>
               <div className="mb-3 text-xs font-medium text-muted-foreground">Token 明细</div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                <MiniMetric label="Prompt Total" value={rawInputTokens.value} unit={rawInputTokens.unit || "tokens"} tooltip={PRICING_HINTS.rawInput} />
                 <MiniMetric label="输入" value={inputTokens.value} unit={inputTokens.unit || "tokens"} tooltip={PRICING_HINTS.input} />
                 <MiniMetric label="缓存输入" value={cachedTokens.value} unit={cachedTokens.unit || "tokens"} tooltip={PRICING_HINTS.cachedInput} />
                 <MiniMetric label="输出" value={outputTokens.value} unit={outputTokens.unit || "tokens"} tooltip={PRICING_HINTS.output} />
@@ -286,6 +294,7 @@ export default function AIGatewayReportPage() {
                     <TableHead><HeaderWithTooltip label="模型" tooltip={PRICING_HINTS.model} /></TableHead>
                     <TableHead className="text-right">请求</TableHead>
                     <TableHead className="text-right">错误</TableHead>
+                    <TableHead className="text-right"><HeaderWithTooltip label="Prompt Total" tooltip={PRICING_HINTS.rawInput} align="right" /></TableHead>
                     <TableHead className="text-right"><HeaderWithTooltip label="输入" tooltip={PRICING_HINTS.input} align="right" /></TableHead>
                     <TableHead className="text-right"><HeaderWithTooltip label="缓存" tooltip={PRICING_HINTS.cachedInput} align="right" /></TableHead>
                     <TableHead className="text-right"><HeaderWithTooltip label="输出" tooltip={PRICING_HINTS.output} align="right" /></TableHead>
@@ -308,6 +317,7 @@ export default function AIGatewayReportPage() {
                       <TableCell className="text-right">{formatNumber(item.request_count)}</TableCell>
                       <TableCell className="text-right">{formatNumber(item.error_count)}</TableCell>
                       <TableCell className="text-right">{formatCompactNumberText(item.input_tokens)}</TableCell>
+                      <TableCell className="text-right">{formatCompactNumberText(item.billable_input_tokens)}</TableCell>
                       <TableCell className="text-right">{formatCompactNumberText(item.cached_input_tokens)}</TableCell>
                       <TableCell className="text-right">{formatCompactNumberText(item.output_tokens)}</TableCell>
                       <TableCell className="text-right">{formatCompactNumberText(item.reasoning_tokens)}</TableCell>
