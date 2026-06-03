@@ -123,8 +123,15 @@ func main() {
 	if os.Getenv("JWT_SECRET") == "" {
 		slog.Warn("JWT_SECRET is not set — using insecure default. Set JWT_SECRET for production use.")
 	}
-	if os.Getenv("RESEND_API_KEY") == "" && strings.TrimSpace(os.Getenv("SMTP_HOST")) == "" {
-		slog.Warn("no email backend configured (RESEND_API_KEY and SMTP_HOST both empty) — verification codes will be printed to the log instead of emailed.")
+	if strings.TrimSpace(os.Getenv("FEISHU_APP_ID")) == "" &&
+		os.Getenv("RESEND_API_KEY") == "" &&
+		strings.TrimSpace(os.Getenv("SMTP_HOST")) == "" {
+		slog.Warn("no verification-code delivery backend configured (FEISHU_APP_ID, RESEND_API_KEY, and SMTP_HOST all empty) — verification codes will be printed to the log instead.")
+	}
+	if strings.TrimSpace(os.Getenv("FEISHU_APP_ID")) != "" &&
+		os.Getenv("RESEND_API_KEY") == "" &&
+		strings.TrimSpace(os.Getenv("SMTP_HOST")) == "" {
+		slog.Warn("Feishu verification-code delivery is configured without an email fallback (RESEND_API_KEY or SMTP_HOST). Login code delivery will fail if Feishu permissions or message delivery fail.")
 	}
 	if os.Getenv("MULTICA_DEV_VERIFICATION_CODE") != "" {
 		if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production") {
@@ -254,7 +261,11 @@ func main() {
 	// so subscribers must be written first within the same synchronous event dispatch.
 	registerSubscriberListeners(bus, queries)
 	registerActivityListeners(bus, queries)
-	registerNotificationListeners(bus, queries)
+	feishuIssueSvc := service.NewFeishuIssueServiceFromEnv(queries, pool)
+	if feishuIssueSvc != nil {
+		slog.Info("Feishu issue notifications enabled")
+	}
+	registerNotificationListeners(bus, queries, feishuIssueSvc)
 
 	metricsConfig := obsmetrics.ConfigFromEnv()
 	var metricsServer *http.Server

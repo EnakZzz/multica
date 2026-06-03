@@ -2067,6 +2067,68 @@ type UpdateIssueRequest struct {
 	AttachmentIDs []string `json:"attachment_ids"`
 }
 
+func (h *Handler) updateIssueStatusForMember(ctx context.Context, prevIssue db.Issue, userID, status string) (IssueResponse, error) {
+	if status == "" {
+		return IssueResponse{}, handlerStatusError{Status: http.StatusBadRequest, Message: "status is required"}
+	}
+	workspaceID := uuidToString(prevIssue.WorkspaceID)
+	if _, err := h.getWorkspaceMember(ctx, userID, workspaceID); err != nil {
+		return IssueResponse{}, handlerStatusError{Status: http.StatusForbidden, Message: "workspace member required"}
+	}
+	if prevIssue.Status == status {
+		prefix := h.getIssuePrefix(ctx, prevIssue.WorkspaceID)
+		return issueToResponse(prevIssue, prefix), nil
+	}
+
+	issue, err := h.Queries.UpdateIssue(ctx, db.UpdateIssueParams{
+		ID:            prevIssue.ID,
+		Status:        pgtype.Text{String: status, Valid: true},
+		AssigneeType:  prevIssue.AssigneeType,
+		AssigneeID:    prevIssue.AssigneeID,
+		StartDate:     prevIssue.StartDate,
+		DueDate:       prevIssue.DueDate,
+		ParentIssueID: prevIssue.ParentIssueID,
+		ProjectID:     prevIssue.ProjectID,
+	})
+	if err != nil {
+		return IssueResponse{}, err
+	}
+
+	prefix := h.getIssuePrefix(ctx, issue.WorkspaceID)
+	resp := issueToResponse(issue, prefix)
+	h.publish(protocol.EventIssueUpdated, workspaceID, "member", userID, map[string]any{
+		"issue":               resp,
+		"assignee_changed":    false,
+		"status_changed":      true,
+		"priority_changed":    false,
+		"start_date_changed":  false,
+		"due_date_changed":    false,
+		"description_changed": false,
+		"title_changed":       false,
+		"prev_title":          prevIssue.Title,
+		"prev_assignee_type":  textToPtr(prevIssue.AssigneeType),
+		"prev_assignee_id":    uuidToPtr(prevIssue.AssigneeID),
+		"prev_status":         prevIssue.Status,
+		"prev_priority":       prevIssue.Priority,
+		"prev_start_date":     timestampToPtr(prevIssue.StartDate),
+		"prev_due_date":       timestampToPtr(prevIssue.DueDate),
+		"prev_description":    textToPtr(prevIssue.Description),
+		"creator_type":        prevIssue.CreatorType,
+		"creator_id":          uuidToString(prevIssue.CreatorID),
+	})
+
+	if prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" {
+		h.enqueueAssignedIssueTask(ctx, issue, parseUUID(userID))
+	}
+	if issue.Status == "cancelled" {
+		h.TaskService.CancelTasksForIssue(ctx, issue.ID)
+	}
+	if issue.Status == "done" {
+		h.enqueueUnblockedIssueTasks(ctx, issue.ID)
+	}
+	return resp, nil
+}
+
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	prevIssue, ok := h.loadIssueForUser(w, r, id)

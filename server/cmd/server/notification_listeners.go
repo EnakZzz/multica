@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -18,7 +20,6 @@ type mention struct {
 	Type string // "member", "agent", "issue", or "all"
 	ID   string // user_id, agent_id, issue_id, or "all"
 }
-
 
 // statusLabels maps DB status values to human-readable labels for notifications.
 var statusLabels = map[string]string{
@@ -56,6 +57,21 @@ func priorityLabel(p string) string {
 
 var emptyDetails = []byte("{}")
 
+var feishuIssueNotifications *service.FeishuIssueService
+
+func deliverFeishuIssueCard(item db.InboxItem, issueStatus string) {
+	svc := feishuIssueNotifications
+	if svc == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		err := svc.SendInboxCard(ctx, item, issueStatus)
+		svc.LogSendFailure(err, item)
+	}()
+}
+
 // parseMentions extracts mentions from markdown content.
 // Delegates to the shared util.ParseMentions and converts to the local type.
 func parseMentions(content string) []mention {
@@ -78,19 +94,19 @@ var parentBubbleNotifTypes = map[string]bool{
 // notifTypeToGroup maps each InboxItemType to a user-configurable preference
 // group. Types not in this map are always delivered (not configurable).
 var notifTypeToGroup = map[string]string{
-	"issue_assigned":  "assignments",
-	"unassigned":      "assignments",
-	"assignee_changed": "assignments",
-	"status_changed":  "status_changes",
-	"new_comment":     "comments",
-	"mentioned":       "comments",
-	"priority_changed": "updates",
+	"issue_assigned":     "assignments",
+	"unassigned":         "assignments",
+	"assignee_changed":   "assignments",
+	"status_changed":     "status_changes",
+	"new_comment":        "comments",
+	"mentioned":          "comments",
+	"priority_changed":   "updates",
 	"start_date_changed": "updates",
-	"due_date_changed": "updates",
-	"task_completed":  "agent_activity",
-	"task_failed":     "agent_activity",
-	"agent_blocked":   "agent_activity",
-	"agent_completed": "agent_activity",
+	"due_date_changed":   "updates",
+	"task_completed":     "agent_activity",
+	"task_failed":        "agent_activity",
+	"agent_blocked":      "agent_activity",
+	"agent_completed":    "agent_activity",
 }
 
 // isNotifMuted returns true if the given notification type is muted for a user
@@ -351,6 +367,7 @@ func notifyIssueSubscribers(
 		notified[subID] = true
 		resp := inboxItemToResponse(item)
 		resp["issue_status"] = issueStatus
+		deliverFeishuIssueCard(item, issueStatus)
 		bus.Publish(events.Event{
 			Type:        protocol.EventInboxNew,
 			WorkspaceID: workspaceID,
@@ -415,6 +432,7 @@ func notifyDirect(
 
 	resp := inboxItemToResponse(item)
 	resp["issue_status"] = issueStatus
+	deliverFeishuIssueCard(item, issueStatus)
 	bus.Publish(events.Event{
 		Type:        protocol.EventInboxNew,
 		WorkspaceID: workspaceID,
@@ -500,6 +518,7 @@ func notifyMentionedMembers(
 		}
 		resp := inboxItemToResponse(item)
 		resp["issue_status"] = issueStatus
+		deliverFeishuIssueCard(item, issueStatus)
 		bus.Publish(events.Event{
 			Type:        protocol.EventInboxNew,
 			WorkspaceID: e.WorkspaceID,
@@ -517,7 +536,10 @@ func notifyMentionedMembers(
 // NOTE: uses context.Background() because the event bus dispatches synchronously
 // within the HTTP request goroutine. Adding per-handler timeouts is a bus-level
 // concern — see events.Bus for future improvements.
-func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
+func registerNotificationListeners(bus *events.Bus, queries *db.Queries, feishu ...*service.FeishuIssueService) {
+	if len(feishu) > 0 {
+		feishuIssueNotifications = feishu[0]
+	}
 	ctx := context.Background()
 
 	// issue:created — Direct notification to assignee if assignee != actor

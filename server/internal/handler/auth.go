@@ -115,16 +115,25 @@ func generateCode() (string, error) {
 }
 
 func isDevVerificationCode(code string) bool {
-	if isProductionEnv() {
-		return false
-	}
-
-	devCode := strings.TrimSpace(os.Getenv(devVerificationCodeEnv))
-	if !isSixDigitCode(devCode) {
+	devCode, ok := configuredDevVerificationCode()
+	if !ok {
 		return false
 	}
 
 	return subtle.ConstantTimeCompare([]byte(code), []byte(devCode)) == 1
+}
+
+func configuredDevVerificationCode() (string, bool) {
+	if isProductionEnv() {
+		return "", false
+	}
+
+	devCode := strings.TrimSpace(os.Getenv(devVerificationCodeEnv))
+	if !isSixDigitCode(devCode) {
+		return "", false
+	}
+
+	return devCode, true
 }
 
 func isProductionEnv() bool {
@@ -331,6 +340,12 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store verification code")
+		return
+	}
+
+	if _, ok := configuredDevVerificationCode(); ok {
+		_ = h.Queries.DeleteExpiredVerificationCodes(r.Context())
+		writeJSON(w, http.StatusOK, map[string]string{"message": "Verification code sent"})
 		return
 	}
 

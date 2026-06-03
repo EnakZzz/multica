@@ -1,15 +1,22 @@
 package service
 
 import (
+	"bytes"
+	"context"
 	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"mime"
 	"mime/quotedprintable"
 	"net"
+	"net/http"
 	"net/smtp"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -22,6 +29,8 @@ import (
 // a full phishing pitch into a workspace name that gets sent from our domain.
 const maxSubjectFieldRunes = 60
 
+var errNoEmailBackend = errors.New("no email backend configured")
+
 type EmailService struct {
 	client          *resend.Client
 	fromEmail       string
@@ -30,6 +39,43 @@ type EmailService struct {
 	smtpUsername    string
 	smtpPassword    string
 	smtpTLSInsecure bool
+	feishu          *feishuClient
+}
+
+type feishuClient struct {
+	appID         string
+	appSecret     string
+	baseURL       string
+	receiveIDType string
+	receiveID     string
+	httpClient    *http.Client
+
+	mu          sync.Mutex
+	tenantToken string
+	tokenExpiry time.Time
+}
+
+type feishuTenantTokenResponse struct {
+	Code              int    `json:"code"`
+	Msg               string `json:"msg"`
+	TenantAccessToken string `json:"tenant_access_token"`
+	Expire            int64  `json:"expire"`
+}
+
+type feishuMessageResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+}
+
+type feishuUserIDLookupResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		UserList []struct {
+			UserID string `json:"user_id"`
+			Email  string `json:"email"`
+		} `json:"user_list"`
+	} `json:"data"`
 }
 
 func NewEmailService() *EmailService {
@@ -47,6 +93,7 @@ func NewEmailService() *EmailService {
 	smtpUsername := os.Getenv("SMTP_USERNAME")
 	smtpPassword := os.Getenv("SMTP_PASSWORD")
 	smtpTLSInsecure := os.Getenv("SMTP_TLS_INSECURE") == "true"
+	feishu := newFeishuClientFromEnv()
 
 	var client *resend.Client
 	if apiKey != "" {
@@ -54,12 +101,14 @@ func NewEmailService() *EmailService {
 	}
 
 	switch {
+	case feishu != nil:
+		fmt.Printf("EmailService: Feishu bot receive_id_type=%s\n", feishu.receiveIDType)
 	case smtpHost != "":
 		fmt.Printf("EmailService: SMTP relay %s:%s from=%s\n", smtpHost, smtpPort, from)
 	case client != nil:
 		fmt.Printf("EmailService: Resend API from=%s\n", from)
 	default:
-		fmt.Println("EmailService: DEV mode — codes printed to stdout (set MULTICA_DEV_VERIFICATION_CODE in .env for a fixed local code)")
+		fmt.Println("EmailService: DEV mode - codes printed to stdout (set MULTICA_DEV_VERIFICATION_CODE in .env for a fixed local code)")
 	}
 
 	return &EmailService{
@@ -70,7 +119,185 @@ func NewEmailService() *EmailService {
 		smtpUsername:    smtpUsername,
 		smtpPassword:    smtpPassword,
 		smtpTLSInsecure: smtpTLSInsecure,
+		feishu:          feishu,
 	}
+}
+
+func newFeishuClientFromEnv() *feishuClient {
+	appID := strings.TrimSpace(os.Getenv("FEISHU_APP_ID"))
+	appSecret := strings.TrimSpace(os.Getenv("FEISHU_APP_SECRET"))
+	if appID == "" || appSecret == "" {
+		return nil
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("FEISHU_BASE_URL")), "/")
+	if baseURL == "" {
+		baseURL = "https://open.feishu.cn"
+	}
+	receiveIDType := strings.TrimSpace(os.Getenv("FEISHU_VERIFICATION_RECEIVE_ID_TYPE"))
+	if receiveIDType == "" {
+		receiveIDType = "open_id"
+	}
+
+	return &feishuClient{
+		appID:         appID,
+		appSecret:     appSecret,
+		baseURL:       baseURL,
+		receiveIDType: receiveIDType,
+		receiveID:     strings.TrimSpace(os.Getenv("FEISHU_VERIFICATION_RECEIVE_ID")),
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
+
+func (c *feishuClient) tenantAccessToken(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	if c.tenantToken != "" && time.Now().Before(c.tokenExpiry) {
+		token := c.tenantToken
+		c.mu.Unlock()
+		return token, nil
+	}
+	c.mu.Unlock()
+
+	body, err := json.Marshal(map[string]string{
+		"app_id":     c.appID,
+		"app_secret": c.appSecret,
+	})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/open-apis/auth/v3/tenant_access_token/internal", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("feishu tenant token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var parsed feishuTenantTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("feishu tenant token decode: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || parsed.Code != 0 || parsed.TenantAccessToken == "" {
+		return "", fmt.Errorf("feishu tenant token failed: status=%d code=%d msg=%s", resp.StatusCode, parsed.Code, parsed.Msg)
+	}
+
+	expiresIn := time.Duration(parsed.Expire) * time.Second
+	if expiresIn <= time.Minute {
+		expiresIn = time.Minute
+	} else {
+		expiresIn -= time.Minute
+	}
+
+	c.mu.Lock()
+	c.tenantToken = parsed.TenantAccessToken
+	c.tokenExpiry = time.Now().Add(expiresIn)
+	c.mu.Unlock()
+
+	return parsed.TenantAccessToken, nil
+}
+
+func (c *feishuClient) openIDByEmail(ctx context.Context, token, email string) (string, error) {
+	body, err := json.Marshal(map[string][]string{
+		"emails": []string{email},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	reqURL := c.baseURL + "/open-apis/contact/v3/users/batch_get_id?user_id_type=open_id"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("feishu user lookup request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var parsed feishuUserIDLookupResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("feishu user lookup decode: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || parsed.Code != 0 {
+		return "", fmt.Errorf("feishu user lookup failed: status=%d code=%d msg=%s", resp.StatusCode, parsed.Code, parsed.Msg)
+	}
+	for _, user := range parsed.Data.UserList {
+		if strings.EqualFold(strings.TrimSpace(user.Email), email) && strings.TrimSpace(user.UserID) != "" {
+			return user.UserID, nil
+		}
+	}
+	if len(parsed.Data.UserList) == 1 && strings.TrimSpace(parsed.Data.UserList[0].UserID) != "" {
+		return parsed.Data.UserList[0].UserID, nil
+	}
+	return "", fmt.Errorf("feishu user lookup found no open_id for email %s", email)
+}
+
+func (c *feishuClient) SendVerificationCode(to, code string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	token, err := c.tenantAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	receiveIDType := c.receiveIDType
+	receiveID := c.receiveID
+	if receiveID == "" {
+		openID, err := c.openIDByEmail(ctx, token, to)
+		if err != nil {
+			return err
+		}
+		receiveID = openID
+		receiveIDType = "open_id"
+	}
+	content, err := json.Marshal(map[string]string{
+		"text": fmt.Sprintf("Multica verification code: %s\nExpires in 10 minutes.\nLogin email: %s", code, to),
+	})
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]string{
+		"receive_id": receiveID,
+		"msg_type":   "text",
+		"content":    string(content),
+	})
+	if err != nil {
+		return err
+	}
+
+	reqURL := c.baseURL + "/open-apis/im/v1/messages?receive_id_type=" + url.QueryEscape(receiveIDType)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("feishu send message request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var parsed feishuMessageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return fmt.Errorf("feishu send message decode: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || parsed.Code != 0 {
+		return fmt.Errorf("feishu send message failed: status=%d code=%d msg=%s", resp.StatusCode, parsed.Code, parsed.Msg)
+	}
+	return nil
 }
 
 // sendSMTP delivers an HTML email via an SMTP server.
@@ -165,9 +392,31 @@ func (s *EmailService) sendSMTP(to, subject, htmlBody string) error {
 	return c.Quit()
 }
 
+func (s *EmailService) hasEmailBackend() bool {
+	return s.smtpHost != "" || s.client != nil
+}
+
+func (s *EmailService) sendVerificationEmail(to, htmlBody string) error {
+	if s.smtpHost != "" {
+		return s.sendSMTP(to, "Your Multica verification code", htmlBody)
+	}
+	if s.client != nil {
+		params := &resend.SendEmailRequest{
+			From:    s.fromEmail,
+			To:      []string{to},
+			Subject: "Your Multica verification code",
+			Html:    htmlBody,
+		}
+		_, err := s.client.Emails.Send(params)
+		return err
+	}
+	return errNoEmailBackend
+}
+
 // SendVerificationCode sends a one-time login code. The code is server-generated
-// (6-digit numeric) so no user-controlled text reaches the email body here.
-// Delivery priority: SMTP relay → Resend API → DEV stdout.
+// (6-digit numeric); recipient routing still comes from the requested login email
+// unless FEISHU_VERIFICATION_RECEIVE_ID overrides it.
+// Delivery priority: Feishu bot -> SMTP relay -> Resend API -> DEV stdout.
 func (s *EmailService) SendVerificationCode(to, code string) error {
 	body := fmt.Sprintf(
 		`<div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
@@ -177,21 +426,25 @@ func (s *EmailService) SendVerificationCode(to, code string) error {
 			<p style="color: #666; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
 		</div>`, code)
 
-	if s.smtpHost != "" {
-		return s.sendSMTP(to, "Your Multica verification code", body)
-	}
-	if s.client == nil {
-		fmt.Printf("[DEV] Verification code for %s: %s\n", to, code)
+	if s.feishu != nil {
+		if err := s.feishu.SendVerificationCode(to, code); err == nil {
+			return nil
+		} else if !s.hasEmailBackend() {
+			return fmt.Errorf("feishu verification delivery failed and no email fallback is configured: %w", err)
+		} else if fallbackErr := s.sendVerificationEmail(to, body); fallbackErr != nil {
+			return fmt.Errorf("feishu verification delivery failed (%v); email fallback also failed: %w", err, fallbackErr)
+		}
 		return nil
 	}
-	params := &resend.SendEmailRequest{
-		From:    s.fromEmail,
-		To:      []string{to},
-		Subject: "Your Multica verification code",
-		Html:    body,
+
+	if err := s.sendVerificationEmail(to, body); err != nil {
+		if errors.Is(err, errNoEmailBackend) {
+			fmt.Printf("[DEV] Verification code for %s: %s\n", to, code)
+			return nil
+		}
+		return err
 	}
-	_, err := s.client.Emails.Send(params)
-	return err
+	return nil
 }
 
 // SendInvitationEmail notifies the invitee that they have been invited to a workspace.

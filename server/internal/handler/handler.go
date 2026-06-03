@@ -100,6 +100,7 @@ type Handler struct {
 	AutopilotService      *service.AutopilotService
 	ProjectKnowledge      *service.ProjectKnowledgeService
 	EmailService          *service.EmailService
+	FeishuIssues         *service.FeishuIssueService
 	UpdateStore           UpdateStore
 	ModelListStore        ModelListStore
 	LocalSkillListStore   LocalSkillListStore
@@ -136,6 +137,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	taskSvc.Analytics = analyticsClient
 	projectKnowledgeSvc := service.NewProjectKnowledgeService(queries, txStarter, nil)
 	taskSvc.ProjectKnowledge = projectKnowledgeSvc
+	feishuIssues := service.NewFeishuIssueServiceFromEnv(queries, executor)
 	return &Handler{
 		Queries:               queries,
 		DB:                    executor,
@@ -147,6 +149,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
 		ProjectKnowledge:      projectKnowledgeSvc,
 		EmailService:          emailService,
+		FeishuIssues:          feishuIssues,
 		UpdateStore:           NewInMemoryUpdateStore(),
 		ModelListStore:        NewInMemoryModelListStore(),
 		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),

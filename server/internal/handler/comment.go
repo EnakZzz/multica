@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -433,6 +434,113 @@ type CreateCommentRequest struct {
 	AttachmentIDs []string `json:"attachment_ids"`
 }
 
+type handlerStatusError struct {
+	Status  int
+	Message string
+}
+
+func (e handlerStatusError) Error() string { return e.Message }
+
+func (h *Handler) createIssueCommentForActor(ctx context.Context, issue db.Issue, req CreateCommentRequest, authorType, authorID, taskID string) (CommentResponse, error) {
+	if req.Content == "" {
+		return CommentResponse{}, handlerStatusError{Status: http.StatusBadRequest, Message: "content is required"}
+	}
+	if req.Type == "" {
+		req.Type = "comment"
+	}
+
+	var parentID pgtype.UUID
+	var parentComment *db.Comment
+	if req.ParentID != nil {
+		parsed, err := util.ParseUUID(*req.ParentID)
+		if err != nil {
+			return CommentResponse{}, handlerStatusError{Status: http.StatusBadRequest, Message: "invalid parent_id"}
+		}
+		parentID = parsed
+		parent, err := h.Queries.GetComment(ctx, parentID)
+		if err != nil || uuidToString(parent.IssueID) != uuidToString(issue.ID) {
+			return CommentResponse{}, handlerStatusError{Status: http.StatusBadRequest, Message: "invalid parent comment"}
+		}
+		parentComment = &parent
+	}
+
+	attachmentIDs := make([]pgtype.UUID, len(req.AttachmentIDs))
+	for i, id := range req.AttachmentIDs {
+		parsed, err := util.ParseUUID(id)
+		if err != nil {
+			return CommentResponse{}, handlerStatusError{Status: http.StatusBadRequest, Message: "invalid attachment_ids"}
+		}
+		attachmentIDs[i] = parsed
+	}
+
+	if authorType == "agent" && taskID != "" {
+		taskUUID, parseErr := util.ParseUUID(taskID)
+		if parseErr == nil {
+			task, err := h.Queries.GetAgentTask(ctx, taskUUID)
+			if err == nil && task.TriggerCommentID.Valid && uuidToString(task.IssueID) == uuidToString(issue.ID) {
+				if uuidToString(parentID) != uuidToString(task.TriggerCommentID) {
+					return CommentResponse{}, handlerStatusError{
+						Status:  http.StatusConflict,
+						Message: "parent_id must equal this task's trigger comment id (" + uuidToString(task.TriggerCommentID) + ")",
+					}
+				}
+			}
+		}
+	}
+
+	content := mention.ExpandIssueIdentifiers(ctx, h.Queries, issue.WorkspaceID, req.Content)
+	comment, err := h.Queries.CreateComment(ctx, db.CreateCommentParams{
+		IssueID:          issue.ID,
+		WorkspaceID:      issue.WorkspaceID,
+		AuthorType:       authorType,
+		AuthorID:         parseUUID(authorID),
+		Content:          content,
+		DisplayContentZh: pgtype.Text{},
+		Type:             req.Type,
+		ParentID:         parentID,
+	})
+	if err != nil {
+		return CommentResponse{}, err
+	}
+
+	if len(attachmentIDs) > 0 {
+		h.linkAttachmentsByIDs(ctx, comment.ID, issue.ID, attachmentIDs)
+	}
+
+	var attachments []AttachmentResponse
+	if len(attachmentIDs) > 0 {
+		rows, err := h.Queries.ListAttachmentsByComment(ctx, db.ListAttachmentsByCommentParams{
+			CommentID:   comment.ID,
+			WorkspaceID: issue.WorkspaceID,
+		})
+		if err == nil {
+			attachments = make([]AttachmentResponse, len(rows))
+			for i, attachment := range rows {
+				attachments[i] = h.attachmentToResponse(attachment)
+			}
+		}
+	}
+	resp := commentToResponse(comment, nil, attachments)
+	h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), authorType, authorID, map[string]any{
+		"comment":             resp,
+		"issue_title":         issue.Title,
+		"issue_assignee_type": textToPtr(issue.AssigneeType),
+		"issue_assignee_id":   uuidToPtr(issue.AssigneeID),
+		"issue_status":        issue.Status,
+	})
+
+	h.TaskService.AutoUnresolveThreadOnReply(ctx, parentComment, uuidToString(issue.WorkspaceID), authorType, authorID)
+	if authorType == "member" && h.shouldEnqueueOnComment(ctx, issue) &&
+		!h.commentMentionsOthersButNotAssignee(comment.Content, issue) &&
+		!h.isReplyToMemberThread(ctx, parentComment, comment.Content, issue) {
+		if _, err := h.TaskService.EnqueueTaskForIssue(ctx, issue, comment.ID); err != nil {
+			slog.Warn("enqueue agent task on comment failed", "issue_id", uuidToString(issue.ID), "error", err)
+		}
+	}
+	h.enqueueMentionedAgentTasks(ctx, issue, comment, parentComment, authorType, authorID)
+	return resp, nil
+}
+
 func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "id")
 	issue, ok := h.loadIssueForUser(w, r, issueID)
@@ -451,67 +559,8 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Content == "" {
-		writeError(w, http.StatusBadRequest, "content is required")
-		return
-	}
-	if req.Type == "" {
-		req.Type = "comment"
-	}
-
-	var parentID pgtype.UUID
-	var parentComment *db.Comment
-	if req.ParentID != nil {
-		var parsed pgtype.UUID
-		parsed, ok = parseUUIDOrBadRequest(w, *req.ParentID, "parent_id")
-		if !ok {
-			return
-		}
-		parentID = parsed
-		parent, err := h.Queries.GetComment(r.Context(), parentID)
-		if err != nil || uuidToString(parent.IssueID) != uuidToString(issue.ID) {
-			writeError(w, http.StatusBadRequest, "invalid parent comment")
-			return
-		}
-		parentComment = &parent
-	}
-
-	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
-	if !ok {
-		return
-	}
-
 	// Determine author identity: agent (via X-Agent-ID header) or member.
 	authorType, authorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
-
-	// Defense against resumed-session drift: when an agent posts from inside a
-	// comment-triggered task AND the comment is being posted on that same
-	// issue, the parent_id must exactly match the task's trigger comment.
-	// Resumed Claude sessions otherwise carry forward a previous turn's
-	// --parent UUID and silently misplace the reply.
-	//
-	// The task.IssueID scope is important: the CLI stamps X-Task-ID on every
-	// request, so an agent legitimately commenting on a different issue must
-	// not be blocked by its current task's trigger. Assignment-triggered
-	// tasks (no TriggerCommentID) are also unaffected.
-	if authorType == "agent" {
-		if taskIDHeader := r.Header.Get("X-Task-ID"); taskIDHeader != "" {
-			taskUUID, parseErr := util.ParseUUID(taskIDHeader)
-			if parseErr == nil {
-				task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
-				if err == nil && task.TriggerCommentID.Valid && uuidToString(task.IssueID) == uuidToString(issue.ID) {
-					if uuidToString(parentID) != uuidToString(task.TriggerCommentID) {
-						writeError(w, http.StatusConflict,
-							"parent_id must equal this task's trigger comment id ("+uuidToString(task.TriggerCommentID)+")")
-						return
-					}
-				}
-			}
-		}
-	}
-
-	// Expand bare issue identifiers (e.g. MUL-117) into mention links.
-	req.Content = mention.ExpandIssueIdentifiers(r.Context(), h.Queries, issue.WorkspaceID, req.Content)
 
 	// NOTE: Comment content is stored as Markdown source. XSS is handled at the
 	// rendering layer (rehype-sanitize) and at the editor layer
@@ -519,67 +568,18 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// entity-encode Markdown syntax characters (>, ", &, <) and corrupt the
 	// source. See issue #1303 / discussion in MUL-1119, MUL-1125.
 
-	comment, err := h.Queries.CreateComment(r.Context(), db.CreateCommentParams{
-		IssueID:          issue.ID,
-		WorkspaceID:      issue.WorkspaceID,
-		AuthorType:       authorType,
-		AuthorID:         parseUUID(authorID),
-		Content:          req.Content,
-		DisplayContentZh: pgtype.Text{},
-		Type:             req.Type,
-		ParentID:         parentID,
-	})
+	resp, err := h.createIssueCommentForActor(r.Context(), issue, req, authorType, authorID, r.Header.Get("X-Task-ID"))
 	if err != nil {
+		var statusErr handlerStatusError
+		if errors.As(err, &statusErr) {
+			writeError(w, statusErr.Status, statusErr.Message)
+			return
+		}
 		slog.Warn("create comment failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create comment: "+err.Error())
 		return
 	}
-
-	// Link uploaded attachments to this comment.
-	if len(attachmentIDs) > 0 {
-		h.linkAttachmentsByIDs(r.Context(), comment.ID, issue.ID, attachmentIDs)
-	}
-
-	// Fetch linked attachments so the response includes them.
-	groupedAtt := h.groupAttachments(r, []pgtype.UUID{comment.ID})
-	resp := commentToResponse(comment, nil, groupedAtt[uuidToString(comment.ID)])
-	slog.Info("comment created", append(logger.RequestAttrs(r), "comment_id", uuidToString(comment.ID), "issue_id", issueID)...)
-	h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), authorType, authorID, map[string]any{
-		"comment":             resp,
-		"issue_title":         issue.Title,
-		"issue_assignee_type": textToPtr(issue.AssigneeType),
-		"issue_assignee_id":   uuidToPtr(issue.AssigneeID),
-		"issue_status":        issue.Status,
-	})
-
-	// A reply in a resolved thread re-opens it. Done after CreateComment commits
-	// so the reply is visible regardless of the unresolve outcome. Shared with
-	// the agent task path (TaskService.createAgentComment) — both reply paths
-	// must keep the resolved root in sync.
-	h.TaskService.AutoUnresolveThreadOnReply(r.Context(), parentComment, uuidToString(issue.WorkspaceID), authorType, authorID)
-
-	// If the issue is assigned to an agent with on_comment trigger, enqueue a new task.
-	// Skip when the comment comes from the assigned agent itself to avoid loops.
-	// Also skip when the comment @mentions others but not the assignee agent —
-	// the user is talking to someone else, not requesting work from the assignee.
-	// Also skip when replying in a member-started thread without mentioning the
-	// assignee — the user is continuing a member-to-member conversation.
-	if authorType == "member" && h.shouldEnqueueOnComment(r.Context(), issue) &&
-		!h.commentMentionsOthersButNotAssignee(comment.Content, issue) &&
-		!h.isReplyToMemberThread(r.Context(), parentComment, comment.Content, issue) {
-		// Always use the current comment as the trigger so the agent reads
-		// the actual new reply, not the thread root. Reply placement (flat
-		// thread grouping) is handled downstream by createAgentComment,
-		// which resolves parent_id to the thread root before posting. This
-		// mirrors the mention path's behavior (see enqueueMentionedAgentTasks).
-		if _, err := h.TaskService.EnqueueTaskForIssue(r.Context(), issue, comment.ID); err != nil {
-			slog.Warn("enqueue agent task on comment failed", "issue_id", issueID, "error", err)
-		}
-	}
-
-	// Trigger @mentioned agents: parse agent mentions and enqueue tasks for each.
-	// Pass parentComment so that replies inherit mentions from the thread root.
-	h.enqueueMentionedAgentTasks(r.Context(), issue, comment, parentComment, authorType, authorID)
+	slog.Info("comment created", append(logger.RequestAttrs(r), "comment_id", resp.ID, "issue_id", issueID)...)
 
 	writeJSON(w, http.StatusCreated, resp)
 }

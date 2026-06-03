@@ -43,6 +43,23 @@ func TestSignupGating(t *testing.T) {
 	}
 }
 
+func TestConfiguredDevVerificationCode(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv(devVerificationCodeEnv, "888888")
+
+	if _, ok := configuredDevVerificationCode(); !ok {
+		t.Fatal("expected configured dev verification code in development")
+	}
+	if !isDevVerificationCode("888888") {
+		t.Fatal("expected fixed dev code to verify")
+	}
+
+	t.Setenv("APP_ENV", "production")
+	if _, ok := configuredDevVerificationCode(); ok {
+		t.Fatal("dev verification code must be disabled in production")
+	}
+}
+
 type mockDB struct {
 	db.DBTX
 	getUserErr error
