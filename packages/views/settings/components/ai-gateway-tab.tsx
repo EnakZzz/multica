@@ -96,11 +96,31 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
 }
 
-function formatMillionTokens(value: number) {
-  return `${(value / 1_000_000).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}M`;
+function formatCompactNumber(value: number) {
+  const units = [
+    { suffix: "B", divisor: 1_000_000_000 },
+    { suffix: "M", divisor: 1_000_000 },
+    { suffix: "K", divisor: 1_000 },
+  ];
+  for (const unit of units) {
+    if (value >= unit.divisor) {
+      const scaled = value / unit.divisor;
+      const maximumFractionDigits = scaled >= 100 ? 0 : 1;
+      return {
+        value: scaled.toLocaleString(undefined, {
+          minimumFractionDigits: 0,
+          maximumFractionDigits,
+        }),
+        unit: unit.suffix,
+      };
+    }
+  }
+  return { value: formatNumber(value), unit: "" };
+}
+
+function formatCompactNumberText(value: number) {
+  const compact = formatCompactNumber(value);
+  return `${compact.value}${compact.unit}`;
 }
 
 function formatCost(micros: number) {
@@ -862,26 +882,34 @@ export function AIGatewayTab() {
           <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Card key={i}><CardContent><Skeleton className="h-4 w-full" /></CardContent></Card>)}</div>
         ) : summary.length > 0 ? (
           <div className="space-y-2">
-            {summary.map((item) => (
-              <Card key={`${item.caller_id}-${item.key_prefix}`}>
-                <CardContent className="space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0 text-sm font-medium truncate">{summaryLabel(item, t(($) => $.ai_gateway.caller_unknown))}</div>
-                    <div className="flex gap-2">
-                      <Badge variant="secondary">{formatMillionTokens(item.total_tokens)}</Badge>
-                      <Badge variant="outline">{formatCost(item.total_cost_micros)}</Badge>
+            {summary.map((item) => {
+              const totalTokens = formatCompactNumber(item.total_tokens);
+              return (
+                <Card key={`${item.caller_id}-${item.key_prefix}`}>
+                  <CardContent className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0 text-sm font-medium truncate">{summaryLabel(item, t(($) => $.ai_gateway.caller_unknown))}</div>
+                      <div className="flex gap-2">
+                        <Badge variant="secondary" className="gap-1">
+                          <span>{totalTokens.value}</span>
+                          <span className="text-[10px] font-normal text-muted-foreground">
+                            {totalTokens.unit || t(($) => $.ai_gateway.tokens_unit)}
+                          </span>
+                        </Badge>
+                        <Badge variant="outline">{formatCost(item.total_cost_micros)}</Badge>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    <span>{t(($) => $.ai_gateway.summary_requests, { value: formatNumber(item.request_count) })}</span>
-                    <span>{t(($) => $.ai_gateway.summary_errors, { value: formatNumber(item.error_count) })}</span>
-                    <span>{t(($) => $.ai_gateway.summary_avg_latency, { latency: formatNumber(item.average_latency_ms) })}</span>
-                    <span>{t(($) => $.ai_gateway.summary_last, { date: formatDateTime(item.last_request_at) })}</span>
-                    {item.key_name && <span>{t(($) => $.ai_gateway.summary_key, { key: item.key_name })}</span>}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>{t(($) => $.ai_gateway.summary_requests, { value: formatNumber(item.request_count) })}</span>
+                      <span>{t(($) => $.ai_gateway.summary_errors, { value: formatNumber(item.error_count) })}</span>
+                      <span>{t(($) => $.ai_gateway.summary_avg_latency, { latency: formatNumber(item.average_latency_ms) })}</span>
+                      <span>{t(($) => $.ai_gateway.summary_last, { date: formatDateTime(item.last_request_at) })}</span>
+                      {item.key_name && <span>{t(($) => $.ai_gateway.summary_key, { key: item.key_name })}</span>}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.no_summary)}</p>
@@ -912,7 +940,7 @@ export function AIGatewayTab() {
                     {item.key_name && <span>{item.key_name}</span>}
                     {item.key_prefix && <span>{item.key_prefix}...</span>}
                     {item.reasoning_effort && <span>{t(($) => $.ai_gateway.usage_reasoning, { value: item.reasoning_effort })}</span>}
-                    <span>{formatNumber(item.total_tokens)} {t(($) => $.ai_gateway.tokens_unit)}</span>
+                    <span>{formatCompactNumberText(item.total_tokens)} {t(($) => $.ai_gateway.tokens_unit)}</span>
                     <span>{formatCost(item.total_cost_micros)}</span>
                     <span>{item.latency_ms}ms</span>
                     <span>{formatDateTime(item.created_at)}</span>

@@ -8,6 +8,7 @@ import {
   aggregateCostByModel,
   collectUnmappedModels,
   estimateCost,
+  formatTokens,
   isModelPriced,
   sliceWindow,
   todayIso,
@@ -25,6 +26,14 @@ const zeroUsage = {
   cache_read_tokens: 0,
   cache_write_tokens: 0,
 };
+
+describe("formatTokens", () => {
+  it("uses B for billion-scale token counts instead of stacking more M units", () => {
+    expect(formatTokens(999_000_000)).toBe("999M");
+    expect(formatTokens(1_000_000_000)).toBe("1B");
+    expect(formatTokens(1_250_000_000)).toBe("1.3B");
+  });
+});
 
 describe("estimateCost", () => {
   it("prices the canonical Anthropic Sonnet 4.6 SKU", () => {

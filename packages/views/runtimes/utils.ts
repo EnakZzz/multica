@@ -99,6 +99,10 @@ export function isVersionNewer(latest: string, current: string): boolean {
 }
 
 export function formatTokens(n: number): string {
+  if (n >= 1_000_000_000) {
+    const b = n / 1_000_000_000;
+    return b % 1 < 0.05 ? `${Math.round(b)}B` : `${b.toFixed(1)}B`;
+  }
   if (n >= 1_000_000) {
     const m = n / 1_000_000;
     return m % 1 < 0.05 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
