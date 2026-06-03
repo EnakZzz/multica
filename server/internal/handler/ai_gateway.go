@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"os"
 	"strconv"
 	"strings"
@@ -197,11 +198,12 @@ func (h *Handler) CreateAIGatewayKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	email, err := normalizeAIGatewayKeyEmail(req.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	req.Name = email
 
 	rawToken, err := generateAIGatewayToken()
 	if err != nil {
@@ -238,6 +240,18 @@ func (h *Handler) CreateAIGatewayKey(w http.ResponseWriter, r *http.Request) {
 		aiGatewayKeyResponse: aiGatewayKeyToResponse(row),
 		Token:                rawToken,
 	})
+}
+
+func normalizeAIGatewayKeyEmail(raw string) (string, error) {
+	email := strings.ToLower(strings.TrimSpace(raw))
+	if email == "" {
+		return "", errors.New("email is required")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email || addr.Name != "" {
+		return "", errors.New("email must be a valid email address")
+	}
+	return email, nil
 }
 
 func (h *Handler) ListAIGatewayKeys(w http.ResponseWriter, r *http.Request) {
@@ -787,7 +801,7 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 	}
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT
-			COALESCE(NULLIF(u.caller_id, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown') AS caller_id,
+			COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown') AS caller_id,
 			COALESCE(k.name, ''),
 			COALESCE(k.token_prefix, ''),
 			COALESCE(creator.name, ''),
@@ -807,7 +821,7 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 		WHERE u.workspace_id = $1
 		  AND u.created_at >= now() - ($2::int * interval '1 day')
 		GROUP BY
-			COALESCE(NULLIF(u.caller_id, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown'),
+			COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown'),
 			k.name,
 			k.token_prefix,
 			creator.name,
@@ -882,12 +896,11 @@ func chatCompletionToResponses(data []byte, req aiGatewayForwardRequest) ([]byte
 }
 func isAIGatewayReasoningEffort(effort string) bool { return aigateway.IsReasoningEffort(effort) }
 func copyAIGatewayStream(w http.ResponseWriter, body io.Reader) (int64, aiGatewayUsageTokens, error) {
-	return aigateway.CopyStream(w, body)
+	written, usage, _, err := aigateway.CopyStream(w, body)
+	return written, usage, err
 }
 func parseAIGatewayUsage(data []byte) aiGatewayUsageTokens { return aigateway.ParseUsage(data) }
-func aiGatewayCallerID(r *http.Request) string             { return aigateway.CallerID(r) }
-
-func (h *Handler) aiGatewayRuntime() *aigateway.Runtime { return aigateway.NewRuntime(h.DB) }
+func (h *Handler) aiGatewayRuntime() *aigateway.Runtime    { return aigateway.NewRuntime(h.DB) }
 func (h *Handler) resolveAIGatewayVirtualKey(ctx context.Context, token string) (aiGatewayVirtualKey, bool, error) {
 	return h.aiGatewayRuntime().ResolveVirtualKey(ctx, token)
 }

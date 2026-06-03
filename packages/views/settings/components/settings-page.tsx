@@ -83,8 +83,17 @@ interface SettingsPageProps {
 
 export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   const { t } = useT("settings");
-  const workspaceName = useCurrentWorkspace()?.name;
+  const currentWorkspace = useCurrentWorkspace();
+  const workspaceName = currentWorkspace?.name;
+  const showAIGateway = currentWorkspace?.slug === "local-agents";
   const navigation = useNavigation();
+  const workspaceTabKeys = React.useMemo(
+    () =>
+      WORKSPACE_TAB_KEYS.filter(
+        (key) => key !== "ai_gateway" || showAIGateway,
+      ),
+    [showAIGateway],
+  );
 
   // Whitelist of valid tab values; unknown ?tab=… values silently fall back to
   // the default. Whitelisting also blocks junk like ?tab=<script> from
@@ -93,10 +102,10 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
     () =>
       new Set<string>([
         ...ACCOUNT_TAB_KEYS,
-        ...Object.values(WORKSPACE_TAB_VALUES),
+        ...workspaceTabKeys.map((key) => WORKSPACE_TAB_VALUES[key]),
         ...(extraAccountTabs?.map((tab) => tab.value) ?? []),
       ]),
-    [extraAccountTabs],
+    [extraAccountTabs, workspaceTabKeys],
   );
 
   const tabFromUrl = navigation.searchParams.get(TAB_QUERY_KEY);
@@ -146,7 +155,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <span className="px-2 pb-1 pt-4 text-xs font-medium text-muted-foreground truncate">
             {workspaceName ?? t(($) => $.page.workspace_fallback)}
           </span>
-          {WORKSPACE_TAB_KEYS.map((key) => {
+          {workspaceTabKeys.map((key) => {
             const Icon = WORKSPACE_TAB_ICONS[key];
             return (
               <TabsTrigger key={key} value={WORKSPACE_TAB_VALUES[key]}>
@@ -169,7 +178,9 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
           <TabsContent value="github"><GitHubTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
-          <TabsContent value="ai-gateway"><AIGatewayTab /></TabsContent>
+          {showAIGateway ? (
+            <TabsContent value="ai-gateway"><AIGatewayTab /></TabsContent>
+          ) : null}
           <TabsContent value="labs"><LabsTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
           {extraAccountTabs?.map((tab) => (

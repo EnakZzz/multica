@@ -50,6 +50,37 @@ func TestLoadAIGatewayRoutesFromEnvParsesFallbackTargets(t *testing.T) {
 	}
 }
 
+func TestNormalizeAIGatewayKeyEmailRequiresPlainEmail(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "trims and lowercases", raw: "  Alice@Example.COM  ", want: "alice@example.com"},
+		{name: "empty", raw: " ", wantErr: true},
+		{name: "not email", raw: "team gateway", wantErr: true},
+		{name: "display name", raw: "Alice <alice@example.com>", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeAIGatewayKeyEmail(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("email: want %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestFindAIGatewayRouteSupportsWildcard(t *testing.T) {
 	routes := []aiGatewayRoute{
 		{Alias: "*", Targets: []aiGatewayTarget{{APIKeyEnv: "OPENAI_API_KEY"}}},
@@ -451,6 +482,89 @@ func TestAIGatewayWildcardRouteUsesOpenAITemplateForCodexStaticModel(t *testing.
 	}
 }
 
+func TestAIGatewayResponsesScopesPreviousResponseIDToVirtualKey(t *testing.T) {
+	t.Setenv("UPSTREAM_TEST_KEY", "sk-test")
+	var seen []map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("upstream path: want /responses, got %s", r.URL.Path)
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode upstream request: %v", err)
+		}
+		seen = append(seen, req)
+		responseID := fmt.Sprintf("resp_%d", len(seen))
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":     responseID,
+			"object": "response",
+			"usage": map[string]any{
+				"input_tokens":  1,
+				"output_tokens": 1,
+				"total_tokens":  2,
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("AI_GATEWAY_ROUTES", fmt.Sprintf(`[
+		{"alias":"team-agent","targets":[{"provider":"test","base_url":%q,"api_key_env":"UPSTREAM_TEST_KEY","model":"real-model","upstream_api":"responses"}]}
+	]`, upstream.URL))
+
+	rawToken, keyID := createAIGatewayTestKey(t)
+	otherToken, otherKeyID := createAIGatewayTestKey(t)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_usage WHERE virtual_key_id = $1`, keyID)
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_virtual_key WHERE id = $1`, keyID)
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_usage WHERE virtual_key_id = $1`, otherKeyID)
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_virtual_key WHERE id = $1`, otherKeyID)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"team-agent","input":"hello"}`))
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	testHandler.AIGatewayResponses(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"team-agent","input":"continue","previous_response_id":"resp_1"}`))
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	testHandler.AIGatewayResponses(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("same-key continuation: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"team-agent","input":"other","previous_response_id":"resp_1","conversation":"conv_other_key"}`))
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	testHandler.AIGatewayResponses(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("other-key request: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("expected 3 upstream requests, got %d", len(seen))
+	}
+	if _, ok := seen[0]["previous_response_id"]; ok {
+		t.Fatalf("initial request should not have previous_response_id: %#v", seen[0])
+	}
+	if seen[1]["previous_response_id"] != "resp_1" {
+		t.Fatalf("same key previous_response_id not forwarded: %#v", seen[1])
+	}
+	if _, ok := seen[2]["previous_response_id"]; ok {
+		t.Fatalf("other key previous_response_id must not be forwarded: %#v", seen[2])
+	}
+	if _, ok := seen[2]["conversation"]; ok {
+		t.Fatalf("conversation must not be forwarded: %#v", seen[2])
+	}
+}
+
 func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 	t.Setenv("UPSTREAM_TEST_KEY", "sk-test")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -494,7 +608,7 @@ func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 	var keyID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO ai_gateway_virtual_key (workspace_id, created_by, name, token_hash, token_prefix)
-		VALUES ($1, $2, 'proxy-test', $3, $4)
+		VALUES ($1, $2, 'alice@example.com', $3, $4)
 		RETURNING id
 	`, testWorkspaceID, testUserID, auth.HashToken(rawToken), rawToken[:12]).Scan(&keyID); err != nil {
 		t.Fatalf("insert ai gateway key: %v", err)
@@ -506,7 +620,7 @@ func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"team-agent","input":"hello"}`))
 	req.Header.Set("Authorization", "Bearer "+rawToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Multica-Caller", "alice@example.com")
+	req.Header.Set("X-Multica-Caller", "spoof@example.com")
 	rec := httptest.NewRecorder()
 
 	testHandler.AIGatewayResponses(rec, req)
@@ -612,7 +726,6 @@ func TestAIGatewayProxyStreamingResponsesRecordsUsage(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"team-agent","input":"hello","stream":true,"reasoning":{"effort":"medium"}}`))
 	req.Header.Set("Authorization", "Bearer "+rawToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Multica-Caller", "alice@example.com")
 	rec := httptest.NewRecorder()
 
 	testHandler.AIGatewayResponses(rec, req)
@@ -764,14 +877,4 @@ func createAIGatewayTestKey(t *testing.T) (string, string) {
 		t.Fatalf("insert ai gateway key: %v", err)
 	}
 	return rawToken, keyID
-}
-
-func TestAIGatewayCallerIDSanitizesHeaders(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	req.Header.Set("X-Multica-Caller", "  alice@example.com\r\nignored  ")
-
-	got := aiGatewayCallerID(req)
-	if got != "alice@example.comignored" {
-		t.Fatalf("caller id mismatch: %q", got)
-	}
 }

@@ -173,6 +173,7 @@
     "section_title": "AI 网关",
     "description": "工作区虚拟 key 可把 OpenAI 兼容网关路由开放给外部客户端。",
     "name_placeholder": "Key 名称（例如：团队网关）",
+    "email_placeholder": "申请人邮箱",
     "expiry": {
       "30": "30 天",
       "90": "90 天",
@@ -187,6 +188,9 @@
     "toast_load_usage_failed": "加载 AI 网关用量失败",
     "toast_load_summary_failed": "加载 AI 网关用量汇总失败",
     "toast_create_failed": "创建 AI 网关 key 失败",
+    "toast_email_required": "请输入申请人邮箱",
+    "toast_copied": "AI 网关 key 已复制",
+    "toast_copy_failed": "复制失败，请手动选中 key 后复制",
     "toast_revoked": "已吊销 AI 网关 key",
     "toast_revoke_failed": "吊销 AI 网关 key 失败",
     "toast_route_saved": "AI 网关路由已保存",

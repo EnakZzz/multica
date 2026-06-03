@@ -50,8 +50,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 type VirtualKey struct {
-	ID          string
-	WorkspaceID string
+	ID             string
+	WorkspaceID    string
+	Name           string
+	CreatedByEmail string
+}
+
+func (key VirtualKey) CallerID() string {
+	if value := SanitizeCallerID(key.Name); strings.Contains(value, "@") {
+		return value
+	}
+	return SanitizeCallerID(key.CreatedByEmail)
 }
 
 func (rt *Runtime) ResolveVirtualKey(ctx context.Context, token string) (VirtualKey, bool, error) {
@@ -64,13 +73,16 @@ func (rt *Runtime) ResolveVirtualKey(ctx context.Context, token string) (Virtual
 	hash := auth.HashToken(token)
 	var id pgtype.UUID
 	var workspaceID pgtype.UUID
+	var name string
+	var createdByEmail string
 	err := rt.DB.QueryRow(ctx, `
-		SELECT id, workspace_id
-		FROM ai_gateway_virtual_key
-		WHERE token_hash = $1
-		  AND status = 'active'
-		  AND (expires_at IS NULL OR expires_at > now())
-	`, hash).Scan(&id, &workspaceID)
+		SELECT k.id, k.workspace_id, k.name, COALESCE(u.email, '')
+		FROM ai_gateway_virtual_key k
+		LEFT JOIN "user" u ON u.id = k.created_by
+		WHERE k.token_hash = $1
+		  AND k.status = 'active'
+		  AND (k.expires_at IS NULL OR k.expires_at > now())
+	`, hash).Scan(&id, &workspaceID, &name, &createdByEmail)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VirtualKey{}, false, nil
 	}
@@ -78,8 +90,10 @@ func (rt *Runtime) ResolveVirtualKey(ctx context.Context, token string) (Virtual
 		return VirtualKey{}, false, err
 	}
 	key := VirtualKey{
-		ID:          util.UUIDToString(id),
-		WorkspaceID: util.UUIDToString(workspaceID),
+		ID:             util.UUIDToString(id),
+		WorkspaceID:    util.UUIDToString(workspaceID),
+		Name:           name,
+		CreatedByEmail: createdByEmail,
 	}
 	go rt.TouchKey(context.Background(), key.ID)
 	return key, true, nil
@@ -484,7 +498,7 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 
 	stream, _ := payload["stream"].(bool)
 	requestID := uuid.NewString()
-	callerID := CallerID(r)
+	callerID := key.CallerID()
 	var lastErr string
 	var lastStatus int
 	targets := selectTargets(route, model)
@@ -502,7 +516,8 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 		if targetModel == "" {
 			targetModel = model
 		}
-		upstreamEndpoint, upstreamBody, err := BuildUpstreamRequest(endpoint, payload, target, targetModel)
+		upstreamPayload := rt.preparePayloadForUpstream(r.Context(), key, endpoint, payload)
+		upstreamEndpoint, upstreamBody, err := BuildUpstreamRequest(endpoint, upstreamPayload, target, targetModel)
 		if err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -552,6 +567,58 @@ func PatchedBody(payload map[string]any, model string, endpoint string, target T
 	copyPayload["model"] = model
 	applyAIGatewayReasoningEffort(copyPayload, endpoint, target.ReasoningEffort)
 	return json.Marshal(copyPayload)
+}
+
+func (rt *Runtime) preparePayloadForUpstream(ctx context.Context, key VirtualKey, endpoint string, payload map[string]any) map[string]any {
+	copyPayload := make(map[string]any, len(payload))
+	for k, v := range payload {
+		copyPayload[k] = v
+	}
+	if endpoint == "/responses" {
+		rt.scopeResponsesState(ctx, key, copyPayload)
+	}
+	return copyPayload
+}
+
+func (rt *Runtime) scopeResponsesState(ctx context.Context, key VirtualKey, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	delete(payload, "conversation")
+	previousID := strings.TrimSpace(stringValue(payload["previous_response_id"]))
+	if previousID == "" {
+		return
+	}
+	if !rt.responseBelongsToKey(ctx, key, previousID) {
+		delete(payload, "previous_response_id")
+	}
+}
+
+func (rt *Runtime) responseBelongsToKey(ctx context.Context, key VirtualKey, responseID string) bool {
+	if rt.DB == nil || key.ID == "" || responseID == "" {
+		return false
+	}
+	var owner pgtype.UUID
+	err := rt.DB.QueryRow(ctx, `
+		SELECT virtual_key_id
+		FROM ai_gateway_response_state
+		WHERE response_id = $1
+	`, responseID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	if util.UUIDToString(owner) != key.ID {
+		return false
+	}
+	_, _ = rt.DB.Exec(ctx, `
+		UPDATE ai_gateway_response_state
+		SET last_used_at = now()
+		WHERE response_id = $1
+	`, responseID)
+	return true
 }
 
 func selectTargets(route Route, requestedModel string) []Target {
@@ -922,10 +989,13 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 			return resp.StatusCode, false, errText
 		}
 		w.WriteHeader(resp.StatusCode)
-		n, usage, copyErr := CopyStream(w, resp.Body)
+		n, usage, responseID, copyErr := CopyStream(w, resp.Body)
 		errText := ""
 		if copyErr != nil {
 			errText = copyErr.Error()
+		}
+		if resp.StatusCode < 400 && req.Target.UpstreamAPI == "responses" && req.Endpoint == "/responses" {
+			rt.RecordResponseState(context.Background(), req.Key, responseID, req.Target, req.TargetModel)
 		}
 		totalLatency := time.Since(start)
 		rt.RecordUsage(context.Background(), UsageRecord{
@@ -966,6 +1036,9 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 			data = converted
 			w.Header().Set("Content-Type", "application/json")
 		}
+	}
+	if resp.StatusCode < 400 && req.Target.UpstreamAPI == "responses" && req.Endpoint == "/responses" {
+		rt.RecordResponseState(context.Background(), req.Key, extractAIGatewayResponseID(data), req.Target, req.TargetModel)
 	}
 	rt.RecordUsage(context.Background(), UsageRecord{
 		Key:              req.Key,
@@ -1027,7 +1100,7 @@ func isHopByHopHeader(key string) bool {
 	}
 }
 
-func CopyStream(w http.ResponseWriter, body io.Reader) (int64, UsageTokens, error) {
+func CopyStream(w http.ResponseWriter, body io.Reader) (int64, UsageTokens, string, error) {
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
 	var written int64
@@ -1043,18 +1116,18 @@ func CopyStream(w http.ResponseWriter, body io.Reader) (int64, UsageTokens, erro
 			}
 			if writeErr != nil {
 				usageParser.Finish()
-				return written, usageParser.Usage(), writeErr
+				return written, usageParser.Usage(), usageParser.ResponseID(), writeErr
 			}
 		}
 		if readErr != nil {
 			usageParser.Finish()
 			if errors.Is(readErr, io.EOF) {
-				return written, usageParser.Usage(), nil
+				return written, usageParser.Usage(), usageParser.ResponseID(), nil
 			}
 			if errors.Is(readErr, context.Canceled) && usageParser.Completed() {
-				return written, usageParser.Usage(), nil
+				return written, usageParser.Usage(), usageParser.ResponseID(), nil
 			}
-			return written, usageParser.Usage(), readErr
+			return written, usageParser.Usage(), usageParser.ResponseID(), readErr
 		}
 	}
 }
@@ -1272,15 +1345,6 @@ func chatDeltaToText(content any) string {
 	}
 }
 
-func CallerID(r *http.Request) string {
-	for _, header := range []string{"X-Multica-Caller", "X-Multica-User", "X-Codex-User"} {
-		if value := SanitizeCallerID(r.Header.Get(header)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func SanitizeCallerID(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.Map(func(r rune) rune {
@@ -1353,9 +1417,10 @@ func ParseUsage(data []byte) UsageTokens {
 }
 
 type sseUsageParser struct {
-	buffer    string
-	usage     UsageTokens
-	completed bool
+	buffer     string
+	usage      UsageTokens
+	completed  bool
+	responseID string
 }
 
 func (p *sseUsageParser) Feed(chunk []byte) {
@@ -1395,6 +1460,10 @@ func (p *sseUsageParser) Completed() bool {
 	return p.completed
 }
 
+func (p *sseUsageParser) ResponseID() string {
+	return p.responseID
+}
+
 func (p *sseUsageParser) parseFrame(frame string) {
 	event := ""
 	var dataLines []string
@@ -1418,9 +1487,28 @@ func (p *sseUsageParser) parseFrame(frame string) {
 	if event == "response.completed" || isAIGatewayResponseCompletedEvent(raw) {
 		p.completed = true
 	}
+	if p.responseID == "" {
+		p.responseID = extractAIGatewayResponseID([]byte(raw))
+	}
 	if usage := ParseUsage([]byte(raw)); usage.TotalTokens > 0 {
 		p.usage = usage
 	}
+}
+
+func extractAIGatewayResponseID(data []byte) string {
+	var envelope struct {
+		ID       string `json:"id"`
+		Response struct {
+			ID string `json:"id"`
+		} `json:"response"`
+	}
+	if len(data) == 0 || json.Unmarshal(data, &envelope) != nil {
+		return ""
+	}
+	if id := strings.TrimSpace(envelope.ID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(envelope.Response.ID)
 }
 
 func isAIGatewayResponseCompletedEvent(raw string) bool {
@@ -1454,6 +1542,31 @@ type UsageRecord struct {
 	LatencyMs        int64
 	Error            string
 	Bytes            int64
+}
+
+func (rt *Runtime) RecordResponseState(ctx context.Context, key VirtualKey, responseID string, target Target, targetModel string) {
+	responseID = strings.TrimSpace(responseID)
+	if rt.DB == nil || key.ID == "" || key.WorkspaceID == "" || responseID == "" {
+		return
+	}
+	_, _ = rt.DB.Exec(ctx, `
+		INSERT INTO ai_gateway_response_state (
+			response_id, virtual_key_id, workspace_id, upstream_provider, upstream_model
+		)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (response_id) DO UPDATE
+		SET workspace_id = EXCLUDED.workspace_id,
+		    upstream_provider = EXCLUDED.upstream_provider,
+		    upstream_model = EXCLUDED.upstream_model,
+		    last_used_at = now()
+		WHERE ai_gateway_response_state.virtual_key_id = EXCLUDED.virtual_key_id
+	`,
+		responseID,
+		util.MustParseUUID(key.ID),
+		util.MustParseUUID(key.WorkspaceID),
+		target.Provider,
+		targetModel,
+	)
 }
 
 func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {

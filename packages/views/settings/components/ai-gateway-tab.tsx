@@ -58,6 +58,7 @@ const UPSTREAM_APIS = ["responses", "chat_completions"] as const;
 const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const REASONING_EFFORT_DEFAULT = "__default";
 const USAGE_PAGE_SIZE = 20;
+const AI_GATEWAY_APPLICANT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type RouteTargetForm = AIGatewayRouteTarget;
 type RouteEditorMode = "ui" | "json";
@@ -106,6 +107,35 @@ function formatCost(micros: number) {
   return `$${(micros / 1_000_000).toFixed(4)}`;
 }
 
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Some HTTP LAN origins block the Clipboard API. Fall back to the
+      // user-gesture compatible textarea copy path below.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.left = "-1000px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 function microsToUSD(value: number) {
   return value ? String(value / 1_000_000) : "";
 }
@@ -124,6 +154,10 @@ function usageRoute(usage: AIGatewayUsage) {
 
 function summaryLabel(item: AIGatewayUsageSummary, unknown: string) {
   return item.caller_id || item.key_name || item.key_prefix || unknown;
+}
+
+function isAIGatewayApplicantEmail(value: string) {
+  return AI_GATEWAY_APPLICANT_EMAIL_RE.test(value.trim());
 }
 
 function targetLabel(target: AIGatewayRouteTarget) {
@@ -237,7 +271,7 @@ export function AIGatewayTab() {
   const [usage, setUsage] = useState<AIGatewayUsage[]>([]);
   const [usagePage, setUsagePage] = useState(0);
   const [usageHasNextPage, setUsageHasNextPage] = useState(false);
-  const [keyName, setKeyName] = useState("");
+  const [keyName, setKeyName] = useState(user?.email ?? "");
   const [keyExpiry, setKeyExpiry] = useState("90");
   const [routeAlias, setRouteAlias] = useState("team-agent");
   const [routeStrategy, setRouteStrategy] = useState("fallback");
@@ -268,6 +302,8 @@ export function AIGatewayTab() {
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
   const canManage = currentMember?.role === "owner" || currentMember?.role === "admin";
   const firstTarget = routeTargets[0] ?? blankTarget();
+  const keyEmail = keyName.trim().toLowerCase();
+  const keyEmailValid = isAIGatewayApplicantEmail(keyEmail);
 
   const keyMetadata = useCallback((key: AIGatewayKey) => {
     const lastUsed = key.last_used_at
@@ -381,15 +417,19 @@ export function AIGatewayTab() {
   }, [loadKeys, loadRoutes, loadSummary, loadUsage]);
 
   const handleCreateKey = async () => {
+    if (!keyEmailValid) {
+      toast.error(t(($) => $.ai_gateway.toast_email_required));
+      return;
+    }
     setCreating(true);
     try {
       const expiresInDays = keyExpiry === "never" ? undefined : Number(keyExpiry);
       const result = await api.createAIGatewayKey({
-        name: keyName.trim(),
+        name: keyEmail,
         expires_in_days: expiresInDays,
       });
       setNewToken(result.token);
-      setKeyName("");
+      setKeyName(user?.email ?? "");
       setKeyExpiry("90");
       await loadKeys();
     } catch (e) {
@@ -414,8 +454,13 @@ export function AIGatewayTab() {
 
   const handleCopyToken = async () => {
     if (!newToken) return;
-    await navigator.clipboard.writeText(newToken);
+    const copiedToken = await copyTextToClipboard(newToken);
+    if (!copiedToken) {
+      toast.error(t(($) => $.ai_gateway.toast_copy_failed));
+      return;
+    }
     setCopied(true);
+    toast.success(t(($) => $.ai_gateway.toast_copied));
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -577,7 +622,7 @@ export function AIGatewayTab() {
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.description)}</p>
             <div className="grid gap-3 sm:grid-cols-[1fr_120px_auto]">
-              <Input type="text" value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder={t(($) => $.ai_gateway.name_placeholder)} />
+              <Input type="email" value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder={t(($) => $.ai_gateway.email_placeholder)} />
               <Select value={keyExpiry} onValueChange={(v) => { if (v) setKeyExpiry(v); }}>
                 <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -586,7 +631,7 @@ export function AIGatewayTab() {
                   ))}
                 </SelectContent>
               </Select>
-              <Button onClick={handleCreateKey} disabled={creating || !keyName.trim()}>
+              <Button onClick={handleCreateKey} disabled={creating || !keyEmailValid}>
                 {creating ? t(($) => $.ai_gateway.creating) : t(($) => $.ai_gateway.create)}
               </Button>
             </div>

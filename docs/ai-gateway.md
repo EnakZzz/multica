@@ -26,15 +26,16 @@ curl http://localhost:8080/v1/responses \
 Workspace owners/admins can manage keys through the regular authenticated API.
 Send either `X-Workspace-ID` or `X-Workspace-Slug`.
 
-For per-person accounting, create one virtual key per person or device. Use a
-stable key name such as `alice@company.com` or `alice-codex-laptop`.
+For per-person accounting, create one virtual key per person. The key name is
+the applicant email address and must be a plain email such as
+`alice@company.com`.
 
 ```bash
 curl http://localhost:8080/api/ai-gateway/keys \
   -H "Authorization: Bearer mul_or_jwt_token" \
   -H "X-Workspace-Slug: local-agents" \
   -H "Content-Type: application/json" \
-  -d '{"name":"engineering","expires_in_days":90}'
+  -d '{"name":"alice@company.com","expires_in_days":90}'
 ```
 
 The raw `token` is returned only once. List keys and recent usage with:
@@ -164,6 +165,13 @@ discover switchable model IDs. Incoming requests using `"model":"team-agent"`
 are rewritten to the target model before they leave Multica. Targets are tried
 in order on upstream timeout, `429`, or `5xx`.
 
+When proxying `/v1/responses` to an upstream Responses endpoint, Multica scopes
+upstream response chains to the virtual key. Successful upstream response IDs
+are recorded locally, and `previous_response_id` is forwarded only when it
+belongs to the same virtual key. Unknown or cross-key response IDs are removed
+before forwarding, and the `conversation` field is always removed because
+Multica does not own upstream conversation objects.
+
 ## Configure Codex
 
 Codex can use Multica as an OpenAI-compatible model provider. Put the virtual
@@ -173,7 +181,6 @@ PowerShell:
 
 ```powershell
 [Environment]::SetEnvironmentVariable("MULTICA_AI_GATEWAY_KEY", "mvk_xxx", "User")
-[Environment]::SetEnvironmentVariable("MULTICA_AI_CALLER", "alice@company.com", "User")
 ```
 
 `~/.codex/config.toml`:
@@ -188,16 +195,14 @@ base_url = "https://multica.example.com/v1"
 wire_api = "responses"
 env_key = "MULTICA_AI_GATEWAY_KEY"
 env_key_instructions = "Set MULTICA_AI_GATEWAY_KEY to your mvk_ virtual key"
-env_http_headers = { "X-Multica-Caller" = "MULTICA_AI_CALLER" }
 ```
 
 For local testing, `base_url` can be `http://localhost:8081/v1`. If Codex and
 Multica run on different machines, use the reachable HTTPS origin for the
 Multica server.
 
-`X-Multica-Caller` is optional but recommended when several devices share one
-virtual key. Multica stores it as usage metadata only; prompts and completions
-are still not persisted by the gateway.
+Usage attribution is derived from the applicant email recorded on the virtual
+key. Prompts and completions are still not persisted by the gateway.
 
 ### Codex Model Switching
 
