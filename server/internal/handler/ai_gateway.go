@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/mail"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -771,6 +772,9 @@ func (h *Handler) ListAIGatewayUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		item.ID = uuidToString(id)
 		item.CreatedAt = timestampToString(createdAt)
+		if item.TotalCostMicros == 0 {
+			item.TotalCostMicros = aigateway.EstimateUsageCostMicros(item.UpstreamModel, item.PromptTokens, item.CompletionTokens)
+		}
 		resp = append(resp, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -813,8 +817,11 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 			COALESCE(SUM(u.completion_tokens), 0)::bigint,
 			COALESCE(SUM(u.total_tokens), 0)::bigint,
 			COALESCE(SUM(u.total_cost_micros), 0)::bigint,
-			COALESCE(ROUND(AVG(u.latency_ms)), 0)::bigint,
-			MAX(u.created_at)
+			COALESCE(SUM(u.prompt_tokens) FILTER (WHERE u.total_cost_micros = 0), 0)::bigint,
+			COALESCE(SUM(u.completion_tokens) FILTER (WHERE u.total_cost_micros = 0), 0)::bigint,
+			COALESCE(SUM(u.latency_ms), 0)::bigint,
+			MAX(u.created_at),
+			COALESCE(u.upstream_model, '')
 		FROM ai_gateway_usage u
 		LEFT JOIN ai_gateway_virtual_key k ON k.id = u.virtual_key_id
 		LEFT JOIN "user" creator ON creator.id = k.created_by
@@ -825,9 +832,9 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 			k.name,
 			k.token_prefix,
 			creator.name,
-			creator.email
+			creator.email,
+			COALESCE(u.upstream_model, '')
 		ORDER BY COALESCE(SUM(u.total_tokens), 0) DESC, COUNT(*) DESC
-		LIMIT 100
 	`, parseUUID(workspaceID), days)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
@@ -835,35 +842,86 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 	}
 	defer rows.Close()
 
-	resp := []aiGatewayUsageSummaryResponse{}
+	type summaryAgg struct {
+		item        aiGatewayUsageSummaryResponse
+		latencySum  int64
+		lastRequest pgtype.Timestamptz
+	}
+	summaryByCaller := map[string]*summaryAgg{}
+	order := []string{}
 	for rows.Next() {
-		var item aiGatewayUsageSummaryResponse
+		var row aiGatewayUsageSummaryResponse
 		var lastRequestAt pgtype.Timestamptz
+		var zeroCostPromptTokens, zeroCostCompletionTokens, latencySum int64
+		var upstreamModel string
 		if err := rows.Scan(
-			&item.CallerID,
-			&item.KeyName,
-			&item.KeyPrefix,
-			&item.CreatedByName,
-			&item.CreatedByEmail,
-			&item.RequestCount,
-			&item.SuccessCount,
-			&item.ErrorCount,
-			&item.PromptTokens,
-			&item.CompletionTokens,
-			&item.TotalTokens,
-			&item.TotalCostMicros,
-			&item.AverageLatencyMs,
+			&row.CallerID,
+			&row.KeyName,
+			&row.KeyPrefix,
+			&row.CreatedByName,
+			&row.CreatedByEmail,
+			&row.RequestCount,
+			&row.SuccessCount,
+			&row.ErrorCount,
+			&row.PromptTokens,
+			&row.CompletionTokens,
+			&row.TotalTokens,
+			&row.TotalCostMicros,
+			&zeroCostPromptTokens,
+			&zeroCostCompletionTokens,
+			&latencySum,
 			&lastRequestAt,
+			&upstreamModel,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
 			return
 		}
-		item.LastRequestAt = timestampToString(lastRequestAt)
-		resp = append(resp, item)
+		row.TotalCostMicros += aigateway.EstimateUsageCostMicros(upstreamModel, zeroCostPromptTokens, zeroCostCompletionTokens)
+		agg := summaryByCaller[row.CallerID]
+		if agg == nil {
+			agg = &summaryAgg{item: aiGatewayUsageSummaryResponse{
+				CallerID:       row.CallerID,
+				KeyName:        row.KeyName,
+				KeyPrefix:      row.KeyPrefix,
+				CreatedByName:  row.CreatedByName,
+				CreatedByEmail: row.CreatedByEmail,
+			}}
+			summaryByCaller[row.CallerID] = agg
+			order = append(order, row.CallerID)
+		}
+		agg.item.RequestCount += row.RequestCount
+		agg.item.SuccessCount += row.SuccessCount
+		agg.item.ErrorCount += row.ErrorCount
+		agg.item.PromptTokens += row.PromptTokens
+		agg.item.CompletionTokens += row.CompletionTokens
+		agg.item.TotalTokens += row.TotalTokens
+		agg.item.TotalCostMicros += row.TotalCostMicros
+		agg.latencySum += latencySum
+		if !agg.lastRequest.Valid || (lastRequestAt.Valid && lastRequestAt.Time.After(agg.lastRequest.Time)) {
+			agg.lastRequest = lastRequestAt
+		}
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
 		return
+	}
+	resp := []aiGatewayUsageSummaryResponse{}
+	for _, key := range order {
+		agg := summaryByCaller[key]
+		if agg.item.RequestCount > 0 {
+			agg.item.AverageLatencyMs = agg.latencySum / agg.item.RequestCount
+		}
+		agg.item.LastRequestAt = timestampToString(agg.lastRequest)
+		resp = append(resp, agg.item)
+	}
+	sort.SliceStable(resp, func(i, j int) bool {
+		if resp[i].TotalTokens != resp[j].TotalTokens {
+			return resp[i].TotalTokens > resp[j].TotalTokens
+		}
+		return resp[i].RequestCount > resp[j].RequestCount
+	})
+	if len(resp) > 100 {
+		resp = resp[:100]
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

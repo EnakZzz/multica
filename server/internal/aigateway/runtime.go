@@ -1587,6 +1587,16 @@ func effectiveUsagePricing(target Target, targetModel string) defaultUsagePricin
 	return pricing
 }
 
+func EstimateUsageCostMicros(model string, promptTokens int64, completionTokens int64) int64 {
+	pricing, ok := resolveDefaultModelPricing(model)
+	if !ok {
+		return 0
+	}
+	inputCost := promptTokens * pricing.InputPricePerMillionMicros / 1_000_000
+	outputCost := completionTokens * pricing.OutputPricePerMillionMicros / 1_000_000
+	return inputCost + outputCost
+}
+
 func resolveDefaultModelPricing(models ...string) (defaultUsagePricing, bool) {
 	for _, model := range models {
 		for _, candidate := range modelPricingCandidates(model) {

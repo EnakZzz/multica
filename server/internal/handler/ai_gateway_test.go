@@ -232,10 +232,10 @@ func TestListAIGatewayUsagePaginatesRecentRowsOnly(t *testing.T) {
 		if _, err := testPool.Exec(context.Background(), `
 			INSERT INTO ai_gateway_usage (
 				virtual_key_id, workspace_id, request_id, endpoint, model_alias,
-				upstream_provider, upstream_model, status_code, total_tokens, latency_ms, created_at
+				upstream_provider, upstream_model, status_code, prompt_tokens, completion_tokens, total_tokens, total_cost_micros, latency_ms, created_at
 			)
-			VALUES ($1, $2, $3, '/responses', 'team-agent', 'openai', 'gpt-5-codex', 200, $4, 10, $5)
-		`, keyID, testWorkspaceID, fmt.Sprintf("usage-recent-%d", i), int64(10+i), now.Add(-time.Duration(i)*time.Minute)); err != nil {
+			VALUES ($1, $2, $3, '/responses', 'team-agent', 'openai', 'gpt-5-codex', 200, $4, $5, $6, 0, 10, $7)
+		`, keyID, testWorkspaceID, fmt.Sprintf("usage-recent-%d", i), int64(7+i), int64(3), int64(10+i), now.Add(-time.Duration(i)*time.Minute)); err != nil {
 			t.Fatalf("insert recent usage %d: %v", i, err)
 		}
 	}
@@ -266,6 +266,34 @@ func TestListAIGatewayUsagePaginatesRecentRowsOnly(t *testing.T) {
 	}
 	if got[0].RequestID != "usage-recent-1" || got[1].RequestID != "usage-recent-2" {
 		t.Fatalf("unexpected page rows: %+v", got)
+	}
+	if got[0].TotalCostMicros <= 0 || got[1].TotalCostMicros <= 0 {
+		t.Fatalf("expected historical zero-cost rows to be estimated: %+v", got)
+	}
+
+	summaryReq := newRequest(http.MethodGet, "/api/ai-gateway/usage/summary?days=30", nil)
+	summaryReq = summaryReq.WithContext(middleware.SetMemberContext(summaryReq.Context(), testWorkspaceID, db.Member{}))
+	summaryRec := httptest.NewRecorder()
+	testHandler.ListAIGatewayUsageSummary(summaryRec, summaryReq)
+	if summaryRec.Code != http.StatusOK {
+		t.Fatalf("summary: expected 200, got %d: %s", summaryRec.Code, summaryRec.Body.String())
+	}
+	var summary []aiGatewayUsageSummaryResponse
+	if err := json.NewDecoder(summaryRec.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	foundSummary := false
+	for _, item := range summary {
+		if item.KeyName == "proxy-test" {
+			foundSummary = true
+			if item.TotalCostMicros <= 0 {
+				t.Fatalf("summary should estimate historical zero-cost rows: %+v", item)
+			}
+			break
+		}
+	}
+	if !foundSummary {
+		t.Fatalf("summary did not include proxy-test: %+v", summary)
 	}
 
 	var oldExists bool
