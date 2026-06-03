@@ -578,7 +578,7 @@ func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode upstream request: %v", err)
 		}
-		if req["model"] != "real-model" {
+		if req["model"] != "gpt-5-codex" {
 			t.Fatalf("model was not rewritten: %v", req["model"])
 		}
 		reasoning, ok := req["reasoning"].(map[string]any)
@@ -598,7 +598,7 @@ func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 	defer upstream.Close()
 
 	t.Setenv("AI_GATEWAY_ROUTES", fmt.Sprintf(`[
-		{"alias":"team-agent","targets":[{"provider":"test","base_url":%q,"api_key_env":"UPSTREAM_TEST_KEY","model":"real-model","reasoning_effort":"high"}]}
+		{"alias":"team-agent","targets":[{"provider":"test","base_url":%q,"api_key_env":"UPSTREAM_TEST_KEY","model":"gpt-5-codex","reasoning_effort":"high"}]}
 	]`, upstream.URL))
 
 	rawToken, err := generateAIGatewayToken()
@@ -629,14 +629,14 @@ func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 	}
 
 	var callerID, reasoningEffort string
-	var totalTokens int64
+	var totalTokens, inputCostMicros, outputCostMicros, totalCostMicros int64
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT COALESCE(caller_id, ''), COALESCE(reasoning_effort, ''), total_tokens
+		SELECT COALESCE(caller_id, ''), COALESCE(reasoning_effort, ''), total_tokens, input_cost_micros, output_cost_micros, total_cost_micros
 		FROM ai_gateway_usage
 		WHERE virtual_key_id = $1
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, keyID).Scan(&callerID, &reasoningEffort, &totalTokens); err != nil {
+	`, keyID).Scan(&callerID, &reasoningEffort, &totalTokens, &inputCostMicros, &outputCostMicros, &totalCostMicros); err != nil {
 		t.Fatalf("load usage row: %v", err)
 	}
 	if callerID != "alice@example.com" {
@@ -647,6 +647,9 @@ func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 	}
 	if totalTokens != 10 {
 		t.Fatalf("total_tokens: want 10, got %d", totalTokens)
+	}
+	if inputCostMicros != 8 || outputCostMicros != 30 || totalCostMicros != 38 {
+		t.Fatalf("cost micros mismatch: input=%d output=%d total=%d", inputCostMicros, outputCostMicros, totalCostMicros)
 	}
 
 	memberRow, err := testHandler.Queries.GetMemberByUserAndWorkspace(context.Background(), db.GetMemberByUserAndWorkspaceParams{

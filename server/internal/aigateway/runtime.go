@@ -1544,6 +1544,150 @@ type UsageRecord struct {
 	Bytes            int64
 }
 
+type defaultUsagePricing struct {
+	InputPricePerMillionMicros  int64
+	OutputPricePerMillionMicros int64
+}
+
+var defaultModelPricing = map[string]defaultUsagePricing{
+	"claude-haiku-4-5":  {InputPricePerMillionMicros: 1_000_000, OutputPricePerMillionMicros: 5_000_000},
+	"claude-sonnet-4-5": {InputPricePerMillionMicros: 3_000_000, OutputPricePerMillionMicros: 15_000_000},
+	"claude-sonnet-4-6": {InputPricePerMillionMicros: 3_000_000, OutputPricePerMillionMicros: 15_000_000},
+	"claude-opus-4-5":   {InputPricePerMillionMicros: 5_000_000, OutputPricePerMillionMicros: 25_000_000},
+	"claude-opus-4-6":   {InputPricePerMillionMicros: 5_000_000, OutputPricePerMillionMicros: 25_000_000},
+	"claude-opus-4-7":   {InputPricePerMillionMicros: 5_000_000, OutputPricePerMillionMicros: 25_000_000},
+	"claude-opus-4-1":   {InputPricePerMillionMicros: 15_000_000, OutputPricePerMillionMicros: 75_000_000},
+	"claude-opus-4":     {InputPricePerMillionMicros: 15_000_000, OutputPricePerMillionMicros: 75_000_000},
+	"claude-sonnet-4":   {InputPricePerMillionMicros: 3_000_000, OutputPricePerMillionMicros: 15_000_000},
+	"claude-haiku-3-5":  {InputPricePerMillionMicros: 800_000, OutputPricePerMillionMicros: 4_000_000},
+
+	"gpt-5.5":       {InputPricePerMillionMicros: 5_000_000, OutputPricePerMillionMicros: 30_000_000},
+	"gpt-5.4-mini":  {InputPricePerMillionMicros: 750_000, OutputPricePerMillionMicros: 4_500_000},
+	"gpt-5.4":       {InputPricePerMillionMicros: 2_500_000, OutputPricePerMillionMicros: 15_000_000},
+	"gpt-5.3-codex": {InputPricePerMillionMicros: 1_750_000, OutputPricePerMillionMicros: 14_000_000},
+	"gpt-5-codex":   {InputPricePerMillionMicros: 1_250_000, OutputPricePerMillionMicros: 10_000_000},
+	"gpt-5-mini":    {InputPricePerMillionMicros: 250_000, OutputPricePerMillionMicros: 2_000_000},
+	"gpt-5-nano":    {InputPricePerMillionMicros: 50_000, OutputPricePerMillionMicros: 400_000},
+	"gpt-5":         {InputPricePerMillionMicros: 1_250_000, OutputPricePerMillionMicros: 10_000_000},
+	"o3-mini":       {InputPricePerMillionMicros: 1_100_000, OutputPricePerMillionMicros: 4_400_000},
+	"o3":            {InputPricePerMillionMicros: 2_000_000, OutputPricePerMillionMicros: 8_000_000},
+	"o4-mini":       {InputPricePerMillionMicros: 1_100_000, OutputPricePerMillionMicros: 4_400_000},
+	"gpt-4o-mini":   {InputPricePerMillionMicros: 150_000, OutputPricePerMillionMicros: 600_000},
+	"gpt-4o":        {InputPricePerMillionMicros: 2_500_000, OutputPricePerMillionMicros: 10_000_000},
+}
+
+func effectiveUsagePricing(target Target, targetModel string) defaultUsagePricing {
+	pricing, _ := resolveDefaultModelPricing(targetModel, target.Model)
+	if target.InputPricePerMillionMicros > 0 {
+		pricing.InputPricePerMillionMicros = target.InputPricePerMillionMicros
+	}
+	if target.OutputPricePerMillionMicros > 0 {
+		pricing.OutputPricePerMillionMicros = target.OutputPricePerMillionMicros
+	}
+	return pricing
+}
+
+func resolveDefaultModelPricing(models ...string) (defaultUsagePricing, bool) {
+	for _, model := range models {
+		for _, candidate := range modelPricingCandidates(model) {
+			if pricing, ok := defaultModelPricing[candidate]; ok {
+				return pricing, true
+			}
+		}
+	}
+	return defaultUsagePricing{}, false
+}
+
+func modelPricingCandidates(model string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	push := func(s string) {
+		s = strings.TrimSpace(strings.ToLower(s))
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	stripProvider := func(s string) string {
+		i := strings.Index(s, "/")
+		if i <= 0 || !isModelProviderSegment(s[:i]) {
+			return s
+		}
+		return s[i+1:]
+	}
+	canonAnthropic := func(s string) string {
+		if strings.HasPrefix(s, "claude-") {
+			return strings.ReplaceAll(s, ".", "-")
+		}
+		return s
+	}
+
+	raw := strings.TrimSpace(strings.ToLower(model))
+	noProvider := stripProvider(raw)
+	dashed := canonAnthropic(noProvider)
+	push(raw)
+	push(noProvider)
+	push(dashed)
+	push(stripModelDateSuffix(raw))
+	push(stripModelDateSuffix(noProvider))
+	push(stripModelDateSuffix(dashed))
+	return out
+}
+
+func isModelProviderSegment(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if i > 0 && ((r >= '0' && r <= '9') || r == '_' || r == '-') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func stripModelDateSuffix(s string) string {
+	if strings.HasSuffix(s, "-latest") {
+		return strings.TrimSuffix(s, "-latest")
+	}
+	if len(s) >= len("-20060102") {
+		suffix := s[len(s)-len("-20060102"):]
+		if suffix[0] == '-' && allDigits(suffix[1:]) {
+			return s[:len(s)-len(suffix)]
+		}
+	}
+	if len(s) >= len("-2006-01-02") {
+		suffix := s[len(s)-len("-2006-01-02"):]
+		if suffix[0] == '-' && suffix[5] == '-' && suffix[8] == '-' && allDigits(suffix[1:5]) && allDigits(suffix[6:8]) && allDigits(suffix[9:]) {
+			return s[:len(s)-len(suffix)]
+		}
+	}
+	return s
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (rt *Runtime) RecordResponseState(ctx context.Context, key VirtualKey, responseID string, target Target, targetModel string) {
 	responseID = strings.TrimSpace(responseID)
 	if rt.DB == nil || key.ID == "" || key.WorkspaceID == "" || responseID == "" {
@@ -1577,13 +1721,14 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 	if len(errText) > 2048 {
 		errText = errText[:2048]
 	}
+	pricing := effectiveUsagePricing(record.Target, record.TargetModel)
 	inputCost := record.InputCostMicros
-	if inputCost == 0 && record.PromptTokens > 0 && record.Target.InputPricePerMillionMicros > 0 {
-		inputCost = record.PromptTokens * record.Target.InputPricePerMillionMicros / 1_000_000
+	if inputCost == 0 && record.PromptTokens > 0 && pricing.InputPricePerMillionMicros > 0 {
+		inputCost = record.PromptTokens * pricing.InputPricePerMillionMicros / 1_000_000
 	}
 	outputCost := record.OutputCostMicros
-	if outputCost == 0 && record.CompletionTokens > 0 && record.Target.OutputPricePerMillionMicros > 0 {
-		outputCost = record.CompletionTokens * record.Target.OutputPricePerMillionMicros / 1_000_000
+	if outputCost == 0 && record.CompletionTokens > 0 && pricing.OutputPricePerMillionMicros > 0 {
+		outputCost = record.CompletionTokens * pricing.OutputPricePerMillionMicros / 1_000_000
 	}
 	totalCost := record.TotalCostMicros
 	if totalCost == 0 {
