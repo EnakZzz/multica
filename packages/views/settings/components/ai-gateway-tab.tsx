@@ -825,7 +825,11 @@ export function AIGatewayTab() {
                     <span className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.route_enabled)}</span>
                   </label>
                 </div>
-                <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.route_model_hint)}</p>
+                <div className="space-y-1 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                  <p>{t(($) => $.ai_gateway.route_editor_hint)}</p>
+                  <p>{t(($) => $.ai_gateway.route_model_hint)}</p>
+                  <p>{t(($) => $.ai_gateway.route_target_order_hint)}</p>
+                </div>
 
                 <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
                   <Select value={selectedPresetId} onValueChange={(v) => { if (v) applyPreset(v); }}>
@@ -839,97 +843,107 @@ export function AIGatewayTab() {
 
                 <div className="space-y-3">
                   {routeTargets.map((target, index) => (
-                    <div key={index} className="rounded-md border p-3 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.target_label, { index: index + 1 })}</div>
+                    <div key={index} className="rounded-md border p-4 space-y-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="text-sm font-medium">{t(($) => $.ai_gateway.target_label, { index: index + 1 })}</div>
+                            <Badge variant="outline">{t(($) => $.ai_gateway.auth_mode[target.auth_mode ?? "api_key"])}</Badge>
+                            <Badge variant="outline">{t(($) => $.ai_gateway.upstream_api[target.upstream_api as keyof typeof $.ai_gateway.upstream_api])}</Badge>
+                            {index === 0 ? <Badge variant="secondary">{t(($) => $.ai_gateway.target_primary_badge)}</Badge> : null}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {target.provider} · {target.model || t(($) => $.ai_gateway.target_model_passthrough)}
+                          </div>
+                        </div>
                         <div className="flex items-center gap-2">
                           <Switch checked={target.enabled} onCheckedChange={(v) => updateTarget(index, { enabled: v })} />
                           {routeTargets.length > 1 && <Button variant="ghost" size="icon-sm" onClick={() => setRouteTargets((items) => items.filter((_, i) => i !== index))}><Trash2 className="h-3.5 w-3.5" /></Button>}
                         </div>
                       </div>
-                      <div className="grid gap-3 lg:grid-cols-5">
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.provider_label)}</span>
-                          <Input value={target.provider} onChange={(e) => updateTarget(index, { provider: e.target.value })} placeholder={t(($) => $.ai_gateway.provider_placeholder)} />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.model_label)}</span>
-                          <Input value={target.model} onChange={(e) => updateTarget(index, { model: e.target.value })} placeholder={t(($) => $.ai_gateway.model_placeholder)} />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.upstream_api_label)}</span>
-                          <Select value={target.upstream_api} onValueChange={(v) => { if (v) updateTarget(index, { upstream_api: v }); }}>
-                            <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
-                            <SelectContent>{UPSTREAM_APIS.map((apiName) => <SelectItem key={apiName} value={apiName}>{t(($) => $.ai_gateway.upstream_api[apiName])}</SelectItem>)}</SelectContent>
-                          </Select>
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.reasoning_effort_label)}</span>
-                          <Select
-                            value={target.reasoning_effort || REASONING_EFFORT_DEFAULT}
-                            onValueChange={(v) => updateTarget(index, { reasoning_effort: v && v !== REASONING_EFFORT_DEFAULT ? v : "" })}
-                          >
-                            <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value={REASONING_EFFORT_DEFAULT}>{t(($) => $.ai_gateway.reasoning_effort_default)}</SelectItem>
-                              {REASONING_EFFORTS.map((effort) => (
-                                <SelectItem key={effort} value={effort}>{t(($) => $.ai_gateway.reasoning_effort[effort])}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.auth_mode_label)}</span>
-                          <Select
-                            value={target.auth_mode ?? "api_key"}
-                            onValueChange={(v) => updateTarget(index, v === "custom_headers_cookie" ? {
-                              auth_mode: "custom_headers_cookie",
-                              api_key_env: "",
-                              organization_env: "",
-                              project_env: "",
-                            } : {
-                              auth_mode: "api_key",
-                              api_key_env: target.api_key_env || "OPENAI_API_KEY",
-                              cookie_env: "",
-                              custom_header_envs: [],
-                            })}
-                          >
-                            <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {AUTH_MODES.map((mode) => (
-                                <SelectItem key={mode} value={mode}>{t(($) => $.ai_gateway.auth_mode[mode])}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </label>
-                      </div>
-                      <div className="grid gap-3 lg:grid-cols-[1fr_180px_120px_80px]">
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.base_url_label)}</span>
-                          <Input value={target.base_url} onChange={(e) => updateTarget(index, { base_url: e.target.value })} placeholder={t(($) => $.ai_gateway.base_url_placeholder)} />
-                        </label>
-                        {target.auth_mode === "custom_headers_cookie" ? (
+                      <div className="space-y-3">
+                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_basic_section)}</div>
+                        <div className="grid gap-3 lg:grid-cols-4">
                           <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.cookie_env_label)}</span>
-                            <Input value={target.cookie_env ?? ""} onChange={(e) => updateTarget(index, { cookie_env: e.target.value })} placeholder={t(($) => $.ai_gateway.cookie_env_placeholder)} />
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.provider_label)}</span>
+                            <Input value={target.provider} onChange={(e) => updateTarget(index, { provider: e.target.value })} placeholder={t(($) => $.ai_gateway.provider_placeholder)} />
                           </label>
-                        ) : (
                           <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.api_key_env_label)}</span>
-                            <Input value={target.api_key_env} onChange={(e) => updateTarget(index, { api_key_env: e.target.value })} placeholder={t(($) => $.ai_gateway.api_key_env_placeholder)} />
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.model_label)}</span>
+                            <Input value={target.model} onChange={(e) => updateTarget(index, { model: e.target.value })} placeholder={t(($) => $.ai_gateway.model_placeholder)} />
                           </label>
-                        )}
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.timeout_label)}</span>
-                          <Input type="number" value={target.timeout_seconds} onChange={(e) => updateTarget(index, { timeout_seconds: Number(e.target.value) || 60 })} />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.weight_label)}</span>
-                          <Input type="number" value={target.weight} onChange={(e) => updateTarget(index, { weight: Number(e.target.value) || 1 })} />
-                        </label>
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.upstream_api_label)}</span>
+                            <Select value={target.upstream_api} onValueChange={(v) => { if (v) updateTarget(index, { upstream_api: v }); }}>
+                              <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+                              <SelectContent>{UPSTREAM_APIS.map((apiName) => <SelectItem key={apiName} value={apiName}>{t(($) => $.ai_gateway.upstream_api[apiName])}</SelectItem>)}</SelectContent>
+                            </Select>
+                          </label>
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.base_url_label)}</span>
+                            <Input value={target.base_url} onChange={(e) => updateTarget(index, { base_url: e.target.value })} placeholder={t(($) => $.ai_gateway.base_url_placeholder)} />
+                          </label>
+                        </div>
                       </div>
+
+                      <div className="space-y-3">
+                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_auth_section)}</div>
+                        <div className="grid gap-3 lg:grid-cols-3">
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.auth_mode_label)}</span>
+                            <Select
+                              value={target.auth_mode ?? "api_key"}
+                              onValueChange={(v) => updateTarget(index, v === "custom_headers_cookie" ? {
+                                auth_mode: "custom_headers_cookie",
+                                api_key_env: "",
+                                organization_env: "",
+                                project_env: "",
+                              } : {
+                                auth_mode: "api_key",
+                                api_key_env: target.api_key_env || "OPENAI_API_KEY",
+                                cookie_env: "",
+                                custom_header_envs: [],
+                              })}
+                            >
+                              <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {AUTH_MODES.map((mode) => (
+                                  <SelectItem key={mode} value={mode}>{t(($) => $.ai_gateway.auth_mode[mode])}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </label>
+                          {target.auth_mode === "custom_headers_cookie" ? (
+                            <label className="space-y-1.5 lg:col-span-2">
+                              <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.cookie_env_label)}</span>
+                              <Input value={target.cookie_env ?? ""} onChange={(e) => updateTarget(index, { cookie_env: e.target.value })} placeholder={t(($) => $.ai_gateway.cookie_env_placeholder)} />
+                            </label>
+                          ) : (
+                            <>
+                              <label className="space-y-1.5">
+                                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.api_key_env_label)}</span>
+                                <Input value={target.api_key_env} onChange={(e) => updateTarget(index, { api_key_env: e.target.value })} placeholder={t(($) => $.ai_gateway.api_key_env_placeholder)} />
+                              </label>
+                              <label className="space-y-1.5">
+                                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.organization_env_label)}</span>
+                                <Input value={target.organization_env ?? ""} onChange={(e) => updateTarget(index, { organization_env: e.target.value })} placeholder={t(($) => $.ai_gateway.organization_env_placeholder)} />
+                              </label>
+                            </>
+                          )}
+                        </div>
+                        {target.auth_mode === "api_key" ? (
+                          <div className="grid gap-3 lg:grid-cols-3">
+                            <label className="space-y-1.5 lg:col-span-1">
+                              <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.project_env_label)}</span>
+                              <Input value={target.project_env ?? ""} onChange={(e) => updateTarget(index, { project_env: e.target.value })} placeholder={t(($) => $.ai_gateway.project_env_placeholder)} />
+                            </label>
+                          </div>
+                        ) : null}
+                      </div>
+
                       {target.auth_mode === "custom_headers_cookie" ? (
                         <div className="space-y-3 rounded-md border border-dashed p-3">
+                          <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_header_section)}</div>
                           <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.browser_helper_hint)}</p>
                           <div className="space-y-2">
                             <div className="flex items-center justify-between gap-2">
@@ -963,19 +977,40 @@ export function AIGatewayTab() {
                             )}
                           </div>
                         </div>
-                      ) : (
-                        <div className="grid gap-3 sm:grid-cols-2">
+                      ) : null}
+
+                      <div className="space-y-3">
+                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_runtime_section)}</div>
+                        <div className="grid gap-3 lg:grid-cols-3">
                           <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.organization_env_label)}</span>
-                            <Input value={target.organization_env ?? ""} onChange={(e) => updateTarget(index, { organization_env: e.target.value })} placeholder={t(($) => $.ai_gateway.organization_env_placeholder)} />
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.reasoning_effort_label)}</span>
+                            <Select
+                              value={target.reasoning_effort || REASONING_EFFORT_DEFAULT}
+                              onValueChange={(v) => updateTarget(index, { reasoning_effort: v && v !== REASONING_EFFORT_DEFAULT ? v : "" })}
+                            >
+                              <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value={REASONING_EFFORT_DEFAULT}>{t(($) => $.ai_gateway.reasoning_effort_default)}</SelectItem>
+                                {REASONING_EFFORTS.map((effort) => (
+                                  <SelectItem key={effort} value={effort}>{t(($) => $.ai_gateway.reasoning_effort[effort])}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </label>
                           <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.project_env_label)}</span>
-                            <Input value={target.project_env ?? ""} onChange={(e) => updateTarget(index, { project_env: e.target.value })} placeholder={t(($) => $.ai_gateway.project_env_placeholder)} />
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.timeout_label)}</span>
+                            <Input type="number" value={target.timeout_seconds} onChange={(e) => updateTarget(index, { timeout_seconds: Number(e.target.value) || 60 })} />
+                          </label>
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.weight_label)}</span>
+                            <Input type="number" value={target.weight} onChange={(e) => updateTarget(index, { weight: Number(e.target.value) || 1 })} />
                           </label>
                         </div>
-                      )}
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_pricing_section)}</div>
+                        <div className="grid gap-3 sm:grid-cols-2">
                         <label className="space-y-1.5">
                           <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.input_price_label)}</span>
                           <Input value={microsToUSD(target.input_price_per_million_micros)} onChange={(e) => updateTarget(index, { input_price_per_million_micros: usdToMicros(e.target.value) })} placeholder={t(($) => $.ai_gateway.input_price_placeholder)} />
@@ -984,6 +1019,7 @@ export function AIGatewayTab() {
                           <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.output_price_label)}</span>
                           <Input value={microsToUSD(target.output_price_per_million_micros)} onChange={(e) => updateTarget(index, { output_price_per_million_micros: usdToMicros(e.target.value) })} placeholder={t(($) => $.ai_gateway.output_price_placeholder)} />
                         </label>
+                      </div>
                       </div>
                     </div>
                   ))}
