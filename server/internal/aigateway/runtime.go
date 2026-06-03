@@ -971,20 +971,22 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 			}
 			totalLatency := time.Since(start)
 			rt.RecordUsage(context.Background(), UsageRecord{
-				Key:              req.Key,
-				RequestID:        req.RequestID,
-				CallerID:         req.CallerID,
-				Endpoint:         req.Endpoint,
-				ModelAlias:       req.ModelAlias,
-				Target:           req.Target,
-				TargetModel:      req.TargetModel,
-				StatusCode:       resp.StatusCode,
-				PromptTokens:     usage.PromptTokens,
-				CompletionTokens: usage.CompletionTokens,
-				TotalTokens:      usage.TotalTokens,
-				LatencyMs:        totalLatency.Milliseconds(),
-				Error:            errText,
-				Bytes:            n,
+				Key:               req.Key,
+				RequestID:         req.RequestID,
+				CallerID:          req.CallerID,
+				Endpoint:          req.Endpoint,
+				ModelAlias:        req.ModelAlias,
+				Target:            req.Target,
+				TargetModel:       req.TargetModel,
+				StatusCode:        resp.StatusCode,
+				PromptTokens:      usage.PromptTokens,
+				CompletionTokens:  usage.CompletionTokens,
+				TotalTokens:       usage.TotalTokens,
+				CachedInputTokens: usage.CachedInputTokens,
+				ReasoningTokens:   usage.ReasoningTokens,
+				LatencyMs:         totalLatency.Milliseconds(),
+				Error:             errText,
+				Bytes:             n,
 			})
 			return resp.StatusCode, false, errText
 		}
@@ -999,20 +1001,22 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 		}
 		totalLatency := time.Since(start)
 		rt.RecordUsage(context.Background(), UsageRecord{
-			Key:              req.Key,
-			RequestID:        req.RequestID,
-			CallerID:         req.CallerID,
-			Endpoint:         req.Endpoint,
-			ModelAlias:       req.ModelAlias,
-			Target:           req.Target,
-			TargetModel:      req.TargetModel,
-			StatusCode:       resp.StatusCode,
-			LatencyMs:        totalLatency.Milliseconds(),
-			Error:            errText,
-			PromptTokens:     usage.PromptTokens,
-			CompletionTokens: usage.CompletionTokens,
-			TotalTokens:      usage.TotalTokens,
-			Bytes:            n,
+			Key:               req.Key,
+			RequestID:         req.RequestID,
+			CallerID:          req.CallerID,
+			Endpoint:          req.Endpoint,
+			ModelAlias:        req.ModelAlias,
+			Target:            req.Target,
+			TargetModel:       req.TargetModel,
+			StatusCode:        resp.StatusCode,
+			LatencyMs:         totalLatency.Milliseconds(),
+			Error:             errText,
+			PromptTokens:      usage.PromptTokens,
+			CompletionTokens:  usage.CompletionTokens,
+			TotalTokens:       usage.TotalTokens,
+			CachedInputTokens: usage.CachedInputTokens,
+			ReasoningTokens:   usage.ReasoningTokens,
+			Bytes:             n,
 		})
 		return resp.StatusCode, false, errText
 	}
@@ -1041,19 +1045,21 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 		rt.RecordResponseState(context.Background(), req.Key, extractAIGatewayResponseID(data), req.Target, req.TargetModel)
 	}
 	rt.RecordUsage(context.Background(), UsageRecord{
-		Key:              req.Key,
-		RequestID:        req.RequestID,
-		CallerID:         req.CallerID,
-		Endpoint:         req.Endpoint,
-		ModelAlias:       req.ModelAlias,
-		Target:           req.Target,
-		TargetModel:      req.TargetModel,
-		StatusCode:       resp.StatusCode,
-		LatencyMs:        time.Since(start).Milliseconds(),
-		Error:            errText,
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		TotalTokens:      usage.TotalTokens,
+		Key:               req.Key,
+		RequestID:         req.RequestID,
+		CallerID:          req.CallerID,
+		Endpoint:          req.Endpoint,
+		ModelAlias:        req.ModelAlias,
+		Target:            req.Target,
+		TargetModel:       req.TargetModel,
+		StatusCode:        resp.StatusCode,
+		LatencyMs:         time.Since(start).Milliseconds(),
+		Error:             errText,
+		PromptTokens:      usage.PromptTokens,
+		CompletionTokens:  usage.CompletionTokens,
+		TotalTokens:       usage.TotalTokens,
+		CachedInputTokens: usage.CachedInputTokens,
+		ReasoningTokens:   usage.ReasoningTokens,
 	})
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(data)
@@ -1362,17 +1368,26 @@ func SanitizeCallerID(value string) string {
 }
 
 type UsageTokens struct {
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
+	PromptTokens      int64
+	CompletionTokens  int64
+	TotalTokens       int64
+	CachedInputTokens int64
+	ReasoningTokens   int64
 }
 
 func (u UsageTokens) responsesUsage() map[string]int64 {
-	return map[string]int64{
+	usage := map[string]int64{
 		"input_tokens":  u.PromptTokens,
 		"output_tokens": u.CompletionTokens,
 		"total_tokens":  u.TotalTokens,
 	}
+	if u.CachedInputTokens > 0 {
+		usage["cached_input_tokens"] = u.CachedInputTokens
+	}
+	if u.ReasoningTokens > 0 {
+		usage["reasoning_tokens"] = u.ReasoningTokens
+	}
+	return usage
 }
 
 type usageJSON struct {
@@ -1381,6 +1396,20 @@ type usageJSON struct {
 	InputTokens      int64 `json:"input_tokens"`
 	OutputTokens     int64 `json:"output_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
+	PromptDetails    struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	InputDetails struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	OutputDetails struct {
+		ReasoningTokens int64 `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
+	CachedInputTokens     int64 `json:"cached_input_tokens"`
+	CacheReadInputTokens  int64 `json:"cache_read_input_tokens"`
+	PromptCacheHitTokens  int64 `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens int64 `json:"prompt_cache_miss_tokens"`
+	ReasoningTokens       int64 `json:"reasoning_tokens"`
 }
 
 func ParseUsage(data []byte) UsageTokens {
@@ -1409,11 +1438,36 @@ func ParseUsage(data []byte) UsageTokens {
 	if total == 0 {
 		total = prompt + completion
 	}
-	return UsageTokens{
-		PromptTokens:     prompt,
-		CompletionTokens: completion,
-		TotalTokens:      total,
+	cachedInput := firstPositive(
+		usage.CachedInputTokens,
+		usage.CacheReadInputTokens,
+		usage.InputDetails.CachedTokens,
+		usage.PromptDetails.CachedTokens,
+		usage.PromptCacheHitTokens,
+	)
+	if prompt == 0 && usage.PromptCacheHitTokens > 0 && usage.PromptCacheMissTokens > 0 {
+		prompt = usage.PromptCacheHitTokens + usage.PromptCacheMissTokens
+		if total == completion {
+			total = prompt + completion
+		}
 	}
+	reasoning := firstPositive(usage.ReasoningTokens, usage.OutputDetails.ReasoningTokens)
+	return UsageTokens{
+		PromptTokens:      prompt,
+		CompletionTokens:  completion,
+		TotalTokens:       total,
+		CachedInputTokens: cachedInput,
+		ReasoningTokens:   reasoning,
+	}
+}
+
+func firstPositive(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 type sseUsageParser struct {
@@ -1525,28 +1579,33 @@ func isAIGatewayResponseCompletedEvent(raw string) bool {
 }
 
 type UsageRecord struct {
-	Key              VirtualKey
-	RequestID        string
-	CallerID         string
-	Endpoint         string
-	ModelAlias       string
-	Target           Target
-	TargetModel      string
-	StatusCode       int
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
-	InputCostMicros  int64
-	OutputCostMicros int64
-	TotalCostMicros  int64
-	LatencyMs        int64
-	Error            string
-	Bytes            int64
+	Key               VirtualKey
+	RequestID         string
+	CallerID          string
+	Endpoint          string
+	ModelAlias        string
+	Target            Target
+	TargetModel       string
+	StatusCode        int
+	PromptTokens      int64
+	CompletionTokens  int64
+	TotalTokens       int64
+	CachedInputTokens int64
+	ReasoningTokens   int64
+	InputCostMicros   int64
+	OutputCostMicros  int64
+	TotalCostMicros   int64
+	LatencyMs         int64
+	Error             string
+	Bytes             int64
 }
 
 type defaultUsagePricing struct {
-	InputPricePerMillionMicros  int64
-	OutputPricePerMillionMicros int64
+	InputPricePerMillionMicros       int64
+	CachedInputPricePerMillionMicros int64
+	OutputPricePerMillionMicros      int64
+	LongInputPricePerMillionMicros   int64
+	LongOutputPricePerMillionMicros  int64
 }
 
 var defaultModelPricing = map[string]defaultUsagePricing{
@@ -1561,7 +1620,7 @@ var defaultModelPricing = map[string]defaultUsagePricing{
 	"claude-sonnet-4":   {InputPricePerMillionMicros: 3_000_000, OutputPricePerMillionMicros: 15_000_000},
 	"claude-haiku-3-5":  {InputPricePerMillionMicros: 800_000, OutputPricePerMillionMicros: 4_000_000},
 
-	"gpt-5.5":             {InputPricePerMillionMicros: 5_000_000, OutputPricePerMillionMicros: 30_000_000},
+	"gpt-5.5":             {InputPricePerMillionMicros: 5_000_000, CachedInputPricePerMillionMicros: 500_000, OutputPricePerMillionMicros: 30_000_000, LongInputPricePerMillionMicros: 10_000_000, LongOutputPricePerMillionMicros: 45_000_000},
 	"gpt-5.5-pro":         {InputPricePerMillionMicros: 30_000_000, OutputPricePerMillionMicros: 180_000_000},
 	"gpt-5.4-mini":        {InputPricePerMillionMicros: 750_000, OutputPricePerMillionMicros: 4_500_000},
 	"gpt-5.4-nano":        {InputPricePerMillionMicros: 200_000, OutputPricePerMillionMicros: 1_250_000},
@@ -1597,21 +1656,78 @@ func effectiveUsagePricing(target Target, targetModel string) defaultUsagePricin
 	pricing, _ := resolveDefaultModelPricing(targetModel, target.Model)
 	if target.InputPricePerMillionMicros > 0 {
 		pricing.InputPricePerMillionMicros = target.InputPricePerMillionMicros
+		pricing.CachedInputPricePerMillionMicros = 0
+		pricing.LongInputPricePerMillionMicros = 0
 	}
 	if target.OutputPricePerMillionMicros > 0 {
 		pricing.OutputPricePerMillionMicros = target.OutputPricePerMillionMicros
+		pricing.LongOutputPricePerMillionMicros = 0
 	}
 	return pricing
 }
 
 func EstimateUsageCostMicros(model string, promptTokens int64, completionTokens int64) int64 {
+	return EstimateUsageCostBreakdown(model, promptTokens, completionTokens, 0).TotalCostMicros
+}
+
+type UsageCostBreakdown struct {
+	BillableInputTokens    int64
+	CachedInputTokens      int64
+	InputCostMicros        int64
+	CachedInputCostMicros  int64
+	OutputCostMicros       int64
+	TotalCostMicros        int64
+	LongContext            bool
+	InputPriceMicros       int64
+	CachedInputPriceMicros int64
+	OutputPriceMicros      int64
+}
+
+const gpt55LongContextInputThreshold = int64(272_000)
+
+func EstimateUsageCostBreakdown(model string, promptTokens int64, completionTokens int64, cachedInputTokens int64) UsageCostBreakdown {
 	pricing, ok := resolveDefaultModelPricing(model)
 	if !ok {
-		return 0
+		return UsageCostBreakdown{}
 	}
-	inputCost := promptTokens * pricing.InputPricePerMillionMicros / 1_000_000
-	outputCost := completionTokens * pricing.OutputPricePerMillionMicros / 1_000_000
-	return inputCost + outputCost
+	return estimateUsageCostBreakdownWithPricing(pricing, promptTokens, completionTokens, cachedInputTokens)
+}
+
+func estimateUsageCostBreakdownWithPricing(pricing defaultUsagePricing, promptTokens int64, completionTokens int64, cachedInputTokens int64) UsageCostBreakdown {
+	if cachedInputTokens < 0 {
+		cachedInputTokens = 0
+	}
+	if cachedInputTokens > promptTokens {
+		cachedInputTokens = promptTokens
+	}
+	billableInputTokens := promptTokens - cachedInputTokens
+	inputPrice := pricing.InputPricePerMillionMicros
+	outputPrice := pricing.OutputPricePerMillionMicros
+	cachedInputPrice := pricing.CachedInputPricePerMillionMicros
+	longContext := false
+	if promptTokens > gpt55LongContextInputThreshold && pricing.LongInputPricePerMillionMicros > 0 && pricing.LongOutputPricePerMillionMicros > 0 {
+		longContext = true
+		inputPrice = pricing.LongInputPricePerMillionMicros
+		outputPrice = pricing.LongOutputPricePerMillionMicros
+		cachedInputPrice = 0
+		billableInputTokens = promptTokens
+		cachedInputTokens = 0
+	}
+	inputCost := billableInputTokens * inputPrice / 1_000_000
+	cachedInputCost := cachedInputTokens * cachedInputPrice / 1_000_000
+	outputCost := completionTokens * outputPrice / 1_000_000
+	return UsageCostBreakdown{
+		BillableInputTokens:    billableInputTokens,
+		CachedInputTokens:      cachedInputTokens,
+		InputCostMicros:        inputCost,
+		CachedInputCostMicros:  cachedInputCost,
+		OutputCostMicros:       outputCost,
+		TotalCostMicros:        inputCost + cachedInputCost + outputCost,
+		LongContext:            longContext,
+		InputPriceMicros:       inputPrice,
+		CachedInputPriceMicros: cachedInputPrice,
+		OutputPriceMicros:      outputPrice,
+	}
 }
 
 func resolveDefaultModelPricing(models ...string) (defaultUsagePricing, bool) {
@@ -1749,27 +1865,32 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 		errText = errText[:2048]
 	}
 	pricing := effectiveUsagePricing(record.Target, record.TargetModel)
+	breakdown := estimateUsageCostBreakdownWithPricing(pricing, record.PromptTokens, record.CompletionTokens, record.CachedInputTokens)
 	inputCost := record.InputCostMicros
-	if inputCost == 0 && record.PromptTokens > 0 && pricing.InputPricePerMillionMicros > 0 {
-		inputCost = record.PromptTokens * pricing.InputPricePerMillionMicros / 1_000_000
+	if inputCost == 0 {
+		inputCost = breakdown.InputCostMicros
 	}
 	outputCost := record.OutputCostMicros
-	if outputCost == 0 && record.CompletionTokens > 0 && pricing.OutputPricePerMillionMicros > 0 {
-		outputCost = record.CompletionTokens * pricing.OutputPricePerMillionMicros / 1_000_000
+	if outputCost == 0 {
+		outputCost = breakdown.OutputCostMicros
 	}
 	totalCost := record.TotalCostMicros
 	if totalCost == 0 {
-		totalCost = inputCost + outputCost
+		totalCost = inputCost + breakdown.CachedInputCostMicros + outputCost
 	}
+	billableInputTokens := breakdown.BillableInputTokens
+	cachedInputTokens := breakdown.CachedInputTokens
 	reasoningEffort := strings.TrimSpace(record.Target.ReasoningEffort)
 	_, err := rt.DB.Exec(ctx, `
 		INSERT INTO ai_gateway_usage (
 			virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
 			upstream_provider, upstream_model, reasoning_effort, status_code, prompt_tokens,
 			completion_tokens, total_tokens, latency_ms, error,
-			input_cost_micros, output_cost_micros, total_cost_micros
+			input_cost_micros, output_cost_micros, total_cost_micros,
+			cached_input_tokens, billable_input_tokens, reasoning_tokens, long_context,
+			cached_input_cost_micros
 		)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18, $19, $20, $21, $22, $23)
 	`,
 		util.MustParseUUID(record.Key.ID),
 		util.MustParseUUID(record.Key.WorkspaceID),
@@ -1789,6 +1910,11 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 		inputCost,
 		outputCost,
 		totalCost,
+		cachedInputTokens,
+		billableInputTokens,
+		record.ReasoningTokens,
+		breakdown.LongContext,
+		breakdown.CachedInputCostMicros,
 	)
 	if err != nil && (strings.Contains(err.Error(), "reasoning_effort") || strings.Contains(err.Error(), "input_cost_micros")) {
 		_, _ = rt.DB.Exec(ctx, `

@@ -666,20 +666,47 @@ type aiGatewayUsageResponse struct {
 }
 
 type aiGatewayUsageSummaryResponse struct {
-	CallerID         string `json:"caller_id"`
-	KeyName          string `json:"key_name,omitempty"`
-	KeyPrefix        string `json:"key_prefix,omitempty"`
-	CreatedByName    string `json:"created_by_name,omitempty"`
-	CreatedByEmail   string `json:"created_by_email,omitempty"`
-	RequestCount     int64  `json:"request_count"`
-	SuccessCount     int64  `json:"success_count"`
-	ErrorCount       int64  `json:"error_count"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	TotalTokens      int64  `json:"total_tokens"`
-	TotalCostMicros  int64  `json:"total_cost_micros"`
-	AverageLatencyMs int64  `json:"average_latency_ms"`
-	LastRequestAt    string `json:"last_request_at"`
+	CallerID                string `json:"caller_id"`
+	KeyName                 string `json:"key_name,omitempty"`
+	KeyPrefix               string `json:"key_prefix,omitempty"`
+	CreatedByName           string `json:"created_by_name,omitempty"`
+	CreatedByEmail          string `json:"created_by_email,omitempty"`
+	RequestCount            int64  `json:"request_count"`
+	SuccessCount            int64  `json:"success_count"`
+	ErrorCount              int64  `json:"error_count"`
+	PromptTokens            int64  `json:"prompt_tokens"`
+	CompletionTokens        int64  `json:"completion_tokens"`
+	CachedInputTokens       int64  `json:"cached_input_tokens"`
+	BillableInputTokens     int64  `json:"billable_input_tokens"`
+	ReasoningTokens         int64  `json:"reasoning_tokens"`
+	TotalTokens             int64  `json:"total_tokens"`
+	InputCostMicros         int64  `json:"input_cost_micros"`
+	CachedInputCostMicros   int64  `json:"cached_input_cost_micros"`
+	OutputCostMicros        int64  `json:"output_cost_micros"`
+	TotalCostMicros         int64  `json:"total_cost_micros"`
+	LongContextRequestCount int64  `json:"long_context_request_count"`
+	AverageLatencyMs        int64  `json:"average_latency_ms"`
+	LastRequestAt           string `json:"last_request_at"`
+}
+
+type aiGatewayPublicUsageSummaryResponse struct {
+	Email                   string `json:"email"`
+	RequestCount            int64  `json:"request_count"`
+	SuccessCount            int64  `json:"success_count"`
+	ErrorCount              int64  `json:"error_count"`
+	InputTokens             int64  `json:"input_tokens"`
+	CachedInputTokens       int64  `json:"cached_input_tokens"`
+	BillableInputTokens     int64  `json:"billable_input_tokens"`
+	OutputTokens            int64  `json:"output_tokens"`
+	ReasoningTokens         int64  `json:"reasoning_tokens"`
+	TotalTokens             int64  `json:"total_tokens"`
+	InputCostMicros         int64  `json:"input_cost_micros"`
+	CachedInputCostMicros   int64  `json:"cached_input_cost_micros"`
+	OutputCostMicros        int64  `json:"output_cost_micros"`
+	TotalCostMicros         int64  `json:"total_cost_micros"`
+	LongContextRequestCount int64  `json:"long_context_request_count"`
+	AverageLatencyMs        int64  `json:"average_latency_ms"`
+	LastRequestAt           string `json:"last_request_at"`
 }
 
 func (h *Handler) ListAIGatewayUsage(w http.ResponseWriter, r *http.Request) {
@@ -832,11 +859,33 @@ func (h *Handler) ListPublicAIGatewayUsageSummary(w http.ResponseWriter, r *http
 		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
 		return
 	}
-	for i := range resp {
-		resp[i].CreatedByName = ""
-		resp[i].CreatedByEmail = ""
+	publicResp := make([]aiGatewayPublicUsageSummaryResponse, 0, len(resp))
+	for _, item := range resp {
+		email, err := normalizeAIGatewayKeyEmail(item.CallerID)
+		if err != nil {
+			continue
+		}
+		publicResp = append(publicResp, aiGatewayPublicUsageSummaryResponse{
+			Email:                   email,
+			RequestCount:            item.RequestCount,
+			SuccessCount:            item.SuccessCount,
+			ErrorCount:              item.ErrorCount,
+			InputTokens:             item.PromptTokens,
+			CachedInputTokens:       item.CachedInputTokens,
+			BillableInputTokens:     item.BillableInputTokens,
+			OutputTokens:            item.CompletionTokens,
+			ReasoningTokens:         item.ReasoningTokens,
+			TotalTokens:             item.TotalTokens,
+			InputCostMicros:         item.InputCostMicros,
+			CachedInputCostMicros:   item.CachedInputCostMicros,
+			OutputCostMicros:        item.OutputCostMicros,
+			TotalCostMicros:         item.TotalCostMicros,
+			LongContextRequestCount: item.LongContextRequestCount,
+			AverageLatencyMs:        item.AverageLatencyMs,
+			LastRequestAt:           item.LastRequestAt,
+		})
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, publicResp)
 }
 
 func parseAIGatewayUsageSummaryDays(w http.ResponseWriter, r *http.Request) (int32, bool) {
@@ -865,13 +914,21 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 			COUNT(*) FILTER (WHERE u.status_code >= 400)::bigint,
 			COALESCE(SUM(u.prompt_tokens), 0)::bigint,
 			COALESCE(SUM(u.completion_tokens), 0)::bigint,
+			COALESCE(SUM(u.cached_input_tokens), 0)::bigint,
+			COALESCE(SUM(u.billable_input_tokens), 0)::bigint,
+			COALESCE(SUM(u.reasoning_tokens), 0)::bigint,
 			COALESCE(SUM(u.total_tokens), 0)::bigint,
+			COALESCE(SUM(u.input_cost_micros), 0)::bigint,
+			COALESCE(SUM(u.cached_input_cost_micros), 0)::bigint,
+			COALESCE(SUM(u.output_cost_micros), 0)::bigint,
 			COALESCE(SUM(u.total_cost_micros), 0)::bigint,
 			COALESCE(SUM(u.prompt_tokens) FILTER (WHERE u.total_cost_micros = 0), 0)::bigint,
 			COALESCE(SUM(u.completion_tokens) FILTER (WHERE u.total_cost_micros = 0), 0)::bigint,
+			COALESCE(SUM(u.cached_input_tokens) FILTER (WHERE u.total_cost_micros = 0), 0)::bigint,
 			COALESCE(SUM(u.latency_ms), 0)::bigint,
 			MAX(u.created_at),
-			COALESCE(u.upstream_model, '')
+			COALESCE(u.upstream_model, ''),
+			COUNT(*) FILTER (WHERE u.long_context)::bigint
 		FROM ai_gateway_usage u
 		LEFT JOIN ai_gateway_virtual_key k ON k.id = u.virtual_key_id
 		LEFT JOIN "user" creator ON creator.id = k.created_by
@@ -901,7 +958,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 	for rows.Next() {
 		var row aiGatewayUsageSummaryResponse
 		var lastRequestAt pgtype.Timestamptz
-		var zeroCostPromptTokens, zeroCostCompletionTokens, latencySum int64
+		var zeroCostPromptTokens, zeroCostCompletionTokens, zeroCostCachedInputTokens, latencySum int64
 		var upstreamModel string
 		if err := rows.Scan(
 			&row.CallerID,
@@ -914,17 +971,35 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 			&row.ErrorCount,
 			&row.PromptTokens,
 			&row.CompletionTokens,
+			&row.CachedInputTokens,
+			&row.BillableInputTokens,
+			&row.ReasoningTokens,
 			&row.TotalTokens,
+			&row.InputCostMicros,
+			&row.CachedInputCostMicros,
+			&row.OutputCostMicros,
 			&row.TotalCostMicros,
 			&zeroCostPromptTokens,
 			&zeroCostCompletionTokens,
+			&zeroCostCachedInputTokens,
 			&latencySum,
 			&lastRequestAt,
 			&upstreamModel,
+			&row.LongContextRequestCount,
 		); err != nil {
 			return nil, err
 		}
-		row.TotalCostMicros += aigateway.EstimateUsageCostMicros(upstreamModel, zeroCostPromptTokens, zeroCostCompletionTokens)
+		estimated := aigateway.EstimateUsageCostBreakdown(upstreamModel, zeroCostPromptTokens, zeroCostCompletionTokens, zeroCostCachedInputTokens)
+		row.InputCostMicros += estimated.InputCostMicros
+		row.CachedInputCostMicros += estimated.CachedInputCostMicros
+		row.OutputCostMicros += estimated.OutputCostMicros
+		row.TotalCostMicros += estimated.TotalCostMicros
+		if row.BillableInputTokens == 0 && row.PromptTokens > 0 {
+			row.BillableInputTokens = row.PromptTokens - row.CachedInputTokens
+			if row.BillableInputTokens < 0 {
+				row.BillableInputTokens = 0
+			}
+		}
 		agg := summaryByCaller[row.CallerID]
 		if agg == nil {
 			agg = &summaryAgg{item: aiGatewayUsageSummaryResponse{
@@ -942,8 +1017,15 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 		agg.item.ErrorCount += row.ErrorCount
 		agg.item.PromptTokens += row.PromptTokens
 		agg.item.CompletionTokens += row.CompletionTokens
+		agg.item.CachedInputTokens += row.CachedInputTokens
+		agg.item.BillableInputTokens += row.BillableInputTokens
+		agg.item.ReasoningTokens += row.ReasoningTokens
 		agg.item.TotalTokens += row.TotalTokens
+		agg.item.InputCostMicros += row.InputCostMicros
+		agg.item.CachedInputCostMicros += row.CachedInputCostMicros
+		agg.item.OutputCostMicros += row.OutputCostMicros
 		agg.item.TotalCostMicros += row.TotalCostMicros
+		agg.item.LongContextRequestCount += row.LongContextRequestCount
 		agg.latencySum += latencySum
 		if !agg.lastRequest.Valid || (lastRequestAt.Valid && lastRequestAt.Time.After(agg.lastRequest.Time)) {
 			agg.lastRequest = lastRequestAt

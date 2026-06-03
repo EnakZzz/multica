@@ -96,3 +96,48 @@ func TestEffectiveUsagePricingAllowsTargetOverrides(t *testing.T) {
 		t.Fatalf("partial override should keep default output price, got input=%d output=%d", got.InputPricePerMillionMicros, got.OutputPricePerMillionMicros)
 	}
 }
+
+func TestParseUsageIncludesCacheAndReasoningDetails(t *testing.T) {
+	usage := ParseUsage([]byte(`{
+		"usage": {
+			"input_tokens": 38451,
+			"output_tokens": 1275,
+			"total_tokens": 39726,
+			"input_tokens_details": {"cached_tokens": 36608},
+			"output_tokens_details": {"reasoning_tokens": 512}
+		}
+	}`))
+	if usage.PromptTokens != 38451 || usage.CompletionTokens != 1275 || usage.TotalTokens != 39726 {
+		t.Fatalf("usage totals mismatch: %+v", usage)
+	}
+	if usage.CachedInputTokens != 36608 {
+		t.Fatalf("cached input tokens: got %d", usage.CachedInputTokens)
+	}
+	if usage.ReasoningTokens != 512 {
+		t.Fatalf("reasoning tokens: got %d", usage.ReasoningTokens)
+	}
+}
+
+func TestEstimateUsageCostBreakdownUsesCacheAndLongContext(t *testing.T) {
+	cached := EstimateUsageCostBreakdown("gpt-5.5", 100_000, 2_000, 80_000)
+	if cached.LongContext {
+		t.Fatal("short request should not use long-context pricing")
+	}
+	if cached.BillableInputTokens != 20_000 || cached.CachedInputTokens != 80_000 {
+		t.Fatalf("token split mismatch: %+v", cached)
+	}
+	if cached.InputCostMicros != 100_000 || cached.CachedInputCostMicros != 40_000 || cached.OutputCostMicros != 60_000 {
+		t.Fatalf("cost split mismatch: %+v", cached)
+	}
+
+	long := EstimateUsageCostBreakdown("gpt-5.5", 300_000, 2_000, 80_000)
+	if !long.LongContext {
+		t.Fatal("large gpt-5.5 request should use long-context pricing")
+	}
+	if long.BillableInputTokens != 300_000 || long.CachedInputTokens != 0 {
+		t.Fatalf("long-context input split mismatch: %+v", long)
+	}
+	if long.InputCostMicros != 3_000_000 || long.OutputCostMicros != 90_000 {
+		t.Fatalf("long-context cost mismatch: %+v", long)
+	}
+}

@@ -338,17 +338,15 @@ func TestListPublicAIGatewayUsageSummaryUsesWorkspaceSlugWithoutAuth(t *testing.
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var summary []aiGatewayUsageSummaryResponse
-	if err := json.NewDecoder(w.Body).Decode(&summary); err != nil {
+	body := append([]byte(nil), w.Body.Bytes()...)
+	var summary []aiGatewayPublicUsageSummaryResponse
+	if err := json.Unmarshal(body, &summary); err != nil {
 		t.Fatalf("decode summary: %v", err)
 	}
 	found := false
 	for _, item := range summary {
-		if item.CallerID == handlerTestEmail {
+		if item.Email == handlerTestEmail {
 			found = true
-			if item.CreatedByEmail != "" || item.CreatedByName != "" {
-				t.Fatalf("public summary should not expose creator fields: %+v", item)
-			}
 			if item.RequestCount < 1 || item.TotalTokens < 16 {
 				t.Fatalf("unexpected public summary item: %+v", item)
 			}
@@ -360,6 +358,18 @@ func TestListPublicAIGatewayUsageSummaryUsesWorkspaceSlugWithoutAuth(t *testing.
 	}
 	if !found {
 		t.Fatalf("public summary did not include creator email %q: %+v", handlerTestEmail, summary)
+	}
+
+	var raw []map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode raw summary: %v", err)
+	}
+	for _, item := range raw {
+		for _, field := range []string{"caller_id", "key_name", "key_prefix", "created_by_name", "created_by_email"} {
+			if _, ok := item[field]; ok {
+				t.Fatalf("public summary should not expose %s: %+v", field, item)
+			}
+		}
 	}
 }
 
