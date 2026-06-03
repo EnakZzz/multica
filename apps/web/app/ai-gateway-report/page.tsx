@@ -40,7 +40,7 @@ interface AIGatewayReportRow {
 }
 
 const PRICING_HINTS = {
-  model: "按实际上游模型归类展示。GPT-5.5、GPT-5.4 会拆开统计；其他模型保留原模型名。",
+  model: "按实际上游模型字段分组展示。字段不同就会自然拆开，例如 gpt-5.5 和 gpt-5.4。",
   input: "标准 GPT-5.5：输入 $5 / 1M tokens；缓存输入单独按 $0.50 / 1M tokens 计费。",
   cachedInput: "缓存命中的输入 tokens。标准 GPT-5.5 缓存输入 $0.50 / 1M tokens；长上下文请求不再单独拆缓存价。",
   output: "标准 GPT-5.5：输出 $30 / 1M tokens；reasoning tokens 按 output tokens 计费。",

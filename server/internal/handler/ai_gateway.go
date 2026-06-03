@@ -905,19 +905,11 @@ func parseAIGatewayUsageSummaryDays(w http.ResponseWriter, r *http.Request) (int
 }
 
 func aiGatewayUsageModelLabel(model string) string {
-	model = strings.TrimSpace(strings.ToLower(model))
-	switch {
-	case strings.HasPrefix(model, "gpt-5.5"):
-		return "GPT-5.5"
-	case strings.HasPrefix(model, "gpt-5.4"):
-		return "GPT-5.4"
-	case strings.HasPrefix(model, "gpt-5"):
-		return "GPT-5"
-	case model == "":
+	model = strings.TrimSpace(model)
+	if model == "" {
 		return "unknown"
-	default:
-		return model
 	}
+	return model
 }
 
 func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID string, days int32) ([]aiGatewayUsageSummaryResponse, error) {
