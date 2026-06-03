@@ -517,6 +517,10 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 			targetModel = model
 		}
 		upstreamPayload := rt.preparePayloadForUpstream(r.Context(), key, endpoint, payload)
+		previousResponseID := ""
+		if endpoint == "/responses" {
+			previousResponseID = strings.TrimSpace(stringValue(upstreamPayload["previous_response_id"]))
+		}
 		upstreamEndpoint, upstreamBody, err := BuildUpstreamRequest(endpoint, upstreamPayload, target, targetModel)
 		if err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
@@ -528,17 +532,18 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 			forwardTarget.ReasoningEffort = reasoningEffort
 		}
 		status, retry, errText := rt.forward(w, r, ForwardRequest{
-			Key:              key,
-			RequestID:        requestID,
-			CallerID:         callerID,
-			Endpoint:         endpoint,
-			UpstreamEndpoint: upstreamEndpoint,
-			ModelAlias:       model,
-			Target:           forwardTarget,
-			TargetModel:      targetModel,
-			APIKey:           apiKey,
-			Body:             upstreamBody,
-			Stream:           stream,
+			Key:                key,
+			RequestID:          requestID,
+			CallerID:           callerID,
+			Endpoint:           endpoint,
+			UpstreamEndpoint:   upstreamEndpoint,
+			ModelAlias:         model,
+			Target:             forwardTarget,
+			TargetModel:        targetModel,
+			PreviousResponseID: previousResponseID,
+			APIKey:             apiKey,
+			Body:               upstreamBody,
+			Stream:             stream,
 		})
 		if !retry {
 			return
@@ -862,17 +867,19 @@ func stringValue(value any) string {
 }
 
 type ForwardRequest struct {
-	Key              VirtualKey
-	RequestID        string
-	CallerID         string
-	Endpoint         string
-	UpstreamEndpoint string
-	ModelAlias       string
-	Target           Target
-	TargetModel      string
-	APIKey           string
-	Body             []byte
-	Stream           bool
+	Key                VirtualKey
+	RequestID          string
+	CallerID           string
+	Endpoint           string
+	UpstreamEndpoint   string
+	ModelAlias         string
+	Target             Target
+	TargetModel        string
+	PreviousResponseID string
+	ResponseSessionID  string
+	APIKey             string
+	Body               []byte
+	Stream             bool
 }
 
 func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRequest) (status int, retry bool, errorText string) {
@@ -964,29 +971,36 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 		if req.Target.UpstreamAPI == "chat_completions" && req.Endpoint == "/responses" {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(resp.StatusCode)
-			n, usage, copyErr := copyChatCompletionStreamAsResponses(w, resp.Body, req)
+			n, usage, responseID, copyErr := copyChatCompletionStreamAsResponses(w, resp.Body, req)
 			errText := ""
 			if copyErr != nil {
 				errText = copyErr.Error()
 			}
+			responseSessionID := ""
+			if resp.StatusCode < 400 {
+				responseSessionID = rt.RecordResponseState(context.Background(), req.Key, responseID, req.PreviousResponseID, req.Target, req.TargetModel)
+			}
 			totalLatency := time.Since(start)
 			rt.RecordUsage(context.Background(), UsageRecord{
-				Key:               req.Key,
-				RequestID:         req.RequestID,
-				CallerID:          req.CallerID,
-				Endpoint:          req.Endpoint,
-				ModelAlias:        req.ModelAlias,
-				Target:            req.Target,
-				TargetModel:       req.TargetModel,
-				StatusCode:        resp.StatusCode,
-				PromptTokens:      usage.PromptTokens,
-				CompletionTokens:  usage.CompletionTokens,
-				TotalTokens:       usage.TotalTokens,
-				CachedInputTokens: usage.CachedInputTokens,
-				ReasoningTokens:   usage.ReasoningTokens,
-				LatencyMs:         totalLatency.Milliseconds(),
-				Error:             errText,
-				Bytes:             n,
+				Key:                req.Key,
+				RequestID:          req.RequestID,
+				CallerID:           req.CallerID,
+				Endpoint:           req.Endpoint,
+				ResponseID:         responseID,
+				PreviousResponseID: req.PreviousResponseID,
+				ResponseSessionID:  responseSessionID,
+				ModelAlias:         req.ModelAlias,
+				Target:             req.Target,
+				TargetModel:        req.TargetModel,
+				StatusCode:         resp.StatusCode,
+				PromptTokens:       usage.PromptTokens,
+				CompletionTokens:   usage.CompletionTokens,
+				TotalTokens:        usage.TotalTokens,
+				CachedInputTokens:  usage.CachedInputTokens,
+				ReasoningTokens:    usage.ReasoningTokens,
+				LatencyMs:          totalLatency.Milliseconds(),
+				Error:              errText,
+				Bytes:              n,
 			})
 			return resp.StatusCode, false, errText
 		}
@@ -997,26 +1011,30 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 			errText = copyErr.Error()
 		}
 		if resp.StatusCode < 400 && req.Target.UpstreamAPI == "responses" && req.Endpoint == "/responses" {
-			rt.RecordResponseState(context.Background(), req.Key, responseID, req.Target, req.TargetModel)
+			responseSessionID := rt.RecordResponseState(context.Background(), req.Key, responseID, req.PreviousResponseID, req.Target, req.TargetModel)
+			req.ResponseSessionID = responseSessionID
 		}
 		totalLatency := time.Since(start)
 		rt.RecordUsage(context.Background(), UsageRecord{
-			Key:               req.Key,
-			RequestID:         req.RequestID,
-			CallerID:          req.CallerID,
-			Endpoint:          req.Endpoint,
-			ModelAlias:        req.ModelAlias,
-			Target:            req.Target,
-			TargetModel:       req.TargetModel,
-			StatusCode:        resp.StatusCode,
-			LatencyMs:         totalLatency.Milliseconds(),
-			Error:             errText,
-			PromptTokens:      usage.PromptTokens,
-			CompletionTokens:  usage.CompletionTokens,
-			TotalTokens:       usage.TotalTokens,
-			CachedInputTokens: usage.CachedInputTokens,
-			ReasoningTokens:   usage.ReasoningTokens,
-			Bytes:             n,
+			Key:                req.Key,
+			RequestID:          req.RequestID,
+			CallerID:           req.CallerID,
+			Endpoint:           req.Endpoint,
+			ResponseID:         responseID,
+			PreviousResponseID: req.PreviousResponseID,
+			ResponseSessionID:  req.ResponseSessionID,
+			ModelAlias:         req.ModelAlias,
+			Target:             req.Target,
+			TargetModel:        req.TargetModel,
+			StatusCode:         resp.StatusCode,
+			LatencyMs:          totalLatency.Milliseconds(),
+			Error:              errText,
+			PromptTokens:       usage.PromptTokens,
+			CompletionTokens:   usage.CompletionTokens,
+			TotalTokens:        usage.TotalTokens,
+			CachedInputTokens:  usage.CachedInputTokens,
+			ReasoningTokens:    usage.ReasoningTokens,
+			Bytes:              n,
 		})
 		return resp.StatusCode, false, errText
 	}
@@ -1041,25 +1059,31 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 			w.Header().Set("Content-Type", "application/json")
 		}
 	}
-	if resp.StatusCode < 400 && req.Target.UpstreamAPI == "responses" && req.Endpoint == "/responses" {
-		rt.RecordResponseState(context.Background(), req.Key, extractAIGatewayResponseID(data), req.Target, req.TargetModel)
+	responseID := ""
+	responseSessionID := ""
+	if resp.StatusCode < 400 && req.Endpoint == "/responses" {
+		responseID = extractAIGatewayResponseID(data)
+		responseSessionID = rt.RecordResponseState(context.Background(), req.Key, responseID, req.PreviousResponseID, req.Target, req.TargetModel)
 	}
 	rt.RecordUsage(context.Background(), UsageRecord{
-		Key:               req.Key,
-		RequestID:         req.RequestID,
-		CallerID:          req.CallerID,
-		Endpoint:          req.Endpoint,
-		ModelAlias:        req.ModelAlias,
-		Target:            req.Target,
-		TargetModel:       req.TargetModel,
-		StatusCode:        resp.StatusCode,
-		LatencyMs:         time.Since(start).Milliseconds(),
-		Error:             errText,
-		PromptTokens:      usage.PromptTokens,
-		CompletionTokens:  usage.CompletionTokens,
-		TotalTokens:       usage.TotalTokens,
-		CachedInputTokens: usage.CachedInputTokens,
-		ReasoningTokens:   usage.ReasoningTokens,
+		Key:                req.Key,
+		RequestID:          req.RequestID,
+		CallerID:           req.CallerID,
+		Endpoint:           req.Endpoint,
+		ResponseID:         responseID,
+		PreviousResponseID: req.PreviousResponseID,
+		ResponseSessionID:  responseSessionID,
+		ModelAlias:         req.ModelAlias,
+		Target:             req.Target,
+		TargetModel:        req.TargetModel,
+		StatusCode:         resp.StatusCode,
+		LatencyMs:          time.Since(start).Milliseconds(),
+		Error:              errText,
+		PromptTokens:       usage.PromptTokens,
+		CompletionTokens:   usage.CompletionTokens,
+		TotalTokens:        usage.TotalTokens,
+		CachedInputTokens:  usage.CachedInputTokens,
+		ReasoningTokens:    usage.ReasoningTokens,
 	})
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(data)
@@ -1217,7 +1241,7 @@ func ChatCompletionToResponses(data []byte, req ForwardRequest) ([]byte, error) 
 	return json.Marshal(resp)
 }
 
-func copyChatCompletionStreamAsResponses(w http.ResponseWriter, body io.Reader, req ForwardRequest) (int64, UsageTokens, error) {
+func copyChatCompletionStreamAsResponses(w http.ResponseWriter, body io.Reader, req ForwardRequest) (int64, UsageTokens, string, error) {
 	flusher, _ := w.(http.Flusher)
 	responseID := "resp_" + req.RequestID
 	itemID := "msg_" + req.RequestID
@@ -1235,13 +1259,13 @@ func copyChatCompletionStreamAsResponses(w http.ResponseWriter, body io.Reader, 
 		return err
 	}
 	if err := writeEvent("response.created", map[string]any{"response": minimalStreamingResponse(responseID, req.TargetModel, "in_progress", "")}); err != nil {
-		return written, UsageTokens{}, err
+		return written, UsageTokens{}, responseID, err
 	}
 	if err := writeEvent("response.output_item.added", map[string]any{"response_id": responseID, "output_index": 0, "item": map[string]any{"id": itemID, "type": "message", "role": "assistant", "content": []any{}}}); err != nil {
-		return written, UsageTokens{}, err
+		return written, UsageTokens{}, responseID, err
 	}
 	if err := writeEvent("response.content_part.added", map[string]any{"response_id": responseID, "item_id": itemID, "output_index": 0, "content_index": 0, "part": map[string]any{"type": "output_text", "text": ""}}); err != nil {
-		return written, UsageTokens{}, err
+		return written, UsageTokens{}, responseID, err
 	}
 
 	scanner := bufio.NewScanner(body)
@@ -1260,8 +1284,8 @@ func copyChatCompletionStreamAsResponses(w http.ResponseWriter, body io.Reader, 
 		if raw == "[DONE]" {
 			break
 		}
-		if chunkUsage := ParseUsage([]byte(raw)); chunkUsage.TotalTokens > 0 {
-			usage = chunkUsage
+		if chunkUsage := ParseUsage([]byte(raw)); chunkUsage.hasAny() {
+			usage.merge(chunkUsage)
 		}
 		var chunk struct {
 			Choices []struct {
@@ -1282,35 +1306,35 @@ func copyChatCompletionStreamAsResponses(w http.ResponseWriter, body io.Reader, 
 		}
 		full.WriteString(delta)
 		if err := writeEvent("response.output_text.delta", map[string]any{"response_id": responseID, "item_id": itemID, "output_index": 0, "content_index": 0, "delta": delta}); err != nil {
-			return written, usage, err
+			return written, usage, responseID, err
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return written, usage, err
+		return written, usage, responseID, err
 	}
 	text := full.String()
 	if err := writeEvent("response.output_text.done", map[string]any{"response_id": responseID, "item_id": itemID, "output_index": 0, "content_index": 0, "text": text}); err != nil {
-		return written, usage, err
+		return written, usage, responseID, err
 	}
 	if err := writeEvent("response.content_part.done", map[string]any{"response_id": responseID, "item_id": itemID, "output_index": 0, "content_index": 0, "part": map[string]any{"type": "output_text", "text": text}}); err != nil {
-		return written, usage, err
+		return written, usage, responseID, err
 	}
 	if err := writeEvent("response.output_item.done", map[string]any{"response_id": responseID, "output_index": 0, "item": map[string]any{"id": itemID, "type": "message", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}}}}); err != nil {
-		return written, usage, err
+		return written, usage, responseID, err
 	}
 	completed := minimalStreamingResponse(responseID, req.TargetModel, "completed", text)
 	if usage.TotalTokens > 0 {
 		completed["usage"] = usage.responsesUsage()
 	}
 	if err := writeEvent("response.completed", map[string]any{"response": completed}); err != nil {
-		return written, usage, err
+		return written, usage, responseID, err
 	}
 	n, err := fmt.Fprint(w, "data: [DONE]\n\n")
 	written += int64(n)
 	if flusher != nil {
 		flusher.Flush()
 	}
-	return written, usage, err
+	return written, usage, responseID, err
 }
 
 func minimalStreamingResponse(id, model, status, text string) map[string]any {
@@ -1375,19 +1399,52 @@ type UsageTokens struct {
 	ReasoningTokens   int64
 }
 
-func (u UsageTokens) responsesUsage() map[string]int64 {
-	usage := map[string]int64{
+func (u UsageTokens) responsesUsage() map[string]any {
+	usage := map[string]any{
 		"input_tokens":  u.PromptTokens,
 		"output_tokens": u.CompletionTokens,
 		"total_tokens":  u.TotalTokens,
 	}
 	if u.CachedInputTokens > 0 {
-		usage["cached_input_tokens"] = u.CachedInputTokens
+		usage["input_tokens_details"] = map[string]int64{
+			"cached_tokens": u.CachedInputTokens,
+		}
 	}
 	if u.ReasoningTokens > 0 {
-		usage["reasoning_tokens"] = u.ReasoningTokens
+		usage["output_tokens_details"] = map[string]int64{
+			"reasoning_tokens": u.ReasoningTokens,
+		}
 	}
 	return usage
+}
+
+func (u UsageTokens) hasAny() bool {
+	return u.PromptTokens > 0 ||
+		u.CompletionTokens > 0 ||
+		u.TotalTokens > 0 ||
+		u.CachedInputTokens > 0 ||
+		u.ReasoningTokens > 0
+}
+
+func (u *UsageTokens) merge(next UsageTokens) {
+	if next.PromptTokens > 0 {
+		u.PromptTokens = next.PromptTokens
+	}
+	if next.CompletionTokens > 0 {
+		u.CompletionTokens = next.CompletionTokens
+	}
+	if next.TotalTokens > 0 {
+		u.TotalTokens = next.TotalTokens
+	}
+	if next.CachedInputTokens > 0 {
+		u.CachedInputTokens = next.CachedInputTokens
+	}
+	if next.ReasoningTokens > 0 {
+		u.ReasoningTokens = next.ReasoningTokens
+	}
+	if u.TotalTokens == 0 && (u.PromptTokens > 0 || u.CompletionTokens > 0) {
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
 }
 
 type usageJSON struct {
@@ -1423,7 +1480,18 @@ func ParseUsage(data []byte) UsageTokens {
 		return UsageTokens{}
 	}
 	usage := envelope.Usage
-	if usage.TotalTokens == 0 && usage.PromptTokens == 0 && usage.CompletionTokens == 0 && usage.InputTokens == 0 && usage.OutputTokens == 0 {
+	if usage.TotalTokens == 0 &&
+		usage.PromptTokens == 0 &&
+		usage.CompletionTokens == 0 &&
+		usage.InputTokens == 0 &&
+		usage.OutputTokens == 0 &&
+		usage.CachedInputTokens == 0 &&
+		usage.CacheReadInputTokens == 0 &&
+		usage.PromptCacheHitTokens == 0 &&
+		usage.PromptDetails.CachedTokens == 0 &&
+		usage.InputDetails.CachedTokens == 0 &&
+		usage.ReasoningTokens == 0 &&
+		usage.OutputDetails.ReasoningTokens == 0 {
 		usage = envelope.Response.Usage
 	}
 	prompt := usage.PromptTokens
@@ -1544,8 +1612,8 @@ func (p *sseUsageParser) parseFrame(frame string) {
 	if p.responseID == "" {
 		p.responseID = extractAIGatewayResponseID([]byte(raw))
 	}
-	if usage := ParseUsage([]byte(raw)); usage.TotalTokens > 0 {
-		p.usage = usage
+	if usage := ParseUsage([]byte(raw)); usage.hasAny() {
+		p.usage.merge(usage)
 	}
 }
 
@@ -1579,25 +1647,28 @@ func isAIGatewayResponseCompletedEvent(raw string) bool {
 }
 
 type UsageRecord struct {
-	Key               VirtualKey
-	RequestID         string
-	CallerID          string
-	Endpoint          string
-	ModelAlias        string
-	Target            Target
-	TargetModel       string
-	StatusCode        int
-	PromptTokens      int64
-	CompletionTokens  int64
-	TotalTokens       int64
-	CachedInputTokens int64
-	ReasoningTokens   int64
-	InputCostMicros   int64
-	OutputCostMicros  int64
-	TotalCostMicros   int64
-	LatencyMs         int64
-	Error             string
-	Bytes             int64
+	Key                VirtualKey
+	RequestID          string
+	CallerID           string
+	Endpoint           string
+	ResponseID         string
+	PreviousResponseID string
+	ResponseSessionID  string
+	ModelAlias         string
+	Target             Target
+	TargetModel        string
+	StatusCode         int
+	PromptTokens       int64
+	CompletionTokens   int64
+	TotalTokens        int64
+	CachedInputTokens  int64
+	ReasoningTokens    int64
+	InputCostMicros    int64
+	OutputCostMicros   int64
+	TotalCostMicros    int64
+	LatencyMs          int64
+	Error              string
+	Bytes              int64
 }
 
 type defaultUsagePricing struct {
@@ -1694,6 +1765,10 @@ func EstimateUsageCostBreakdown(model string, promptTokens int64, completionToke
 }
 
 func estimateUsageCostBreakdownWithPricing(pricing defaultUsagePricing, promptTokens int64, completionTokens int64, cachedInputTokens int64) UsageCostBreakdown {
+	return estimateUsageCostBreakdownWithPricingAndLong(pricing, promptTokens, completionTokens, cachedInputTokens, false)
+}
+
+func estimateUsageCostBreakdownWithPricingAndLong(pricing defaultUsagePricing, promptTokens int64, completionTokens int64, cachedInputTokens int64, forceLongContext bool) UsageCostBreakdown {
 	if cachedInputTokens < 0 {
 		cachedInputTokens = 0
 	}
@@ -1705,7 +1780,7 @@ func estimateUsageCostBreakdownWithPricing(pricing defaultUsagePricing, promptTo
 	outputPrice := pricing.OutputPricePerMillionMicros
 	cachedInputPrice := pricing.CachedInputPricePerMillionMicros
 	longContext := false
-	if promptTokens > gpt55LongContextInputThreshold && pricing.LongInputPricePerMillionMicros > 0 && pricing.LongOutputPricePerMillionMicros > 0 {
+	if (forceLongContext || promptTokens > gpt55LongContextInputThreshold) && pricing.LongInputPricePerMillionMicros > 0 && pricing.LongOutputPricePerMillionMicros > 0 {
 		longContext = true
 		inputPrice = pricing.LongInputPricePerMillionMicros
 		outputPrice = pricing.LongOutputPricePerMillionMicros
@@ -1831,20 +1906,28 @@ func allDigits(s string) bool {
 	return true
 }
 
-func (rt *Runtime) RecordResponseState(ctx context.Context, key VirtualKey, responseID string, target Target, targetModel string) {
+func (rt *Runtime) RecordResponseState(ctx context.Context, key VirtualKey, responseID string, previousResponseID string, target Target, targetModel string) string {
 	responseID = strings.TrimSpace(responseID)
+	previousResponseID = strings.TrimSpace(previousResponseID)
 	if rt.DB == nil || key.ID == "" || key.WorkspaceID == "" || responseID == "" {
-		return
+		return ""
 	}
-	_, _ = rt.DB.Exec(ctx, `
+	sessionID := responseID
+	if previousResponseID != "" {
+		if previousSessionID := rt.responseSessionID(ctx, key, previousResponseID); previousSessionID != "" {
+			sessionID = previousSessionID
+		}
+	}
+	_, err := rt.DB.Exec(ctx, `
 		INSERT INTO ai_gateway_response_state (
-			response_id, virtual_key_id, workspace_id, upstream_provider, upstream_model
+			response_id, virtual_key_id, workspace_id, upstream_provider, upstream_model, session_id
 		)
-		VALUES ($1, $2, $3, $4, $5)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (response_id) DO UPDATE
 		SET workspace_id = EXCLUDED.workspace_id,
 		    upstream_provider = EXCLUDED.upstream_provider,
 		    upstream_model = EXCLUDED.upstream_model,
+		    session_id = EXCLUDED.session_id,
 		    last_used_at = now()
 		WHERE ai_gateway_response_state.virtual_key_id = EXCLUDED.virtual_key_id
 	`,
@@ -1853,7 +1936,123 @@ func (rt *Runtime) RecordResponseState(ctx context.Context, key VirtualKey, resp
 		util.MustParseUUID(key.WorkspaceID),
 		target.Provider,
 		targetModel,
+		sessionID,
 	)
+	if err != nil && strings.Contains(err.Error(), "session_id") {
+		_, _ = rt.DB.Exec(ctx, `
+			INSERT INTO ai_gateway_response_state (
+				response_id, virtual_key_id, workspace_id, upstream_provider, upstream_model
+			)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (response_id) DO UPDATE
+			SET workspace_id = EXCLUDED.workspace_id,
+			    upstream_provider = EXCLUDED.upstream_provider,
+			    upstream_model = EXCLUDED.upstream_model,
+			    last_used_at = now()
+			WHERE ai_gateway_response_state.virtual_key_id = EXCLUDED.virtual_key_id
+		`,
+			responseID,
+			util.MustParseUUID(key.ID),
+			util.MustParseUUID(key.WorkspaceID),
+			target.Provider,
+			targetModel,
+		)
+	}
+	return sessionID
+}
+
+func (rt *Runtime) responseSessionID(ctx context.Context, key VirtualKey, responseID string) string {
+	if rt.DB == nil || key.ID == "" || responseID == "" {
+		return ""
+	}
+	var sessionID string
+	err := rt.DB.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(session_id, ''), response_id)
+		FROM ai_gateway_response_state
+		WHERE response_id = $1
+		  AND virtual_key_id = $2
+	`, responseID, util.MustParseUUID(key.ID)).Scan(&sessionID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(sessionID)
+}
+
+func (rt *Runtime) responseSessionHasLongContext(ctx context.Context, sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if rt.DB == nil || sessionID == "" {
+		return false
+	}
+	var exists bool
+	err := rt.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM ai_gateway_usage
+			WHERE response_session_id = $1
+			  AND long_context
+		)
+	`, sessionID).Scan(&exists)
+	return err == nil && exists
+}
+
+func (rt *Runtime) repriceLongContextSession(ctx context.Context, sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if rt.DB == nil || sessionID == "" {
+		return
+	}
+	rows, err := rt.DB.Query(ctx, `
+		SELECT id, COALESCE(upstream_model, ''), prompt_tokens, completion_tokens, cached_input_tokens
+		FROM ai_gateway_usage
+		WHERE response_session_id = $1
+	`, sessionID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type update struct {
+		id        pgtype.UUID
+		breakdown UsageCostBreakdown
+	}
+	updates := []update{}
+	for rows.Next() {
+		var id pgtype.UUID
+		var model string
+		var promptTokens, completionTokens, cachedInputTokens int64
+		if err := rows.Scan(&id, &model, &promptTokens, &completionTokens, &cachedInputTokens); err != nil {
+			return
+		}
+		pricing, ok := resolveDefaultModelPricing(model)
+		if !ok || pricing.LongInputPricePerMillionMicros == 0 || pricing.LongOutputPricePerMillionMicros == 0 {
+			continue
+		}
+		breakdown := estimateUsageCostBreakdownWithPricingAndLong(pricing, promptTokens, completionTokens, cachedInputTokens, true)
+		updates = append(updates, update{id: id, breakdown: breakdown})
+	}
+	if rows.Err() != nil {
+		return
+	}
+	for _, item := range updates {
+		_, _ = rt.DB.Exec(ctx, `
+			UPDATE ai_gateway_usage
+			SET input_cost_micros = $2,
+			    cached_input_cost_micros = $3,
+			    output_cost_micros = $4,
+			    total_cost_micros = $5,
+			    cached_input_tokens = $6,
+			    billable_input_tokens = $7,
+			    long_context = true
+			WHERE id = $1
+		`,
+			item.id,
+			item.breakdown.InputCostMicros,
+			item.breakdown.CachedInputCostMicros,
+			item.breakdown.OutputCostMicros,
+			item.breakdown.TotalCostMicros,
+			item.breakdown.CachedInputTokens,
+			item.breakdown.BillableInputTokens,
+		)
+	}
 }
 
 func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
@@ -1865,7 +2064,8 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 		errText = errText[:2048]
 	}
 	pricing := effectiveUsagePricing(record.Target, record.TargetModel)
-	breakdown := estimateUsageCostBreakdownWithPricing(pricing, record.PromptTokens, record.CompletionTokens, record.CachedInputTokens)
+	forceLongContext := rt.responseSessionHasLongContext(ctx, record.ResponseSessionID)
+	breakdown := estimateUsageCostBreakdownWithPricingAndLong(pricing, record.PromptTokens, record.CompletionTokens, record.CachedInputTokens, forceLongContext)
 	inputCost := record.InputCostMicros
 	if inputCost == 0 {
 		inputCost = breakdown.InputCostMicros
@@ -1888,9 +2088,9 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 			completion_tokens, total_tokens, latency_ms, error,
 			input_cost_micros, output_cost_micros, total_cost_micros,
 			cached_input_tokens, billable_input_tokens, reasoning_tokens, long_context,
-			cached_input_cost_micros
+			cached_input_cost_micros, response_id, previous_response_id, response_session_id
 		)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18, $19, $20, $21, $22, $23)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 	`,
 		util.MustParseUUID(record.Key.ID),
 		util.MustParseUUID(record.Key.WorkspaceID),
@@ -1915,8 +2115,51 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 		record.ReasoningTokens,
 		breakdown.LongContext,
 		breakdown.CachedInputCostMicros,
+		record.ResponseID,
+		record.PreviousResponseID,
+		record.ResponseSessionID,
 	)
-	if err != nil && (strings.Contains(err.Error(), "reasoning_effort") || strings.Contains(err.Error(), "input_cost_micros")) {
+	if err == nil && breakdown.LongContext && record.ResponseSessionID != "" {
+		rt.repriceLongContextSession(ctx, record.ResponseSessionID)
+	}
+	if err != nil && isResponseSessionUsageInsertError(err) {
+		_, err = rt.DB.Exec(ctx, `
+			INSERT INTO ai_gateway_usage (
+				virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
+				upstream_provider, upstream_model, reasoning_effort, status_code, prompt_tokens,
+				completion_tokens, total_tokens, latency_ms, error,
+				input_cost_micros, output_cost_micros, total_cost_micros,
+				cached_input_tokens, billable_input_tokens, reasoning_tokens, long_context,
+				cached_input_cost_micros
+			)
+			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, NULLIF($15, ''), $16, $17, $18, $19, $20, $21, $22, $23)
+		`,
+			util.MustParseUUID(record.Key.ID),
+			util.MustParseUUID(record.Key.WorkspaceID),
+			record.RequestID,
+			record.CallerID,
+			record.Endpoint,
+			record.ModelAlias,
+			record.Target.Provider,
+			record.TargetModel,
+			reasoningEffort,
+			int32(record.StatusCode),
+			record.PromptTokens,
+			record.CompletionTokens,
+			record.TotalTokens,
+			record.LatencyMs,
+			errText,
+			inputCost,
+			outputCost,
+			totalCost,
+			cachedInputTokens,
+			billableInputTokens,
+			record.ReasoningTokens,
+			breakdown.LongContext,
+			breakdown.CachedInputCostMicros,
+		)
+	}
+	if err != nil && isLegacyUsageInsertError(err) {
 		_, _ = rt.DB.Exec(ctx, `
 			INSERT INTO ai_gateway_usage (
 				virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
@@ -1941,6 +2184,35 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 			errText,
 		)
 	}
+}
+
+func isResponseSessionUsageInsertError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "response_id") ||
+		strings.Contains(msg, "previous_response_id") ||
+		strings.Contains(msg, "response_session_id")
+}
+
+func isLegacyUsageInsertError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, column := range []string{
+		"reasoning_effort",
+		"input_cost_micros",
+		"cached_input_tokens",
+		"response_id",
+		"response_session_id",
+	} {
+		if strings.Contains(msg, column) {
+			return true
+		}
+	}
+	return false
 }
 
 func WriteError(w http.ResponseWriter, status int, msg string) {

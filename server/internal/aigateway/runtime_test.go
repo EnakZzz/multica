@@ -1,6 +1,11 @@
 package aigateway
 
-import "testing"
+import (
+	"io"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestResolveDefaultModelPricingCanonicalizesModelIDs(t *testing.T) {
 	cases := []struct {
@@ -118,6 +123,63 @@ func TestParseUsageIncludesCacheAndReasoningDetails(t *testing.T) {
 	}
 }
 
+func TestUsageTokensResponsesUsageUsesNestedDetails(t *testing.T) {
+	usage := UsageTokens{
+		PromptTokens:      38451,
+		CompletionTokens:  1275,
+		TotalTokens:       39726,
+		CachedInputTokens: 36608,
+		ReasoningTokens:   512,
+	}.responsesUsage()
+	inputDetails, ok := usage["input_tokens_details"].(map[string]int64)
+	if !ok || inputDetails["cached_tokens"] != 36608 {
+		t.Fatalf("input_tokens_details mismatch: %#v", usage["input_tokens_details"])
+	}
+	outputDetails, ok := usage["output_tokens_details"].(map[string]int64)
+	if !ok || outputDetails["reasoning_tokens"] != 512 {
+		t.Fatalf("output_tokens_details mismatch: %#v", usage["output_tokens_details"])
+	}
+	if _, ok := usage["cached_input_tokens"]; ok {
+		t.Fatalf("responses usage should not expose non-standard cached_input_tokens: %#v", usage)
+	}
+}
+
+func TestSSEUsageParserMergesMultipleUsageChunks(t *testing.T) {
+	var parser sseUsageParser
+	parser.Feed([]byte("event: response.in_progress\ndata: {\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":5}}}\n\n"))
+	parser.Feed([]byte("event: response.completed\ndata: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens_details\":{\"cached_tokens\":80},\"output_tokens_details\":{\"reasoning_tokens\":2}}}}\n\n"))
+	usage := parser.Usage()
+	if usage.PromptTokens != 100 || usage.CompletionTokens != 5 || usage.CachedInputTokens != 80 || usage.ReasoningTokens != 2 {
+		t.Fatalf("merged usage mismatch: %+v", usage)
+	}
+	if usage.TotalTokens != 105 {
+		t.Fatalf("merged total tokens = %d, want 105", usage.TotalTokens)
+	}
+}
+
+func TestCopyChatCompletionStreamAsResponsesMergesUsageChunks(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"ok"},"finish_reason":null}],"usage":{"prompt_tokens":100,"completion_tokens":5}}`,
+		`data: {"id":"chatcmpl-1","choices":[],"usage":{"prompt_tokens_details":{"cached_tokens":80},"output_tokens_details":{"reasoning_tokens":2}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	rec := httptest.NewRecorder()
+	_, usage, responseID, err := copyChatCompletionStreamAsResponses(rec, io.NopCloser(strings.NewReader(body)), ForwardRequest{
+		RequestID:   "req_test",
+		TargetModel: "gpt-5.5",
+	})
+	if err != nil {
+		t.Fatalf("copyChatCompletionStreamAsResponses error: %v", err)
+	}
+	if responseID != "resp_req_test" {
+		t.Fatalf("responseID = %q", responseID)
+	}
+	if usage.PromptTokens != 100 || usage.CompletionTokens != 5 || usage.CachedInputTokens != 80 || usage.ReasoningTokens != 2 {
+		t.Fatalf("merged chat stream usage mismatch: %+v", usage)
+	}
+}
+
 func TestEstimateUsageCostBreakdownUsesCacheAndLongContext(t *testing.T) {
 	cached := EstimateUsageCostBreakdown("gpt-5.5", 100_000, 2_000, 80_000)
 	if cached.LongContext {
@@ -139,5 +201,22 @@ func TestEstimateUsageCostBreakdownUsesCacheAndLongContext(t *testing.T) {
 	}
 	if long.InputCostMicros != 3_000_000 || long.OutputCostMicros != 90_000 {
 		t.Fatalf("long-context cost mismatch: %+v", long)
+	}
+}
+
+func TestEstimateUsageCostBreakdownCanForceLongContextForSession(t *testing.T) {
+	pricing, ok := resolveDefaultModelPricing("gpt-5.5")
+	if !ok {
+		t.Fatal("expected gpt-5.5 pricing")
+	}
+	got := estimateUsageCostBreakdownWithPricingAndLong(pricing, 100_000, 2_000, 80_000, true)
+	if !got.LongContext {
+		t.Fatal("forced session long-context pricing should mark row long_context")
+	}
+	if got.BillableInputTokens != 100_000 || got.CachedInputTokens != 0 {
+		t.Fatalf("forced long-context token split mismatch: %+v", got)
+	}
+	if got.InputCostMicros != 1_000_000 || got.OutputCostMicros != 90_000 {
+		t.Fatalf("forced long-context cost mismatch: %+v", got)
 	}
 }
