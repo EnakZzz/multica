@@ -5,6 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, BarChart3, Check, ChevronLeft, ChevronRight, Copy, KeyRound, Plus, RefreshCw, Route, Save, Trash2, Zap } from "lucide-react";
 import { toast } from "sonner";
 import type {
+  AIGatewayAuthMode,
+  AIGatewayCustomHeaderEnv,
   AIGatewayKey,
   AIGatewayProbeResult,
   AIGatewayProviderPreset,
@@ -55,10 +57,13 @@ import { useT } from "../../i18n";
 const EXPIRY_KEYS = ["30", "90", "365", "never"] as const;
 const STRATEGIES = ["fallback", "single", "round_robin", "weighted"] as const;
 const UPSTREAM_APIS = ["responses", "chat_completions"] as const;
+const AUTH_MODES: AIGatewayAuthMode[] = ["api_key", "custom_headers_cookie"];
 const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const REASONING_EFFORT_DEFAULT = "__default";
 const USAGE_PAGE_SIZE = 20;
 const AI_GATEWAY_APPLICANT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 type RouteTargetForm = AIGatewayRouteTarget;
 type RouteEditorMode = "ui" | "json";
@@ -74,7 +79,10 @@ function blankTarget(priority = 0): RouteTargetForm {
   return {
     provider: "openai",
     base_url: "https://api.openai.com/v1",
+    auth_mode: "api_key",
     api_key_env: "OPENAI_API_KEY",
+    cookie_env: "",
+    custom_header_envs: [],
     model: "gpt-5-codex",
     upstream_api: "responses",
     reasoning_effort: "",
@@ -180,9 +188,27 @@ function isAIGatewayApplicantEmail(value: string) {
   return AI_GATEWAY_APPLICANT_EMAIL_RE.test(value.trim());
 }
 
+function blankCustomHeaderEnv(): AIGatewayCustomHeaderEnv {
+  return {
+    header_name: "",
+    env_name: "",
+  };
+}
+
+function validateEnvRef(label: string, value: string) {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("sk-") || trimmed.includes("\n") || trimmed.includes("\r")) {
+    throw new Error(`${label} must be an environment variable name, not a raw secret`);
+  }
+  if (!ENV_NAME_RE.test(trimmed)) {
+    throw new Error(`${label} must look like OPENAI_API_KEY`);
+  }
+}
+
 function targetLabel(target: AIGatewayRouteTarget) {
   const effort = target.reasoning_effort ? ` · ${target.reasoning_effort}` : "";
-  return `${target.provider}/${target.model || "<requested>"}${effort}`;
+  const authMode = target.auth_mode === "custom_headers_cookie" ? "cookie" : "key";
+  return `${target.provider}/${target.model || "<requested>"} · ${authMode}${effort}`;
 }
 
 function formatRouteJson(payload: RouteFormPayload) {
@@ -200,12 +226,38 @@ function routeToPayload(route: AIGatewayRoute): RouteFormPayload {
 
 function normalizeRoutePayload(payload: RouteFormPayload): RouteFormPayload {
   for (const [index, target] of payload.targets.entries()) {
-    const apiKeyEnv = target.api_key_env.trim();
-    if (apiKeyEnv.startsWith("sk-") || apiKeyEnv.includes("\n") || apiKeyEnv.includes("\r")) {
-      throw new Error(`target ${index + 1} api_key_env must be an environment variable name, not a raw API key`);
-    }
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
-      throw new Error(`target ${index + 1} api_key_env must look like OPENAI_API_KEY`);
+    const authMode = target.auth_mode ?? "api_key";
+    const cookieEnv = target.cookie_env?.trim() ?? "";
+    const customHeaderEnvs = (target.custom_header_envs ?? [])
+      .map((item) => ({
+        header_name: item.header_name.trim(),
+        env_name: item.env_name.trim(),
+      }))
+      .filter((item) => item.header_name || item.env_name);
+    if (authMode === "api_key") {
+      validateEnvRef(`target ${index + 1} api_key_env`, target.api_key_env.trim());
+      if (cookieEnv || customHeaderEnvs.length > 0) {
+        throw new Error(`target ${index + 1} cannot mix cookie/header envs with api_key auth_mode`);
+      }
+    } else {
+      if (target.api_key_env.trim() || target.organization_env?.trim() || target.project_env?.trim()) {
+        throw new Error(`target ${index + 1} cannot mix api_key/org/project envs with custom_headers_cookie auth_mode`);
+      }
+      if (!cookieEnv && customHeaderEnvs.length === 0) {
+        throw new Error(`target ${index + 1} must provide cookie_env or at least one custom header env`);
+      }
+      if (cookieEnv) {
+        validateEnvRef(`target ${index + 1} cookie_env`, cookieEnv);
+      }
+      for (const [headerIndex, item] of customHeaderEnvs.entries()) {
+        if (!item.header_name) {
+          throw new Error(`target ${index + 1} custom header ${headerIndex + 1} header_name is required`);
+        }
+        if (!HEADER_NAME_RE.test(item.header_name)) {
+          throw new Error(`target ${index + 1} custom header ${headerIndex + 1} header_name is invalid`);
+        }
+        validateEnvRef(`target ${index + 1} custom header ${headerIndex + 1} env_name`, item.env_name);
+      }
     }
   }
   return {
@@ -217,12 +269,20 @@ function normalizeRoutePayload(payload: RouteFormPayload): RouteFormPayload {
       priority: i,
       provider: target.provider.trim(),
       base_url: target.base_url.trim(),
-      api_key_env: target.api_key_env.trim(),
+      auth_mode: (target.auth_mode ?? "api_key") as AIGatewayAuthMode,
+      api_key_env: (target.auth_mode ?? "api_key") === "api_key" ? target.api_key_env.trim() : "",
+      cookie_env: target.cookie_env?.trim() || undefined,
+      custom_header_envs: (target.custom_header_envs ?? [])
+        .map((item) => ({
+          header_name: item.header_name.trim(),
+          env_name: item.env_name.trim(),
+        }))
+        .filter((item) => item.header_name || item.env_name),
       model: target.model.trim(),
       upstream_api: target.upstream_api,
       reasoning_effort: target.reasoning_effort?.trim() || undefined,
-      organization_env: target.organization_env?.trim() || undefined,
-      project_env: target.project_env?.trim() || undefined,
+      organization_env: (target.auth_mode ?? "api_key") === "api_key" ? target.organization_env?.trim() || undefined : undefined,
+      project_env: (target.auth_mode ?? "api_key") === "api_key" ? target.project_env?.trim() || undefined : undefined,
     })),
   };
 }
@@ -263,10 +323,23 @@ function parseRouteJson(raw: string): RouteFormPayload {
         ...target,
         provider: typeof target.provider === "string" ? target.provider : "openai",
         base_url: typeof target.base_url === "string" ? target.base_url : "https://api.openai.com/v1",
+        auth_mode: target.auth_mode === "custom_headers_cookie" ? "custom_headers_cookie" : "api_key",
         api_key_env: typeof target.api_key_env === "string" ? target.api_key_env : "OPENAI_API_KEY",
+        cookie_env: typeof target.cookie_env === "string" ? target.cookie_env : "",
+        custom_header_envs: Array.isArray(target.custom_header_envs)
+          ? target.custom_header_envs.map((item) => {
+            const header = item as Partial<AIGatewayCustomHeaderEnv>;
+            return {
+              header_name: typeof header.header_name === "string" ? header.header_name : "",
+              env_name: typeof header.env_name === "string" ? header.env_name : "",
+            };
+          })
+          : [],
         model: typeof target.model === "string" ? target.model : "",
         upstream_api: typeof target.upstream_api === "string" ? target.upstream_api : "responses",
         reasoning_effort: typeof target.reasoning_effort === "string" ? target.reasoning_effort : "",
+        organization_env: typeof target.organization_env === "string" ? target.organization_env : "",
+        project_env: typeof target.project_env === "string" ? target.project_env : "",
         timeout_seconds: Number(target.timeout_seconds) > 0 ? Number(target.timeout_seconds) : 60,
         weight: Number(target.weight) > 0 ? Number(target.weight) : 1,
         priority: i,
@@ -488,6 +561,30 @@ export function AIGatewayTab() {
     setRouteTargets((items) => items.map((item, i) => i === index ? { ...item, ...patch } : item));
   };
 
+  const updateTargetCustomHeader = (targetIndex: number, headerIndex: number, patch: Partial<AIGatewayCustomHeaderEnv>) => {
+    setRouteTargets((items) => items.map((item, i) => {
+      if (i !== targetIndex) return item;
+      const nextHeaders = [...(item.custom_header_envs ?? [])];
+      nextHeaders[headerIndex] = {
+        ...(nextHeaders[headerIndex] ?? blankCustomHeaderEnv()),
+        ...patch,
+      };
+      return { ...item, custom_header_envs: nextHeaders };
+    }));
+  };
+
+  const addTargetCustomHeader = (targetIndex: number) => {
+    setRouteTargets((items) => items.map((item, i) => i === targetIndex
+      ? { ...item, custom_header_envs: [...(item.custom_header_envs ?? []), blankCustomHeaderEnv()] }
+      : item));
+  };
+
+  const removeTargetCustomHeader = (targetIndex: number, headerIndex: number) => {
+    setRouteTargets((items) => items.map((item, i) => i === targetIndex
+      ? { ...item, custom_header_envs: (item.custom_header_envs ?? []).filter((_, idx) => idx !== headerIndex) }
+      : item));
+  };
+
   const resetRouteForm = () => {
     const nextPayload = {
       alias: "team-agent",
@@ -516,6 +613,7 @@ export function AIGatewayTab() {
       ...blankTarget(),
       provider: preset.provider,
       base_url: preset.base_url,
+      auth_mode: "api_key",
       api_key_env: preset.api_key_env,
       model: preset.model,
       upstream_api: preset.upstream_api,
@@ -601,7 +699,10 @@ export function AIGatewayTab() {
     try {
       const result = await api.probeAIGatewayProvider({
         base_url: firstTarget.base_url,
+        auth_mode: firstTarget.auth_mode,
         api_key_env: firstTarget.api_key_env,
+        cookie_env: firstTarget.cookie_env,
+        custom_header_envs: firstTarget.custom_header_envs,
         model: firstTarget.model,
       });
       setProbeResult(result);
@@ -746,7 +847,7 @@ export function AIGatewayTab() {
                           {routeTargets.length > 1 && <Button variant="ghost" size="icon-sm" onClick={() => setRouteTargets((items) => items.filter((_, i) => i !== index))}><Trash2 className="h-3.5 w-3.5" /></Button>}
                         </div>
                       </div>
-                      <div className="grid gap-3 lg:grid-cols-4">
+                      <div className="grid gap-3 lg:grid-cols-5">
                         <label className="space-y-1.5">
                           <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.provider_label)}</span>
                           <Input value={target.provider} onChange={(e) => updateTarget(index, { provider: e.target.value })} placeholder={t(($) => $.ai_gateway.provider_placeholder)} />
@@ -777,16 +878,47 @@ export function AIGatewayTab() {
                             </SelectContent>
                           </Select>
                         </label>
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.auth_mode_label)}</span>
+                          <Select
+                            value={target.auth_mode ?? "api_key"}
+                            onValueChange={(v) => updateTarget(index, v === "custom_headers_cookie" ? {
+                              auth_mode: "custom_headers_cookie",
+                              api_key_env: "",
+                              organization_env: "",
+                              project_env: "",
+                            } : {
+                              auth_mode: "api_key",
+                              api_key_env: target.api_key_env || "OPENAI_API_KEY",
+                              cookie_env: "",
+                              custom_header_envs: [],
+                            })}
+                          >
+                            <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {AUTH_MODES.map((mode) => (
+                                <SelectItem key={mode} value={mode}>{t(($) => $.ai_gateway.auth_mode[mode])}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </label>
                       </div>
                       <div className="grid gap-3 lg:grid-cols-[1fr_180px_120px_80px]">
                         <label className="space-y-1.5">
                           <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.base_url_label)}</span>
                           <Input value={target.base_url} onChange={(e) => updateTarget(index, { base_url: e.target.value })} placeholder={t(($) => $.ai_gateway.base_url_placeholder)} />
                         </label>
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.api_key_env_label)}</span>
-                          <Input value={target.api_key_env} onChange={(e) => updateTarget(index, { api_key_env: e.target.value })} placeholder={t(($) => $.ai_gateway.api_key_env_placeholder)} />
-                        </label>
+                        {target.auth_mode === "custom_headers_cookie" ? (
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.cookie_env_label)}</span>
+                            <Input value={target.cookie_env ?? ""} onChange={(e) => updateTarget(index, { cookie_env: e.target.value })} placeholder={t(($) => $.ai_gateway.cookie_env_placeholder)} />
+                          </label>
+                        ) : (
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.api_key_env_label)}</span>
+                            <Input value={target.api_key_env} onChange={(e) => updateTarget(index, { api_key_env: e.target.value })} placeholder={t(($) => $.ai_gateway.api_key_env_placeholder)} />
+                          </label>
+                        )}
                         <label className="space-y-1.5">
                           <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.timeout_label)}</span>
                           <Input type="number" value={target.timeout_seconds} onChange={(e) => updateTarget(index, { timeout_seconds: Number(e.target.value) || 60 })} />
@@ -796,6 +928,53 @@ export function AIGatewayTab() {
                           <Input type="number" value={target.weight} onChange={(e) => updateTarget(index, { weight: Number(e.target.value) || 1 })} />
                         </label>
                       </div>
+                      {target.auth_mode === "custom_headers_cookie" ? (
+                        <div className="space-y-3 rounded-md border border-dashed p-3">
+                          <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.browser_helper_hint)}</p>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.custom_headers_label)}</div>
+                              <Button type="button" variant="outline" size="sm" onClick={() => addTargetCustomHeader(index)}>
+                                <Plus className="h-4 w-4" /> {t(($) => $.ai_gateway.add_custom_header)}
+                              </Button>
+                            </div>
+                            {(target.custom_header_envs ?? []).length > 0 ? (
+                              <div className="space-y-2">
+                                {(target.custom_header_envs ?? []).map((header, headerIndex) => (
+                                  <div key={headerIndex} className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                                    <Input
+                                      value={header.header_name}
+                                      onChange={(e) => updateTargetCustomHeader(index, headerIndex, { header_name: e.target.value })}
+                                      placeholder={t(($) => $.ai_gateway.custom_header_name_placeholder)}
+                                    />
+                                    <Input
+                                      value={header.env_name}
+                                      onChange={(e) => updateTargetCustomHeader(index, headerIndex, { env_name: e.target.value })}
+                                      placeholder={t(($) => $.ai_gateway.custom_header_env_placeholder)}
+                                    />
+                                    <Button type="button" variant="ghost" size="icon-sm" onClick={() => removeTargetCustomHeader(index, headerIndex)}>
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.custom_headers_empty)}</div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.organization_env_label)}</span>
+                            <Input value={target.organization_env ?? ""} onChange={(e) => updateTarget(index, { organization_env: e.target.value })} placeholder={t(($) => $.ai_gateway.organization_env_placeholder)} />
+                          </label>
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.project_env_label)}</span>
+                            <Input value={target.project_env ?? ""} onChange={(e) => updateTarget(index, { project_env: e.target.value })} placeholder={t(($) => $.ai_gateway.project_env_placeholder)} />
+                          </label>
+                        </div>
+                      )}
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="space-y-1.5">
                           <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.input_price_label)}</span>

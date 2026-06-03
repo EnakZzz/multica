@@ -273,11 +273,19 @@ export const AIGatewayProviderPresetsSchema = z.array(AIGatewayProviderPresetSch
 
 export const EMPTY_AI_GATEWAY_PROVIDER_PRESETS: AIGatewayProviderPreset[] = [];
 
+const AIGatewayCustomHeaderEnvSchema = z.object({
+  header_name: z.string(),
+  env_name: z.string(),
+}).loose();
+
 const AIGatewayRouteTargetSchema = z.object({
   id: z.string().optional(),
   provider: z.string(),
   base_url: z.string(),
-  api_key_env: z.string(),
+  auth_mode: z.enum(["api_key", "custom_headers_cookie"]).default("api_key"),
+  api_key_env: z.string().default(""),
+  cookie_env: z.string().optional(),
+  custom_header_envs: z.array(AIGatewayCustomHeaderEnvSchema).default([]),
   model: z.string(),
   upstream_api: z.string(),
   reasoning_effort: z.string().optional(),

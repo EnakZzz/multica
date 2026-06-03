@@ -207,11 +207,21 @@ export interface AIGatewayProviderPreset {
   timeout_seconds: number;
 }
 
+export interface AIGatewayCustomHeaderEnv {
+  header_name: string;
+  env_name: string;
+}
+
+export type AIGatewayAuthMode = "api_key" | "custom_headers_cookie";
+
 export interface AIGatewayRouteTarget {
   id?: string;
   provider: string;
   base_url: string;
+  auth_mode?: AIGatewayAuthMode;
   api_key_env: string;
+  cookie_env?: string;
+  custom_header_envs?: AIGatewayCustomHeaderEnv[];
   model: string;
   upstream_api: string;
   reasoning_effort?: string;
@@ -257,8 +267,11 @@ export interface AIGatewayProbeModel {
 
 export interface ProbeAIGatewayProviderRequest {
   base_url: string;
+  auth_mode?: AIGatewayAuthMode;
   api_key_env?: string;
   api_key?: string;
+  cookie_env?: string;
+  custom_header_envs?: AIGatewayCustomHeaderEnv[];
   model?: string;
 }
 
