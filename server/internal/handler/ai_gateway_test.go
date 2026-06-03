@@ -100,6 +100,31 @@ func TestNormalizeAIGatewayKeyEmailRequiresPlainEmail(t *testing.T) {
 	}
 }
 
+func TestAIGatewayProviderPresetsIncludeHETokenAPI(t *testing.T) {
+	found := false
+	for _, preset := range aiGatewayProviderPresets {
+		if preset.ID != "he-tokenapi-wildcard" {
+			continue
+		}
+		found = true
+		if preset.BaseURL != "https://tokenapi.happyelements.net/v1" {
+			t.Fatalf("base url: got %q", preset.BaseURL)
+		}
+		if preset.APIKeyEnv != "HAPPYELEMENTS_TOKENAPI_API_KEY" {
+			t.Fatalf("api key env: got %q", preset.APIKeyEnv)
+		}
+		if preset.UpstreamAPI != "responses" {
+			t.Fatalf("upstream api: got %q", preset.UpstreamAPI)
+		}
+		if preset.Model != "" {
+			t.Fatalf("expected wildcard model, got %q", preset.Model)
+		}
+	}
+	if !found {
+		t.Fatal("expected HE TokenAPI preset")
+	}
+}
+
 func TestFindAIGatewayRouteSupportsWildcard(t *testing.T) {
 	routes := []aiGatewayRoute{
 		{Alias: "*", Targets: []aiGatewayTarget{{APIKeyEnv: "OPENAI_API_KEY"}}},
@@ -872,6 +897,23 @@ func TestAIGatewayProxyResponsesEndToEnd(t *testing.T) {
 }
 
 func TestAIGatewayProxyResponsesUsesCustomHeadersCookieAuth(t *testing.T) {
+	if testPool != nil {
+		if _, err := testPool.Exec(context.Background(), `
+			DELETE FROM ai_gateway_route_target
+			WHERE route_id IN (
+				SELECT id FROM ai_gateway_route WHERE workspace_id = $1
+			)
+		`, util.MustParseUUID(testWorkspaceID)); err != nil {
+			t.Fatalf("clear ai_gateway_route_target: %v", err)
+		}
+		if _, err := testPool.Exec(context.Background(), `
+			DELETE FROM ai_gateway_route
+			WHERE workspace_id = $1
+		`, util.MustParseUUID(testWorkspaceID)); err != nil {
+			t.Fatalf("clear ai_gateway_route: %v", err)
+		}
+	}
+
 	t.Setenv("AI_GATEWAY_CHATGPT_COOKIE_MAIN", "__Secure-next-auth.session-token=abc")
 	t.Setenv("AI_GATEWAY_CHATGPT_HEADER_TOKEN", "header-token")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

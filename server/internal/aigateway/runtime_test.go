@@ -271,3 +271,51 @@ func TestEstimateUsageCostBreakdownCanForceLongContextForSession(t *testing.T) {
 		t.Fatalf("forced long-context cost mismatch: %+v", got)
 	}
 }
+
+func TestShouldRetryAIGatewayFailureTreatsQuotaBodiesAsRetryable(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{
+			name:   "429 always retries",
+			status: 429,
+			body:   `{"error":{"message":"too many requests"}}`,
+			want:   true,
+		},
+		{
+			name:   "403 quota body retries",
+			status: 403,
+			body:   `{"error":{"message":"insufficient balance"}}`,
+			want:   true,
+		},
+		{
+			name:   "400 quota marker retries",
+			status: 400,
+			body:   `{"error":{"type":"quota_exceeded","message":"quota exhausted"}}`,
+			want:   true,
+		},
+		{
+			name:   "401 auth error does not retry",
+			status: 401,
+			body:   `{"error":{"message":"invalid api key"}}`,
+			want:   false,
+		},
+		{
+			name:   "403 non quota body does not retry",
+			status: 403,
+			body:   `{"error":{"message":"forbidden"}}`,
+			want:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldRetryAIGatewayFailure(tc.status, tc.body); got != tc.want {
+				t.Fatalf("shouldRetryAIGatewayFailure(%d, %q) = %v, want %v", tc.status, tc.body, got, tc.want)
+			}
+		})
+	}
+}

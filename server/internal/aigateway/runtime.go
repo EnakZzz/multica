@@ -1160,25 +1160,30 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 	}
 	defer resp.Body.Close()
 
-	if shouldRetryAIGatewayStatus(resp.StatusCode) {
+	if resp.StatusCode >= http.StatusBadRequest {
 		errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if len(errorBody) > 0 {
+			resp.Body = io.NopCloser(bytes.NewReader(errorBody))
+		}
 		errText := strings.TrimSpace(string(errorBody))
 		if errText == "" {
 			errText = resp.Status
 		}
-		rt.RecordUsage(context.Background(), UsageRecord{
-			Key:         req.Key,
-			RequestID:   req.RequestID,
-			CallerID:    req.CallerID,
-			Endpoint:    req.Endpoint,
-			ModelAlias:  req.ModelAlias,
-			Target:      req.Target,
-			TargetModel: req.TargetModel,
-			StatusCode:  resp.StatusCode,
-			LatencyMs:   latency.Milliseconds(),
-			Error:       errText,
-		})
-		return resp.StatusCode, true, errText
+		if shouldRetryAIGatewayFailure(resp.StatusCode, errText) {
+			rt.RecordUsage(context.Background(), UsageRecord{
+				Key:         req.Key,
+				RequestID:   req.RequestID,
+				CallerID:    req.CallerID,
+				Endpoint:    req.Endpoint,
+				ModelAlias:  req.ModelAlias,
+				Target:      req.Target,
+				TargetModel: req.TargetModel,
+				StatusCode:  resp.StatusCode,
+				LatencyMs:   latency.Milliseconds(),
+				Error:       errText,
+			})
+			return resp.StatusCode, true, errText
+		}
 	}
 
 	copyAIGatewayHeaders(w.Header(), resp.Header)
@@ -1325,6 +1330,49 @@ func envValue(name string) string {
 
 func shouldRetryAIGatewayStatus(status int) bool {
 	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+}
+
+func shouldRetryAIGatewayFailure(status int, errorText string) bool {
+	if shouldRetryAIGatewayStatus(status) {
+		return true
+	}
+	switch status {
+	case http.StatusBadRequest, http.StatusPaymentRequired, http.StatusForbidden:
+		return isAIGatewayQuotaError(errorText)
+	default:
+		return false
+	}
+}
+
+func isAIGatewayQuotaError(errorText string) bool {
+	text := strings.ToLower(strings.TrimSpace(errorText))
+	if text == "" {
+		return false
+	}
+	markers := []string{
+		"quota",
+		"insufficient_quota",
+		"rate limit",
+		"too many requests",
+		"credit",
+		"credits",
+		"balance",
+		"billing",
+		"exhausted",
+		"over limit",
+		"out of credit",
+		"out of credits",
+		"insufficient balance",
+		"额度",
+		"超限",
+		"余额不足",
+	}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func copyAIGatewayHeaders(dst, src http.Header) {

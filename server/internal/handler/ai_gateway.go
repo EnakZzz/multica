@@ -368,6 +368,17 @@ var aiGatewayProviderPresets = []aiGatewayProviderPresetResponse{
 		TimeoutSeconds: 300,
 	},
 	{
+		ID:             "he-tokenapi-wildcard",
+		Name:           "HE TokenAPI Pass-through",
+		Provider:       "he-tokenapi",
+		BaseURL:        "https://tokenapi.happyelements.net/v1",
+		APIKeyEnv:      "HAPPYELEMENTS_TOKENAPI_API_KEY",
+		Model:          "",
+		UpstreamAPI:    "responses",
+		EndpointTypes:  []string{"responses"},
+		TimeoutSeconds: 300,
+	},
+	{
 		ID:             "openai-wildcard",
 		Name:           "OpenAI Direct Pass-through",
 		Provider:       "openai",
