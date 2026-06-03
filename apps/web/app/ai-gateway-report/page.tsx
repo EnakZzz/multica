@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, BarChart3, Loader2, RefreshCw } from "lucide-react";
-import type { AIGatewayUsageSummary } from "@multica/core/types";
-import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -18,6 +16,26 @@ import {
 
 const WORKSPACE_SLUG = "local-agents";
 const DAY_OPTIONS = [7, 30, 90] as const;
+
+interface AIGatewayReportRow {
+  email: string;
+  request_count: number;
+  success_count: number;
+  error_count: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  billable_input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  input_cost_micros: number;
+  cached_input_cost_micros: number;
+  output_cost_micros: number;
+  total_cost_micros: number;
+  long_context_request_count: number;
+  average_latency_ms: number;
+  last_request_at: string;
+}
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
@@ -59,10 +77,6 @@ function formatDateTime(value: string | null | undefined) {
   return new Date(value).toLocaleString();
 }
 
-function summaryLabel(item: AIGatewayUsageSummary) {
-  return item.caller_id || item.key_name || item.key_prefix || "unknown";
-}
-
 async function fetchSummary(days: number, signal?: AbortSignal) {
   const params = new URLSearchParams({
     workspace_slug: WORKSPACE_SLUG,
@@ -75,12 +89,12 @@ async function fetchSummary(days: number, signal?: AbortSignal) {
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status}`);
   }
-  return (await resp.json()) as AIGatewayUsageSummary[];
+  return (await resp.json()) as AIGatewayReportRow[];
 }
 
 export default function AIGatewayReportPage() {
   const [days, setDays] = useState<number>(30);
-  const [summary, setSummary] = useState<AIGatewayUsageSummary[]>([]);
+  const [summary, setSummary] = useState<AIGatewayReportRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -121,16 +135,43 @@ export default function AIGatewayReportPage() {
         (acc, item) => {
           acc.requests += item.request_count;
           acc.errors += item.error_count;
+          acc.inputTokens += item.input_tokens;
+          acc.cachedInputTokens += item.cached_input_tokens;
+          acc.billableInputTokens += item.billable_input_tokens;
+          acc.outputTokens += item.output_tokens;
+          acc.reasoningTokens += item.reasoning_tokens;
           acc.tokens += item.total_tokens;
+          acc.inputCostMicros += item.input_cost_micros;
+          acc.cachedInputCostMicros += item.cached_input_cost_micros;
+          acc.outputCostMicros += item.output_cost_micros;
           acc.costMicros += item.total_cost_micros;
+          acc.longContextRequests += item.long_context_request_count;
           return acc;
         },
-        { requests: 0, errors: 0, tokens: 0, costMicros: 0 },
+        {
+          requests: 0,
+          errors: 0,
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          billableInputTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          tokens: 0,
+          inputCostMicros: 0,
+          cachedInputCostMicros: 0,
+          outputCostMicros: 0,
+          costMicros: 0,
+          longContextRequests: 0,
+        },
       ),
     [summary],
   );
 
   const totalTokens = formatCompactNumber(totals.tokens);
+  const inputTokens = formatCompactNumber(totals.inputTokens);
+  const outputTokens = formatCompactNumber(totals.outputTokens);
+  const cachedTokens = formatCompactNumber(totals.cachedInputTokens);
+  const reasoningTokens = formatCompactNumber(totals.reasoningTokens);
 
   return (
     <main className="h-dvh overflow-y-auto bg-background text-foreground">
@@ -179,6 +220,31 @@ export default function AIGatewayReportPage() {
           <MetricCard label="错误" value={formatNumber(totals.errors)} tone={totals.errors > 0 ? "danger" : "default"} />
         </section>
 
+        <section className="grid gap-3 md:grid-cols-2">
+          <Card size="sm" className="rounded-lg">
+            <CardContent>
+              <div className="mb-3 text-xs font-medium text-muted-foreground">Token 明细</div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <MiniMetric label="输入" value={inputTokens.value} unit={inputTokens.unit || "tokens"} />
+                <MiniMetric label="缓存输入" value={cachedTokens.value} unit={cachedTokens.unit || "tokens"} />
+                <MiniMetric label="输出" value={outputTokens.value} unit={outputTokens.unit || "tokens"} />
+                <MiniMetric label="Reasoning" value={reasoningTokens.value} unit={reasoningTokens.unit || "tokens"} />
+              </div>
+            </CardContent>
+          </Card>
+          <Card size="sm" className="rounded-lg">
+            <CardContent>
+              <div className="mb-3 text-xs font-medium text-muted-foreground">费用明细</div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <MiniMetric label="输入" value={formatCost(totals.inputCostMicros)} />
+                <MiniMetric label="缓存输入" value={formatCost(totals.cachedInputCostMicros)} />
+                <MiniMetric label="输出" value={formatCost(totals.outputCostMicros)} />
+                <MiniMetric label="长上下文" value={formatNumber(totals.longContextRequests)} unit="次" />
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
         <section className="min-h-0">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="text-sm font-medium">按人统计</div>
@@ -203,33 +269,33 @@ export default function AIGatewayReportPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="min-w-56">申请人</TableHead>
+                    <TableHead className="min-w-56">邮箱</TableHead>
                     <TableHead className="text-right">请求</TableHead>
-                    <TableHead className="text-right">成功</TableHead>
                     <TableHead className="text-right">错误</TableHead>
-                    <TableHead className="text-right">Token</TableHead>
-                    <TableHead className="text-right">费用预估</TableHead>
+                    <TableHead className="text-right">输入</TableHead>
+                    <TableHead className="text-right">缓存</TableHead>
+                    <TableHead className="text-right">输出</TableHead>
+                    <TableHead className="text-right">Reasoning</TableHead>
+                    <TableHead className="text-right">费用</TableHead>
+                    <TableHead className="text-right">长上下文</TableHead>
                     <TableHead className="text-right">平均延迟</TableHead>
                     <TableHead className="text-right">最近调用</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {summary.map((item) => (
-                    <TableRow key={`${item.caller_id}-${item.key_prefix}`}>
+                    <TableRow key={item.email}>
                       <TableCell>
-                        <div className="min-w-0">
-                          <div className="max-w-72 truncate font-medium">{summaryLabel(item)}</div>
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {item.key_name ? <Badge variant="outline">{item.key_name}</Badge> : null}
-                            {item.key_prefix ? <Badge variant="secondary">{item.key_prefix}...</Badge> : null}
-                          </div>
-                        </div>
+                        <div className="max-w-72 truncate font-medium">{item.email || "unknown"}</div>
                       </TableCell>
                       <TableCell className="text-right">{formatNumber(item.request_count)}</TableCell>
-                      <TableCell className="text-right">{formatNumber(item.success_count)}</TableCell>
                       <TableCell className="text-right">{formatNumber(item.error_count)}</TableCell>
-                      <TableCell className="text-right">{formatCompactNumberText(item.total_tokens)}</TableCell>
+                      <TableCell className="text-right">{formatCompactNumberText(item.input_tokens)}</TableCell>
+                      <TableCell className="text-right">{formatCompactNumberText(item.cached_input_tokens)}</TableCell>
+                      <TableCell className="text-right">{formatCompactNumberText(item.output_tokens)}</TableCell>
+                      <TableCell className="text-right">{formatCompactNumberText(item.reasoning_tokens)}</TableCell>
                       <TableCell className="text-right">{formatCost(item.total_cost_micros)}</TableCell>
+                      <TableCell className="text-right">{formatNumber(item.long_context_request_count)}</TableCell>
                       <TableCell className="text-right">{formatNumber(item.average_latency_ms)}ms</TableCell>
                       <TableCell className="text-right">{formatDateTime(item.last_request_at)}</TableCell>
                     </TableRow>
@@ -243,6 +309,18 @@ export default function AIGatewayReportPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+function MiniMetric({ label, value, unit }: { label: string; value: string; unit?: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 flex min-w-0 items-baseline gap-1">
+        <span className="truncate text-sm font-semibold">{value}</span>
+        {unit ? <span className="text-xs text-muted-foreground">{unit}</span> : null}
+      </div>
+    </div>
   );
 }
 
