@@ -1235,6 +1235,8 @@ func TestInjectRuntimeConfigPlanAgentTaskMarksDone(t *testing.T) {
 	s := string(data)
 	for _, want := range []string{
 		"execution_kind=agent_task",
+		"multica repo integrate --source <branch> --strategy pr-first",
+		"PR: ...",
 		"Status: done",
 		"multica issue status issue-1 done",
 	} {
@@ -1244,6 +1246,104 @@ func TestInjectRuntimeConfigPlanAgentTaskMarksDone(t *testing.T) {
 	}
 	if strings.Contains(s, "multica issue status issue-1 in_review") {
 		t.Errorf("plan agent_task CLAUDE.md should not instruct in_review\n---\n%s", s)
+	}
+}
+
+func TestInjectRuntimeConfigAssignmentCreatesPullRequestBeforeReview(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if _, err := InjectRuntimeConfig(dir, "claude", TaskContextForEnv{IssueID: "issue-1"}); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{
+		"run `multica repo publish`, then run `multica repo integrate --source <branch> --strategy pr-first",
+		"PR: ...",
+		"MR: ...",
+		"Only after a code branch has been published and `multica repo integrate --strategy pr-first` has created or reused a Pull Request / Merge Request",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("assignment CLAUDE.md missing PR-first review guidance %q\n---\n%s", want, s)
+		}
+	}
+}
+
+func TestInjectRuntimeConfigPlannedBranchUsesPlannedSourceForPullRequest(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := TaskContextForEnv{
+		IssueID:                   "issue-1",
+		PlanItemExecutionKind:     "agent_task",
+		PlanItemRequiresGitCommit: true,
+		PlanItemBranchName:        "feature/planned-review",
+	}
+	if _, err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "multica repo integrate --source feature/planned-review --strategy pr-first") {
+		t.Errorf("planned branch CLAUDE.md should use planned source branch for PR-first integrate\n---\n%s", s)
+	}
+}
+
+func TestInjectRuntimeConfigCodexWindowsAssignmentUsesContentFile(t *testing.T) {
+	saved := runtimeGOOS
+	t.Cleanup(func() { runtimeGOOS = saved })
+	runtimeGOOS = "windows"
+
+	dir := t.TempDir()
+	if _, err := InjectRuntimeConfig(dir, "codex", TaskContextForEnv{IssueID: "issue-1"}); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{
+		"Post your final results as a comment",
+		"write the comment body to `reply.md`",
+		"multica issue comment add issue-1 --content-file ./reply.md",
+		"Never use inline `--content` for agent-authored comments",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("AGENTS.md missing Windows-safe assignment comment guidance %q\n---\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "Post your final results as a comment — this step is mandatory**: `multica issue comment add issue-1 --content \"...\"`") {
+		t.Errorf("AGENTS.md still uses inline final-comment command on Windows/Codex\n---\n%s", s)
+	}
+}
+
+func TestInjectRuntimeConfigNonCodexLinuxAssignmentKeepsInlineComment(t *testing.T) {
+	saved := runtimeGOOS
+	t.Cleanup(func() { runtimeGOOS = saved })
+	runtimeGOOS = "linux"
+
+	dir := t.TempDir()
+	if _, err := InjectRuntimeConfig(dir, "claude", TaskContextForEnv{IssueID: "issue-1"}); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "Post your final results as a comment — this step is mandatory**: `multica issue comment add issue-1 --content \"...\"`") {
+		t.Errorf("CLAUDE.md should keep lightweight inline final-comment command for non-Codex Linux\n---\n%s", s)
+	}
+	if strings.Contains(s, "write the comment body to `reply.md`") {
+		t.Errorf("CLAUDE.md should not force content-file for non-Codex Linux\n---\n%s", s)
 	}
 }
 

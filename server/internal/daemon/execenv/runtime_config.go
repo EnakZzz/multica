@@ -357,16 +357,16 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		fmt.Fprintf(&b, "3. Run `multica issue status %s in_progress`\n", ctx.IssueID)
 		b.WriteString("4. Follow your Skills and Agent Identity to complete the task (write code, investigate, etc.)\n")
 		if planAgentTask && ctx.PlanItemRequiresGitCommit && ctx.PlanItemBranchName != "" {
-			fmt.Fprintf(&b, "5. For code changes, run `multica repo checkout <url>`, commit your changes, then run `multica repo publish`. The publish command is the required push path and records the planned branch `%s` for review.\n", ctx.PlanItemBranchName)
+			fmt.Fprintf(&b, "5. For code changes, run `multica repo checkout <url>`, commit your changes, run `multica repo publish`, then run `multica repo integrate --source %s --strategy pr-first --test-result <verification> --output json` to create or reuse the Pull Request / Merge Request before handoff. The publish command is the required push path and records the planned branch `%s` for review.\n", ctx.PlanItemBranchName, ctx.PlanItemBranchName)
 		} else {
-			b.WriteString("5. For code changes, run `multica repo checkout <url>`, commit on the generated work branch, then run `multica repo publish`. The publish command is the required push path and records the branch for review.\n")
+			b.WriteString("5. For code changes, run `multica repo checkout <url>`, commit on the generated work branch, run `multica repo publish`, then run `multica repo integrate --source <branch> --strategy pr-first --test-result <verification> --output json` to create or reuse the Pull Request / Merge Request before handoff. The publish command is the required push path and records the branch for review.\n")
 		}
 		if planAgentTask {
-			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. For code changes the comment must include `Branch: ...` and `Status: done`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
-			fmt.Fprintf(&b, "7. After posting your final result, run `multica issue status %s done`. The platform also treats completed Plan `agent_task` runs as done so downstream dependencies can continue.\n", ctx.IssueID)
+			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: %s. For code changes the comment must include `Branch: ...`, `PR: ...` / `MR: ...` from `repo integrate`, and `Status: done`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", buildAssignmentResultCommentCommand(provider, ctx.IssueID))
+			fmt.Fprintf(&b, "7. After posting your final result, run `multica issue status %s done`. If `repo integrate --strategy pr-first` failed, do not mark done; post the failure reason and run `multica issue status %s blocked` instead. The platform also treats completed Plan `agent_task` runs as done so downstream dependencies can continue.\n", ctx.IssueID, ctx.IssueID)
 		} else {
-			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. For code changes the comment must include `Branch: ...` and `Status: ready for review`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
-			fmt.Fprintf(&b, "7. Only after a code branch has been published, run `multica issue status %s in_review`. If no branch was produced, do not mark the issue `in_review` just to finish a run.\n", ctx.IssueID)
+			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: %s. For code changes the comment must include `Branch: ...`, `PR: ...` / `MR: ...` from `repo integrate`, and `Status: ready for review`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", buildAssignmentResultCommentCommand(provider, ctx.IssueID))
+			fmt.Fprintf(&b, "7. Only after a code branch has been published and `multica repo integrate --strategy pr-first` has created or reused a Pull Request / Merge Request, run `multica issue status %s in_review`. If no branch was produced or PR/MR creation failed, do not mark the issue `in_review`; post the failure reason and run `multica issue status %s blocked` instead.\n", ctx.IssueID, ctx.IssueID)
 		}
 		fmt.Fprintf(&b, "8. If blocked, run `multica issue status %s blocked` and post a comment explaining why\n\n", ctx.IssueID)
 	}
@@ -464,6 +464,16 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	}
 
 	return b.String()
+}
+
+func buildAssignmentResultCommentCommand(provider, issueID string) string {
+	if runtimeGOOS == "windows" {
+		return fmt.Sprintf("write the comment body to `reply.md`, then run `multica issue comment add %s --content-file ./reply.md`", issueID)
+	}
+	if provider == "codex" {
+		return fmt.Sprintf("pipe a HEREDOC with `--content-stdin`, for example `cat <<'COMMENT' | multica issue comment add %s --content-stdin`", issueID)
+	}
+	return fmt.Sprintf("`multica issue comment add %s --content \"...\"`", issueID)
 }
 
 func writePlanNodeDelegationGuidance(b *strings.Builder, ctx TaskContextForEnv) {

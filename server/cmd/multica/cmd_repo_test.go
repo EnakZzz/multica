@@ -113,6 +113,17 @@ func TestParseGitRemoteURLSupportsSelfManagedGitLabForms(t *testing.T) {
 	}
 }
 
+func TestShouldUseGitLabMergeRequestDetectsCompanyGitLab(t *testing.T) {
+	t.Parallel()
+
+	if !shouldUseGitLabMergeRequest(gitRemoteURL{Host: "sc-sh.happyelements.net", Path: "group/sub/repo"}) {
+		t.Fatal("expected company GitLab host to use GitLab merge requests")
+	}
+	if shouldUseGitLabMergeRequest(gitRemoteURL{Host: "github.com", Path: "group/repo"}) {
+		t.Fatal("GitHub host must not use GitLab merge requests")
+	}
+}
+
 func TestGitLabMergeRequestCreatesMR(t *testing.T) {
 	var sawCreate bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

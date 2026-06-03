@@ -568,7 +568,7 @@ func shouldUseGitLabMergeRequest(remote gitRemoteURL) bool {
 	if host == "" {
 		return false
 	}
-	if strings.Contains(host, "gitlab") {
+	if isGitLabHost(host) {
 		return true
 	}
 	for _, key := range []string{"GITLAB_BASE_URL", "CI_SERVER_URL"} {
@@ -580,6 +580,11 @@ func shouldUseGitLabMergeRequest(remote gitRemoteURL) bool {
 		return true
 	}
 	return false
+}
+
+func isGitLabHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return strings.Contains(host, "gitlab") || host == "sc-sh.happyelements.net"
 }
 
 func isGitHubHost(host string) bool {
