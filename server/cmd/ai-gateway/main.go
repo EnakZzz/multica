@@ -85,6 +85,7 @@ func main() {
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/models", runtime.Models)
 		r.Post("/responses", runtime.Responses)
+		r.Post("/images/generations", runtime.ImagesGenerations)
 		r.Post("/chat/completions", runtime.ChatCompletions)
 	})
 

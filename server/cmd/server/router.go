@@ -4,9 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
 	"net/netip"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -256,8 +254,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// Public API
 	r.Get("/api/config", h.GetConfig)
 	r.Get("/api/public/ai-gateway/usage/summary", h.ListPublicAIGatewayUsageSummary)
-
-	registerAIGatewayRoutes(r, h)
 
 	// Webhook ingress for autopilots. Outside the authenticated group on
 	// purpose: the bearer token in the URL path IS the credential. Workspace
@@ -704,53 +700,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	})
 
 	return r
-}
-
-func registerAIGatewayRoutes(r chi.Router, h *handler.Handler) {
-	if proxy := newAIGatewayUpstreamProxy(os.Getenv("AI_GATEWAY_UPSTREAM_URL")); proxy != nil {
-		r.Route("/v1", func(r chi.Router) {
-			r.Handle("/*", proxy)
-		})
-		return
-	}
-
-	// OpenAI-compatible AI gateway. These routes intentionally do not use
-	// Multica user auth; callers authenticate with workspace-scoped mvk_
-	// virtual keys managed under /api/ai-gateway.
-	r.Route("/v1", func(r chi.Router) {
-		r.Get("/models", h.AIGatewayModels)
-		r.Post("/responses", h.AIGatewayResponses)
-		r.Post("/chat/completions", h.AIGatewayChatCompletions)
-	})
-}
-
-func newAIGatewayUpstreamProxy(rawURL string) http.Handler {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return nil
-	}
-	target, err := url.Parse(rawURL)
-	if err != nil || target.Scheme == "" || target.Host == "" {
-		slog.Warn("invalid AI_GATEWAY_UPSTREAM_URL; using in-process gateway routes", "value", rawURL, "error", err)
-		return nil
-	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = target.Host
-	}
-	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
-		slog.Warn("AI gateway upstream proxy failed", "upstream", rawURL, "error", err)
-		writeJSON(w, http.StatusBadGateway, map[string]any{
-			"error": map[string]string{
-				"message": "AI gateway upstream unavailable",
-				"type":    "multica_ai_gateway_error",
-			},
-		})
-	}
-	slog.Info("AI gateway routes proxying to upstream", "upstream", rawURL)
-	return proxy
 }
 
 // membershipChecker implements realtime.MembershipChecker using database queries.

@@ -493,6 +493,121 @@ func TestListPublicAIGatewayUsageSummaryUsesWorkspaceSlugWithoutAuth(t *testing.
 	}
 }
 
+func TestListPublicAIGatewayUsageSummaryIncludesHETokenAPIWithZeroCost(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	_, keyID := createAIGatewayTestKey(t)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_usage WHERE virtual_key_id = $1`, keyID)
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_virtual_key WHERE id = $1`, keyID)
+	})
+
+	requestIDPrefix := "public-summary-he-tokenapi-" + keyID
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO ai_gateway_usage (
+			virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
+			upstream_provider, upstream_model, status_code, prompt_tokens, completion_tokens,
+			total_tokens, total_cost_micros, latency_ms, created_at
+		)
+		VALUES
+			($1, $2, $3, '', '/responses', 'openai/gpt-5.5', 'he-tokenapi', 'openai/gpt-5.5', 200, 20, 10, 30, 0, 15, now()),
+			($1, $2, $4, '', '/responses', 'team-agent', 'openai', 'gpt-5-codex', 200, 11, 5, 16, 0, 20, now())
+	`, keyID, testWorkspaceID, requestIDPrefix+"-he", requestIDPrefix+"-openai"); err != nil {
+		t.Fatalf("insert public summary usage: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/public/ai-gateway/usage/summary?workspace_slug="+handlerTestWorkspaceSlug+"&days=30", nil)
+	testHandler.ListPublicAIGatewayUsageSummary(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var summary []aiGatewayPublicUsageSummaryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	foundTokenAPI := false
+	foundOpenAI := false
+	for _, item := range summary {
+		switch item.Model {
+		case "openai/gpt-5.5":
+			foundTokenAPI = true
+			if item.TotalCostMicros != 0 || item.InputCostMicros != 0 || item.CachedInputCostMicros != 0 || item.OutputCostMicros != 0 {
+				t.Fatalf("he-tokenapi public summary cost should stay zero: %+v", item)
+			}
+			if item.TotalTokens != 30 {
+				t.Fatalf("he-tokenapi public summary tokens mismatch: %+v", item)
+			}
+		case "gpt-5-codex":
+			foundOpenAI = true
+			if item.TotalCostMicros <= 0 {
+				t.Fatalf("normal public summary row should keep estimated cost: %+v", item)
+			}
+		}
+	}
+	if !foundTokenAPI || !foundOpenAI {
+		t.Fatalf("expected both he-tokenapi and openai rows in public summary: %+v", summary)
+	}
+}
+
+func TestListPublicAIGatewayUsageSummaryUsesShanghaiNaturalDayWindow(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	_, keyID := createAIGatewayTestKey(t)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_usage WHERE virtual_key_id = $1`, keyID)
+		testPool.Exec(context.Background(), `DELETE FROM ai_gateway_virtual_key WHERE id = $1`, keyID)
+	})
+
+	requestIDPrefix := "public-summary-shanghai-day-" + keyID
+	if _, err := testPool.Exec(context.Background(), fmt.Sprintf(`
+		WITH bounds AS (
+			SELECT (date_trunc('day', now() AT TIME ZONE '%[1]s') AT TIME ZONE '%[1]s') AS day_start
+		)
+		INSERT INTO ai_gateway_usage (
+			virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
+			upstream_provider, upstream_model, status_code, prompt_tokens, completion_tokens,
+			total_tokens, total_cost_micros, latency_ms, created_at
+		)
+		VALUES
+			($1, $2, $3, '', '/responses', 'day-boundary-agent', 'openai', 'gpt-boundary-model', 200, 10, 2, 12, 0, 15, (SELECT day_start - interval '1 minute' FROM bounds)),
+			($1, $2, $4, '', '/responses', 'day-boundary-agent', 'openai', 'gpt-boundary-model', 200, 11, 5, 16, 0, 20, (SELECT day_start FROM bounds))
+	`, aiGatewayUsageSummaryTimezone), keyID, testWorkspaceID, requestIDPrefix+"-before", requestIDPrefix+"-today"); err != nil {
+		t.Fatalf("insert day-boundary usage: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/public/ai-gateway/usage/summary?workspace_slug="+handlerTestWorkspaceSlug+"&days=1", nil)
+	testHandler.ListPublicAIGatewayUsageSummary(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var summary []aiGatewayPublicUsageSummaryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	found := false
+	for _, item := range summary {
+		if item.Email != handlerTestEmail || item.Model != "gpt-boundary-model" {
+			continue
+		}
+		found = true
+		if item.RequestCount != 1 {
+			t.Fatalf("days=1 should only include today's Shanghai natural-day row: %+v", item)
+		}
+		if item.TotalTokens != 16 || item.InputTokens != 11 || item.OutputTokens != 5 {
+			t.Fatalf("unexpected token totals for Shanghai natural-day row: %+v", item)
+		}
+	}
+	if !found {
+		t.Fatalf("public summary did not include Shanghai natural-day row: %+v", summary)
+	}
+}
+
 func TestResponsesPayloadToChatCompletions(t *testing.T) {
 	body, err := responsesPayloadToChatCompletions(map[string]any{
 		"model":             "team-agent",

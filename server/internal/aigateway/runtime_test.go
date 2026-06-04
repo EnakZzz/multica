@@ -319,3 +319,84 @@ func TestShouldRetryAIGatewayFailureTreatsQuotaBodiesAsRetryable(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectTargetsUsesOnlyOpenAIForImageGenerations(t *testing.T) {
+	route := Route{
+		Alias:    "gpt-5.4",
+		Strategy: "fallback",
+		Targets: []Target{
+			{Provider: "he-tokenapi", Model: "vp/gpt-5.4", Enabled: true},
+			{Provider: "openai", Model: "gpt-5.4", Enabled: true},
+		},
+	}
+
+	targets := selectTargets(route, "gpt-5.4", "/images/generations")
+	if len(targets) != 1 {
+		t.Fatalf("expected one image-generation target, got %d", len(targets))
+	}
+	if targets[0].Provider != "openai" {
+		t.Fatalf("image generation should route to openai target, got %q", targets[0].Provider)
+	}
+	if targets[0].Model != "gpt-5.4" {
+		t.Fatalf("unexpected image-generation model: %q", targets[0].Model)
+	}
+}
+
+func TestResolveTargetModelForEndpointMapsGPTAliasesToGPTImage1(t *testing.T) {
+	cases := []struct {
+		name           string
+		requestedModel string
+		target         Target
+		want           string
+	}{
+		{
+			name:           "plain gpt 5.4",
+			requestedModel: "gpt-5.4",
+			target:         Target{Provider: "openai", Model: "gpt-5.4"},
+			want:           "gpt-image-1",
+		},
+		{
+			name:           "provider prefixed gpt 5.5",
+			requestedModel: "openai/gpt-5.5",
+			target:         Target{Provider: "openai", Model: "gpt-5.5"},
+			want:           "gpt-image-1",
+		},
+		{
+			name:           "mini sku",
+			requestedModel: "gpt-5.4-mini",
+			target:         Target{Provider: "openai", Model: "gpt-5.4-mini"},
+			want:           "gpt-image-1",
+		},
+		{
+			name:           "explicit image target remains image model",
+			requestedModel: "gpt-image-1",
+			target:         Target{Provider: "openai", Model: "gpt-image-1"},
+			want:           "gpt-image-1",
+		},
+		{
+			name:           "unmapped model falls back to target model",
+			requestedModel: "gpt-4.1-mini",
+			target:         Target{Provider: "openai", Model: "gpt-4.1-mini"},
+			want:           "gpt-4.1-mini",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveTargetModelForEndpoint("/images/generations", tc.requestedModel, tc.target)
+			if got != tc.want {
+				t.Fatalf("resolveTargetModelForEndpoint() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveTargetModelForEndpointDoesNotRewriteResponses(t *testing.T) {
+	got := resolveTargetModelForEndpoint("/responses", "gpt-5.4", Target{
+		Provider: "he-tokenapi",
+		Model:    "vp/gpt-5.4",
+	})
+	if got != "vp/gpt-5.4" {
+		t.Fatalf("responses endpoint should keep target model, got %q", got)
+	}
+}

@@ -26,6 +26,7 @@ const (
 	aiGatewayTokenPrefix                = "mvk_"
 	aiGatewayDefaultURL                 = "https://api.openai.com/v1"
 	aiGatewayReportDefaultWorkspaceSlug = "local-agents"
+	aiGatewayUsageSummaryTimezone       = "Asia/Shanghai"
 )
 
 type aiGatewayKeyResponse struct {
@@ -707,6 +708,7 @@ type aiGatewayUsageResponse struct {
 type aiGatewayUsageSummaryResponse struct {
 	CallerID                string `json:"caller_id"`
 	Model                   string `json:"model"`
+	UpstreamProvider        string `json:"-"`
 	KeyName                 string `json:"key_name,omitempty"`
 	KeyPrefix               string `json:"key_prefix,omitempty"`
 	CreatedByName           string `json:"created_by_name,omitempty"`
@@ -928,7 +930,7 @@ func (h *Handler) ListAIGatewayUsageSummary(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	resp, err := h.listAIGatewayUsageSummary(r.Context(), workspaceID, days)
+	resp, err := h.listAIGatewayUsageSummary(r.Context(), workspaceID, days, "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
 		return
@@ -956,7 +958,7 @@ func (h *Handler) ListPublicAIGatewayUsageSummary(w http.ResponseWriter, r *http
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	resp, err := h.listAIGatewayUsageSummary(r.Context(), uuidToString(workspace.ID), days)
+	resp, err := h.listAIGatewayUsageSummary(r.Context(), uuidToString(workspace.ID), days, "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list AI gateway usage summary")
 		return
@@ -966,6 +968,16 @@ func (h *Handler) ListPublicAIGatewayUsageSummary(w http.ResponseWriter, r *http
 		email, err := normalizeAIGatewayKeyEmail(item.CallerID)
 		if err != nil {
 			continue
+		}
+		inputCostMicros := item.InputCostMicros
+		cachedInputCostMicros := item.CachedInputCostMicros
+		outputCostMicros := item.OutputCostMicros
+		totalCostMicros := item.TotalCostMicros
+		if shouldZeroPublicAIGatewayCost(item.UpstreamProvider) {
+			inputCostMicros = 0
+			cachedInputCostMicros = 0
+			outputCostMicros = 0
+			totalCostMicros = 0
 		}
 		publicResp = append(publicResp, aiGatewayPublicUsageSummaryResponse{
 			Email:                   email,
@@ -979,10 +991,10 @@ func (h *Handler) ListPublicAIGatewayUsageSummary(w http.ResponseWriter, r *http
 			OutputTokens:            item.CompletionTokens,
 			ReasoningTokens:         item.ReasoningTokens,
 			TotalTokens:             item.TotalTokens,
-			InputCostMicros:         item.InputCostMicros,
-			CachedInputCostMicros:   item.CachedInputCostMicros,
-			OutputCostMicros:        item.OutputCostMicros,
-			TotalCostMicros:         item.TotalCostMicros,
+			InputCostMicros:         inputCostMicros,
+			CachedInputCostMicros:   cachedInputCostMicros,
+			OutputCostMicros:        outputCostMicros,
+			TotalCostMicros:         totalCostMicros,
 			LongContextRequestCount: item.LongContextRequestCount,
 			AverageLatencyMs:        item.AverageLatencyMs,
 			LastRequestAt:           item.LastRequestAt,
@@ -1026,8 +1038,23 @@ func isAIGatewayAuthModeColumnError(err error) bool {
 		strings.Contains(msg, "custom_header_envs")
 }
 
-func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID string, days int32) ([]aiGatewayUsageSummaryResponse, error) {
-	rows, err := h.DB.Query(ctx, `
+func aiGatewayUsageSummaryStartExpr(daysParam string) string {
+	return fmt.Sprintf(`(
+		(
+			date_trunc('day', now() AT TIME ZONE '%[1]s')
+			- ((%[2]s::int - 1) * interval '1 day')
+		) AT TIME ZONE '%[1]s'
+	)`, aiGatewayUsageSummaryTimezone, daysParam)
+}
+
+func shouldZeroPublicAIGatewayCost(upstreamProvider string) bool {
+	return strings.TrimSpace(upstreamProvider) == "he-tokenapi"
+}
+
+func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID string, days int32, excludedUpstreamProvider string) ([]aiGatewayUsageSummaryResponse, error) {
+	excludedUpstreamProvider = strings.TrimSpace(excludedUpstreamProvider)
+	summaryStartExpr := aiGatewayUsageSummaryStartExpr("$2")
+	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
 		SELECT
 			COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown') AS caller_id,
 			COALESCE(k.name, ''),
@@ -1043,6 +1070,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 			COALESCE(SUM(u.billable_input_tokens), 0)::bigint,
 			COALESCE(SUM(u.reasoning_tokens), 0)::bigint,
 			COALESCE(SUM(u.total_tokens), 0)::bigint,
+			COALESCE(u.upstream_provider, ''),
 			COALESCE(SUM(u.input_cost_micros), 0)::bigint,
 			COALESCE(SUM(u.cached_input_cost_micros), 0)::bigint,
 			COALESCE(SUM(u.output_cost_micros), 0)::bigint,
@@ -1059,21 +1087,23 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 		LEFT JOIN ai_gateway_virtual_key k ON k.id = u.virtual_key_id
 		LEFT JOIN "user" creator ON creator.id = k.created_by
 		WHERE u.workspace_id = $1
-		  AND u.created_at >= now() - ($2::int * interval '1 day')
+		  AND u.created_at >= %s
+		  AND ($3 = '' OR COALESCE(u.upstream_provider, '') <> $3)
 		GROUP BY
 			COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown'),
 			k.name,
 			k.token_prefix,
 			creator.name,
 			creator.email,
+			COALESCE(u.upstream_provider, ''),
 			COALESCE(u.upstream_model, ''),
 			COALESCE(u.auth_mode, '')
 		ORDER BY COALESCE(SUM(u.total_tokens), 0) DESC, COUNT(*) DESC
-	`, parseUUID(workspaceID), days)
+	`, summaryStartExpr), parseUUID(workspaceID), days, excludedUpstreamProvider)
 	legacyColumns := false
 	if err != nil && isAIGatewayAuthModeColumnError(err) {
 		legacyColumns = true
-		rows, err = h.DB.Query(ctx, `
+		rows, err = h.DB.Query(ctx, fmt.Sprintf(`
 			SELECT
 				COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown') AS caller_id,
 				COALESCE(k.name, ''),
@@ -1089,6 +1119,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 				COALESCE(SUM(u.billable_input_tokens), 0)::bigint,
 				COALESCE(SUM(u.reasoning_tokens), 0)::bigint,
 				COALESCE(SUM(u.total_tokens), 0)::bigint,
+				COALESCE(u.upstream_provider, ''),
 				COALESCE(SUM(u.input_cost_micros), 0)::bigint,
 				COALESCE(SUM(u.cached_input_cost_micros), 0)::bigint,
 				COALESCE(SUM(u.output_cost_micros), 0)::bigint,
@@ -1104,16 +1135,18 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 			LEFT JOIN ai_gateway_virtual_key k ON k.id = u.virtual_key_id
 			LEFT JOIN "user" creator ON creator.id = k.created_by
 			WHERE u.workspace_id = $1
-			  AND u.created_at >= now() - ($2::int * interval '1 day')
+			  AND u.created_at >= %s
+			  AND ($3 = '' OR COALESCE(u.upstream_provider, '') <> $3)
 			GROUP BY
 				COALESCE(NULLIF(u.caller_id, ''), NULLIF(creator.email, ''), NULLIF(k.name, ''), k.token_prefix, 'unknown'),
 				k.name,
 				k.token_prefix,
 				creator.name,
 				creator.email,
+				COALESCE(u.upstream_provider, ''),
 				COALESCE(u.upstream_model, '')
 			ORDER BY COALESCE(SUM(u.total_tokens), 0) DESC, COUNT(*) DESC
-		`, parseUUID(workspaceID), days)
+		`, summaryStartExpr), parseUUID(workspaceID), days, excludedUpstreamProvider)
 	}
 	if err != nil {
 		return nil, err
@@ -1131,7 +1164,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 		var row aiGatewayUsageSummaryResponse
 		var lastRequestAt pgtype.Timestamptz
 		var zeroCostPromptTokens, zeroCostCompletionTokens, zeroCostCachedInputTokens, latencySum int64
-		var upstreamModel, authMode string
+		var upstreamProvider, upstreamModel, authMode string
 		if legacyColumns {
 			authMode = aigateway.AuthModeAPIKey
 			if err := rows.Scan(
@@ -1149,6 +1182,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 				&row.BillableInputTokens,
 				&row.ReasoningTokens,
 				&row.TotalTokens,
+				&upstreamProvider,
 				&row.InputCostMicros,
 				&row.CachedInputCostMicros,
 				&row.OutputCostMicros,
@@ -1179,6 +1213,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 				&row.BillableInputTokens,
 				&row.ReasoningTokens,
 				&row.TotalTokens,
+				&upstreamProvider,
 				&row.InputCostMicros,
 				&row.CachedInputCostMicros,
 				&row.OutputCostMicros,
@@ -1195,6 +1230,7 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 				return nil, err
 			}
 		}
+		row.UpstreamProvider = upstreamProvider
 		row.Model = aiGatewayUsageModelLabel(upstreamModel)
 		if shouldEstimateAIGatewayUsageCost(authMode) {
 			estimated := aigateway.EstimateUsageCostBreakdown(upstreamModel, zeroCostPromptTokens, zeroCostCompletionTokens, zeroCostCachedInputTokens)
@@ -1213,12 +1249,13 @@ func (h *Handler) listAIGatewayUsageSummary(ctx context.Context, workspaceID str
 		agg := summaryByCaller[aggKey]
 		if agg == nil {
 			agg = &summaryAgg{item: aiGatewayUsageSummaryResponse{
-				CallerID:       row.CallerID,
-				Model:          row.Model,
-				KeyName:        row.KeyName,
-				KeyPrefix:      row.KeyPrefix,
-				CreatedByName:  row.CreatedByName,
-				CreatedByEmail: row.CreatedByEmail,
+				CallerID:         row.CallerID,
+				Model:            row.Model,
+				UpstreamProvider: row.UpstreamProvider,
+				KeyName:          row.KeyName,
+				KeyPrefix:        row.KeyPrefix,
+				CreatedByName:    row.CreatedByName,
+				CreatedByEmail:   row.CreatedByEmail,
 			}}
 			summaryByCaller[aggKey] = agg
 			order = append(order, aggKey)

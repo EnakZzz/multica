@@ -641,6 +641,10 @@ func (rt *Runtime) Responses(w http.ResponseWriter, r *http.Request) {
 	rt.proxy(w, r, "/responses")
 }
 
+func (rt *Runtime) ImagesGenerations(w http.ResponseWriter, r *http.Request) {
+	rt.proxy(w, r, "/images/generations")
+}
+
 func (rt *Runtime) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	rt.proxy(w, r, "/chat/completions")
 }
@@ -720,7 +724,7 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 	callerID := key.CallerID()
 	var lastErr string
 	var lastStatus int
-	targets := selectTargets(route, model)
+	targets := selectTargets(route, model, endpoint)
 	if len(targets) == 0 {
 		WriteError(w, http.StatusNotFound, "model is not configured")
 		return
@@ -731,10 +735,7 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 			lastErr = err.Error()
 			continue
 		}
-		targetModel := target.Model
-		if targetModel == "" {
-			targetModel = model
-		}
+		targetModel := resolveTargetModelForEndpoint(endpoint, model, target)
 		upstreamPayload := rt.preparePayloadForUpstream(r.Context(), key, endpoint, payload)
 		previousResponseID := ""
 		if endpoint == "/responses" {
@@ -845,11 +846,14 @@ func (rt *Runtime) responseBelongsToKey(ctx context.Context, key VirtualKey, res
 	return true
 }
 
-func selectTargets(route Route, requestedModel string) []Target {
+func selectTargets(route Route, requestedModel string, endpoint string) []Target {
 	targets := make([]Target, 0, len(route.Targets))
 	codexTemplateTargets := make([]Target, 0, len(route.Targets))
 	for _, target := range route.Targets {
 		if target.Enabled || target.ID == "" {
+			if endpoint == "/images/generations" && !targetSupportsImageGeneration(target) {
+				continue
+			}
 			if route.Alias == "*" && target.Model != "" && target.Model != requestedModel {
 				if isCodexModel(requestedModel) && targetCanProxyCodexModel(target) {
 					target.Model = requestedModel
@@ -902,6 +906,44 @@ func selectTargets(route Route, requestedModel string) []Target {
 		}
 	}
 	return targets
+}
+
+func targetSupportsImageGeneration(target Target) bool {
+	return strings.EqualFold(strings.TrimSpace(target.Provider), "openai")
+}
+
+func resolveTargetModelForEndpoint(endpoint string, requestedModel string, target Target) string {
+	targetModel := strings.TrimSpace(target.Model)
+	if endpoint == "/images/generations" {
+		if imageModel := resolveImageGenerationTargetModel(requestedModel, targetModel); imageModel != "" {
+			return imageModel
+		}
+	}
+	if targetModel != "" {
+		return targetModel
+	}
+	return strings.TrimSpace(requestedModel)
+}
+
+func resolveImageGenerationTargetModel(requestedModel string, targetModel string) string {
+	if targetModel = strings.TrimSpace(targetModel); targetModel != "" {
+		canonicalTargetModel := canonicalizeImageGenerationModel(targetModel)
+		if canonicalTargetModel == "gpt-image-1" {
+			return "gpt-image-1"
+		}
+	}
+	switch canonicalizeImageGenerationModel(requestedModel) {
+	case "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-image-1":
+		return "gpt-image-1"
+	default:
+		return targetModel
+	}
+}
+
+func canonicalizeImageGenerationModel(model string) string {
+	model = strings.TrimSpace(strings.ToLower(model))
+	model = strings.TrimPrefix(model, "openai/")
+	return model
 }
 
 func BuildUpstreamRequest(endpoint string, payload map[string]any, target Target, targetModel string) (string, []byte, error) {
