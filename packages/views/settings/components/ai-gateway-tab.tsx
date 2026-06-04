@@ -371,6 +371,7 @@ export function AIGatewayTab() {
   const [routeEnabled, setRouteEnabled] = useState(true);
   const [routeTargets, setRouteTargets] = useState<RouteTargetForm[]>([blankTarget()]);
   const [routeEditorMode, setRouteEditorMode] = useState<RouteEditorMode>("ui");
+  const [routeEditorOpen, setRouteEditorOpen] = useState(false);
   const [routeJson, setRouteJson] = useState(() => formatRouteJson({
     alias: "team-agent",
     strategy: "fallback",
@@ -456,12 +457,17 @@ export function AIGatewayTab() {
       ]);
       setPresets(presetList);
       setRoutes(routeList);
+      setRouteEditorOpen((current) => {
+        if (routeList.length === 0) return true;
+        if (!editingRouteId) return false;
+        return current;
+      });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.ai_gateway.toast_load_routes_failed));
     } finally {
       setRoutesLoading(false);
     }
-  }, [canManage, t]);
+  }, [canManage, editingRouteId, t]);
 
   const loadUsage = useCallback(async (page = 0) => {
     if (!canManage) {
@@ -585,7 +591,7 @@ export function AIGatewayTab() {
       : item));
   };
 
-  const resetRouteForm = () => {
+  const resetRouteForm = (options?: { keepOpen?: boolean }) => {
     const nextPayload = {
       alias: "team-agent",
       strategy: "fallback",
@@ -597,9 +603,15 @@ export function AIGatewayTab() {
     setRouteStrategy(nextPayload.strategy);
     setRouteEnabled(nextPayload.enabled);
     setRouteTargets(nextPayload.targets);
+    setRouteEditorMode("ui");
     setRouteJson(formatRouteJson(nextPayload));
+    setRouteEditorOpen(options?.keepOpen ?? false);
     setSelectedPresetId("");
     setProbeResult(null);
+  };
+
+  const startRouteCreate = () => {
+    resetRouteForm({ keepOpen: true });
   };
 
   const applyPreset = (id: string) => {
@@ -628,6 +640,8 @@ export function AIGatewayTab() {
     setRouteStrategy(payload.strategy);
     setRouteEnabled(payload.enabled);
     setRouteTargets(payload.targets);
+    setRouteEditorMode("ui");
+    setRouteEditorOpen(true);
     setRouteJson(formatRouteJson(payload));
     setSelectedPresetId("");
     setProbeResult(null);
@@ -789,13 +803,36 @@ export function AIGatewayTab() {
       </section>
 
       <section className="space-y-4">
-        <div className="flex items-center gap-2">
-          <Route className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">{t(($) => $.ai_gateway.routes_title)}</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Route className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t(($) => $.ai_gateway.routes_title)}</h2>
+          </div>
+          <Button variant="outline" size="sm" onClick={startRouteCreate}>
+            <Plus className="h-4 w-4" /> {t(($) => $.ai_gateway.create_route)}
+          </Button>
         </div>
 
-        <Card>
-          <CardContent className="space-y-4">
+        {routeEditorOpen ? (
+          <Card>
+            <CardContent className="space-y-4">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="text-sm font-semibold">
+                    {editingRouteId
+                      ? t(($) => $.ai_gateway.route_editor_title_edit, { alias: routeAlias || "*" })
+                      : t(($) => $.ai_gateway.route_editor_title_create)}
+                  </div>
+                  <Badge variant="outline">
+                    {t(($) => $.ai_gateway.route_targets_count, { count: routeTargets.length })}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {editingRouteId
+                    ? t(($) => $.ai_gateway.route_editor_description_edit)
+                    : t(($) => $.ai_gateway.route_editor_description_create)}
+                </p>
+              </div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="inline-flex rounded-md border bg-muted/30 p-0.5">
                 <Button type="button" size="sm" variant={routeEditorMode === "ui" ? "secondary" : "ghost"} onClick={() => handleRouteEditorModeChange("ui")}>{t(($) => $.ai_gateway.route_mode_ui)}</Button>
@@ -1044,7 +1081,7 @@ export function AIGatewayTab() {
                 <Button variant="outline" onClick={probeTarget} disabled={routeEditorMode === "json" || probing || !firstTarget.base_url}>
                   <Zap className="h-4 w-4" /> {probing ? t(($) => $.ai_gateway.probing) : t(($) => $.ai_gateway.probe)}
                 </Button>
-                {editingRouteId && <Button variant="outline" onClick={resetRouteForm}>{t(($) => $.ai_gateway.cancel_edit)}</Button>}
+                {editingRouteId && <Button variant="outline" onClick={() => resetRouteForm()}>{t(($) => $.ai_gateway.cancel_edit)}</Button>}
                 <Button onClick={saveRoute} disabled={savingRoute || (routeEditorMode === "ui" ? !routeAlias.trim() : !routeJson.trim())}>
                   <Save className="h-4 w-4" /> {savingRoute ? t(($) => $.ai_gateway.saving_route) : t(($) => $.ai_gateway.save_route)}
                 </Button>
@@ -1059,8 +1096,11 @@ export function AIGatewayTab() {
                 <Badge variant="outline">{t(($) => $.ai_gateway.probe_model_count, { count: probeResult.models.length })}</Badge>
               </div>
             )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.route_editor_collapsed_hint)}</p>
+        )}
 
         {routesLoading ? (
           <Card><CardContent><Skeleton className="h-4 w-64" /></CardContent></Card>

@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, BarChart3, Loader2, RefreshCw } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { AlertCircle, BarChart3, ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -42,6 +42,28 @@ interface AIGatewayReportRow {
   long_context_request_count: number;
   average_latency_ms: number;
   last_request_at: string;
+}
+
+interface AIGatewayReportGroup {
+  email: string;
+  request_count: number;
+  success_count: number;
+  error_count: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  billable_input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  input_cost_micros: number;
+  cached_input_cost_micros: number;
+  output_cost_micros: number;
+  total_cost_micros: number;
+  long_context_request_count: number;
+  average_latency_ms: number;
+  latency_ms_weighted_total: number;
+  last_request_at: string;
+  models: AIGatewayReportRow[];
 }
 
 const PRICING_HINTS = {
@@ -111,8 +133,9 @@ async function fetchSummary(days: number, signal?: AbortSignal) {
 }
 
 export default function AIGatewayReportPage() {
-  const [days, setDays] = useState<number>(30);
+  const [days, setDays] = useState<number>(1);
   const [summary, setSummary] = useState<AIGatewayReportRow[]>([]);
+  const [expandedEmails, setExpandedEmails] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -192,10 +215,83 @@ export default function AIGatewayReportPage() {
   const cachedTokens = formatCompactNumber(totals.cachedInputTokens);
   const reasoningTokens = formatCompactNumber(totals.reasoningTokens);
 
+  const groupedSummary = useMemo<AIGatewayReportGroup[]>(
+    () =>
+      Object.values(
+        summary.reduce<Record<string, AIGatewayReportGroup>>((acc, item) => {
+          const key = item.email || "unknown";
+          const existing = acc[key];
+          if (!existing) {
+            acc[key] = {
+              email: key,
+              request_count: item.request_count,
+              success_count: item.success_count,
+              error_count: item.error_count,
+              input_tokens: item.input_tokens,
+              cached_input_tokens: item.cached_input_tokens,
+              billable_input_tokens: item.billable_input_tokens,
+              output_tokens: item.output_tokens,
+              reasoning_tokens: item.reasoning_tokens,
+              total_tokens: item.total_tokens,
+              input_cost_micros: item.input_cost_micros,
+              cached_input_cost_micros: item.cached_input_cost_micros,
+              output_cost_micros: item.output_cost_micros,
+              total_cost_micros: item.total_cost_micros,
+              long_context_request_count: item.long_context_request_count,
+              average_latency_ms: item.average_latency_ms,
+              latency_ms_weighted_total: item.average_latency_ms * item.request_count,
+              last_request_at: item.last_request_at,
+              models: [item],
+            };
+            return acc;
+          }
+          existing.request_count += item.request_count;
+          existing.success_count += item.success_count;
+          existing.error_count += item.error_count;
+          existing.input_tokens += item.input_tokens;
+          existing.cached_input_tokens += item.cached_input_tokens;
+          existing.billable_input_tokens += item.billable_input_tokens;
+          existing.output_tokens += item.output_tokens;
+          existing.reasoning_tokens += item.reasoning_tokens;
+          existing.total_tokens += item.total_tokens;
+          existing.input_cost_micros += item.input_cost_micros;
+          existing.cached_input_cost_micros += item.cached_input_cost_micros;
+          existing.output_cost_micros += item.output_cost_micros;
+          existing.total_cost_micros += item.total_cost_micros;
+          existing.long_context_request_count += item.long_context_request_count;
+          existing.latency_ms_weighted_total += item.average_latency_ms * item.request_count;
+          existing.average_latency_ms = Math.round(existing.latency_ms_weighted_total / existing.request_count);
+          if (new Date(item.last_request_at).getTime() > new Date(existing.last_request_at).getTime()) {
+            existing.last_request_at = item.last_request_at;
+          }
+          existing.models.push(item);
+          return acc;
+        }, {}),
+      )
+        .map((group) => ({
+          ...group,
+          models: [...group.models].sort((a, b) => {
+            if (b.total_cost_micros !== a.total_cost_micros) return b.total_cost_micros - a.total_cost_micros;
+            return b.request_count - a.request_count;
+          }),
+        }))
+        .sort((a, b) => {
+          if (b.total_cost_micros !== a.total_cost_micros) return b.total_cost_micros - a.total_cost_micros;
+          return b.request_count - a.request_count;
+        }),
+    [summary],
+  );
+
+  const toggleExpanded = useCallback((email: string) => {
+    setExpandedEmails((current) =>
+      current.includes(email) ? current.filter((item) => item !== email) : [...current, email],
+    );
+  }, []);
+
   return (
     <TooltipProvider>
-      <main className="h-dvh overflow-y-auto bg-background text-foreground">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
+      <main className="h-dvh overflow-hidden bg-background text-foreground">
+      <div className="flex h-full w-full flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8 2xl:px-10">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -266,7 +362,7 @@ export default function AIGatewayReportPage() {
           </Card>
         </section>
 
-        <section className="min-h-0">
+        <section className="min-h-0 flex-1">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="text-sm font-medium">按人统计</div>
             <div className="text-xs text-muted-foreground">
@@ -285,10 +381,10 @@ export default function AIGatewayReportPage() {
                 <Skeleton key={index} className="h-11 w-full" />
               ))}
             </div>
-          ) : summary.length > 0 ? (
-            <div className="overflow-hidden rounded-lg border">
+          ) : groupedSummary.length > 0 ? (
+            <div className="h-full overflow-auto rounded-lg border">
               <Table>
-                <TableHeader>
+                <TableHeader className="sticky top-0 z-10 bg-background">
                   <TableRow>
                     <TableHead className="min-w-56">邮箱</TableHead>
                     <TableHead><HeaderWithTooltip label="模型" tooltip={PRICING_HINTS.model} /></TableHead>
@@ -306,27 +402,70 @@ export default function AIGatewayReportPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {summary.map((item) => (
-                    <TableRow key={`${item.email}-${item.model}`}>
-                      <TableCell>
-                        <div className="max-w-72 truncate font-medium">{item.email || "unknown"}</div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="whitespace-nowrap text-sm">{item.model || "unknown"}</div>
-                      </TableCell>
-                      <TableCell className="text-right">{formatNumber(item.request_count)}</TableCell>
-                      <TableCell className="text-right">{formatNumber(item.error_count)}</TableCell>
-                      <TableCell className="text-right">{formatCompactNumberText(item.input_tokens)}</TableCell>
-                      <TableCell className="text-right">{formatCompactNumberText(item.billable_input_tokens)}</TableCell>
-                      <TableCell className="text-right">{formatCompactNumberText(item.cached_input_tokens)}</TableCell>
-                      <TableCell className="text-right">{formatCompactNumberText(item.output_tokens)}</TableCell>
-                      <TableCell className="text-right">{formatCompactNumberText(item.reasoning_tokens)}</TableCell>
-                      <TableCell className="text-right">{formatCost(item.total_cost_micros)}</TableCell>
-                      <TableCell className="text-right">{formatNumber(item.long_context_request_count)}</TableCell>
-                      <TableCell className="text-right">{formatNumber(item.average_latency_ms)}ms</TableCell>
-                      <TableCell className="text-right">{formatDateTime(item.last_request_at)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {groupedSummary.map((group) => {
+                    const expanded = expandedEmails.includes(group.email);
+                    return (
+                      <Fragment key={group.email}>
+                        <TableRow
+                          className="cursor-pointer"
+                          onClick={() => toggleExpanded(group.email)}
+                        >
+                          <TableCell>
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 text-left"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleExpanded(group.email);
+                              }}
+                            >
+                              {expanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                              <div className="min-w-0">
+                                <div className="max-w-72 truncate font-medium">{group.email || "unknown"}</div>
+                              </div>
+                            </button>
+                          </TableCell>
+                          <TableCell>
+                            <div className="whitespace-nowrap text-sm text-muted-foreground">{group.models.length} 个模型</div>
+                          </TableCell>
+                          <TableCell className="text-right">{formatNumber(group.request_count)}</TableCell>
+                          <TableCell className="text-right">{formatNumber(group.error_count)}</TableCell>
+                          <TableCell className="text-right">{formatCompactNumberText(group.input_tokens)}</TableCell>
+                          <TableCell className="text-right">{formatCompactNumberText(group.billable_input_tokens)}</TableCell>
+                          <TableCell className="text-right">{formatCompactNumberText(group.cached_input_tokens)}</TableCell>
+                          <TableCell className="text-right">{formatCompactNumberText(group.output_tokens)}</TableCell>
+                          <TableCell className="text-right">{formatCompactNumberText(group.reasoning_tokens)}</TableCell>
+                          <TableCell className="text-right font-medium">{formatCost(group.total_cost_micros)}</TableCell>
+                          <TableCell className="text-right">{formatNumber(group.long_context_request_count)}</TableCell>
+                          <TableCell className="text-right">{formatNumber(group.average_latency_ms)}ms</TableCell>
+                          <TableCell className="text-right">{formatDateTime(group.last_request_at)}</TableCell>
+                        </TableRow>
+                        {expanded
+                          ? group.models.map((item) => (
+                            <TableRow key={`${group.email}-${item.model}`} className="bg-muted/20">
+                              <TableCell>
+                                <div className="pl-6 text-xs text-muted-foreground">模型明细</div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="whitespace-nowrap text-sm">{item.model || "unknown"}</div>
+                              </TableCell>
+                              <TableCell className="text-right">{formatNumber(item.request_count)}</TableCell>
+                              <TableCell className="text-right">{formatNumber(item.error_count)}</TableCell>
+                              <TableCell className="text-right">{formatCompactNumberText(item.input_tokens)}</TableCell>
+                              <TableCell className="text-right">{formatCompactNumberText(item.billable_input_tokens)}</TableCell>
+                              <TableCell className="text-right">{formatCompactNumberText(item.cached_input_tokens)}</TableCell>
+                              <TableCell className="text-right">{formatCompactNumberText(item.output_tokens)}</TableCell>
+                              <TableCell className="text-right">{formatCompactNumberText(item.reasoning_tokens)}</TableCell>
+                              <TableCell className="text-right">{formatCost(item.total_cost_micros)}</TableCell>
+                              <TableCell className="text-right">{formatNumber(item.long_context_request_count)}</TableCell>
+                              <TableCell className="text-right">{formatNumber(item.average_latency_ms)}ms</TableCell>
+                              <TableCell className="text-right">{formatDateTime(item.last_request_at)}</TableCell>
+                            </TableRow>
+                          ))
+                          : null}
+                      </Fragment>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
