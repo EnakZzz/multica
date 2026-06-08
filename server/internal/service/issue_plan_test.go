@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseIssuePlanSpecOutputAcceptsSpec(t *testing.T) {
-	spec, err := parseIssuePlanSpecOutput(`{
+	spec, harness, err := parseIssuePlanSpecOutput(`{
 		"summary": "Build a two-stage planner.",
 		"goal": "Let users approve a spec before issue generation.",
 		"success_criteria": ["Plan enters spec review", "Approval generates items"],
@@ -43,10 +43,36 @@ func TestParseIssuePlanSpecOutputAcceptsSpec(t *testing.T) {
 	if got := strings.Join(spec.VerificationCommands, "|"); got != "go test ./internal/handler -run TestPlan" {
 		t.Fatalf("VerificationCommands = %q", got)
 	}
+	if harness.Mode != HarnessStrategyModeNone {
+		t.Fatalf("harness = %#v, want default none", harness)
+	}
+}
+
+func TestParseIssuePlanSpecOutputAcceptsHarnessStrategy(t *testing.T) {
+	_, harness, err := parseIssuePlanSpecOutput(`{
+		"spec": {
+			"summary": "Review a risky migration.",
+			"goal": "Produce a migration plan with independent verification."
+		},
+		"harness_strategy": {
+			"mode": "adversarial_verification",
+			"summary": "Use a separate verifier for migration risk.",
+			"rationale": "Schema migrations need skeptical review.",
+			"stop_condition": "All blocking migration risks have evidence.",
+			"parallelism": 2,
+			"requires_isolated_worktree": true
+		}
+	}`)
+	if err != nil {
+		t.Fatalf("parseIssuePlanSpecOutput returned error: %v", err)
+	}
+	if harness.Mode != HarnessStrategyModeAdversarialVerification || harness.Parallelism != 2 || !harness.RequiresIsolatedWorktree {
+		t.Fatalf("harness = %#v", harness)
+	}
 }
 
 func TestParseIssuePlanSpecOutputIgnoresTrailingExtraBrace(t *testing.T) {
-	spec, err := parseIssuePlanSpecOutput(`{
+	spec, _, err := parseIssuePlanSpecOutput(`{
 		"summary": "Build a planner.",
 		"goal": "Accept the first complete JSON object."
 	} }`)
@@ -289,7 +315,7 @@ func TestMergeExistingPlanClarificationsPreservesHistory(t *testing.T) {
 }
 
 func TestParseIssuePlanSpecOutputRejectsMissingGoal(t *testing.T) {
-	_, err := parseIssuePlanSpecOutput(`{
+	_, _, err := parseIssuePlanSpecOutput(`{
 		"summary": "Build a two-stage planner."
 	}`)
 	if err == nil || !strings.Contains(err.Error(), "missing goal") {

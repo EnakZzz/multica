@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"go.yaml.in/yaml/v2"
@@ -33,21 +34,23 @@ type PipelineResponse struct {
 }
 
 type PipelineNodeResponse struct {
-	ID                string   `json:"id"`
-	PipelineID        string   `json:"pipeline_id"`
-	Key               string   `json:"key"`
-	Type              string   `json:"type"`
-	Title             string   `json:"title"`
-	Description       string   `json:"description"`
-	AgentID           *string  `json:"agent_id"`
-	Repo              *string  `json:"repo"`
-	Repos             []string `json:"repos"`
-	DependsOnNodeKeys []string `json:"depends_on_node_keys"`
-	Position          int32    `json:"position"`
-	PositionX         int32    `json:"position_x"`
-	PositionY         int32    `json:"position_y"`
-	CreatedAt         string   `json:"created_at"`
-	UpdatedAt         string   `json:"updated_at"`
+	ID                string                   `json:"id"`
+	PipelineID        string                   `json:"pipeline_id"`
+	Key               string                   `json:"key"`
+	Type              string                   `json:"type"`
+	Title             string                   `json:"title"`
+	Description       string                   `json:"description"`
+	AgentID           *string                  `json:"agent_id"`
+	Repo              *string                  `json:"repo"`
+	Repos             []string                 `json:"repos"`
+	DependsOnNodeKeys []string                 `json:"depends_on_node_keys"`
+	HarnessStrategy   service.HarnessStrategy  `json:"harness_strategy"`
+	ExecutionRouting  service.ExecutionRouting `json:"execution_routing"`
+	Position          int32                    `json:"position"`
+	PositionX         int32                    `json:"position_x"`
+	PositionY         int32                    `json:"position_y"`
+	CreatedAt         string                   `json:"created_at"`
+	UpdatedAt         string                   `json:"updated_at"`
 }
 
 type PipelineRunResponse struct {
@@ -199,6 +202,8 @@ func pipelineNodeToResponse(node db.PipelineStage) PipelineNodeResponse {
 		Repo:              singleRepoKeyPtr(repoKeys),
 		Repos:             repoKeys,
 		DependsOnNodeKeys: node.DependsOnStageKeys,
+		HarnessStrategy:   service.HarnessStrategyFromJSON(node.HarnessStrategy),
+		ExecutionRouting:  service.ExecutionRoutingFromJSON(node.ExecutionRouting),
 		Position:          node.Position,
 		PositionX:         node.PositionX,
 		PositionY:         node.PositionY,
@@ -702,7 +707,7 @@ func (h *Handler) RunPipeline(w http.ResponseWriter, r *http.Request) {
 			assigneeType = pgtype.Text{String: "agent", Valid: true}
 			assigneeID = node.AgentID
 		}
-		description := pipelineIssueDescription(node.Description, node.NodeType, repoTargetsByStage[node.Key])
+		description := pipelineIssueDescription(node.Description, node.NodeType, repoTargetsByStage[node.Key], service.HarnessStrategyFromJSON(node.HarnessStrategy), service.ExecutionRoutingFromJSON(node.ExecutionRouting))
 		child, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
 			WorkspaceID:   pipeline.WorkspaceID,
 			Title:         node.Title,
@@ -1063,6 +1068,8 @@ func (h *Handler) replacePipelineDefinition(r *http.Request, qtx *db.Queries, pi
 			PositionX:          node.positionX,
 			PositionY:          node.positionY,
 			RepoKeys:           node.repoKeys,
+			HarnessStrategy:    service.MarshalHarnessStrategy(service.HarnessStrategy{}),
+			ExecutionRouting:   service.MarshalExecutionRouting(service.ExecutionRouting{}),
 		})
 		if err != nil {
 			return nil, err
@@ -1088,6 +1095,8 @@ func (h *Handler) copyPipelineStages(ctx context.Context, qtx *db.Queries, pipel
 			PositionX:          node.PositionX,
 			PositionY:          node.PositionY,
 			RepoKeys:           normalizeRepoKeys(node.RepoKeys),
+			HarnessStrategy:    node.HarnessStrategy,
+			ExecutionRouting:   node.ExecutionRouting,
 		})
 		if err != nil {
 			return nil, err
@@ -1201,10 +1210,12 @@ func projectResourceRepoURL(resource db.ProjectResource) string {
 	return strings.TrimSpace(ref.URL)
 }
 
-func pipelineIssueDescription(description, nodeType string, repos []pipelineRepoTarget) string {
+func pipelineIssueDescription(description, nodeType string, repos []pipelineRepoTarget, harness service.HarnessStrategy, routing service.ExecutionRouting) string {
 	description = strings.TrimSpace(description)
 	reviewContract := pipelineReviewGateContract(nodeType)
-	if len(repos) == 0 && reviewContract == "" {
+	harnessText := pipelineHarnessSection(harness)
+	routingText := service.ExecutionRoutingSection(routing)
+	if len(repos) == 0 && reviewContract == "" && harnessText == "" && routingText == "" {
 		return description
 	}
 	var b strings.Builder
@@ -1219,10 +1230,61 @@ func pipelineIssueDescription(description, nodeType string, repos []pipelineRepo
 		}
 	}
 	if reviewContract != "" {
-		if len(repos) > 0 {
+		if len(repos) > 0 || harnessText != "" {
 			b.WriteString("\n")
 		}
 		b.WriteString(reviewContract)
+	}
+	if harnessText != "" {
+		if len(repos) > 0 || reviewContract != "" {
+			b.WriteString("\n")
+		}
+		b.WriteString(harnessText)
+	}
+	if routingText != "" {
+		if len(repos) > 0 || reviewContract != "" || harnessText != "" {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(routingText)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func pipelineHarnessSection(harness service.HarnessStrategy) string {
+	harness = service.NormalizeHarnessStrategy(harness)
+	if harness.Mode == service.HarnessStrategyModeNone &&
+		harness.Summary == "" &&
+		harness.Rationale == "" &&
+		harness.StopCondition == "" &&
+		harness.Parallelism <= 1 &&
+		!harness.RequiresIsolatedWorktree {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Harness strategy:\n")
+	b.WriteString("- Mode: ")
+	b.WriteString(harness.Mode)
+	b.WriteString("\n")
+	if harness.Summary != "" {
+		b.WriteString("- Summary: ")
+		b.WriteString(harness.Summary)
+		b.WriteString("\n")
+	}
+	if harness.Rationale != "" {
+		b.WriteString("- Rationale: ")
+		b.WriteString(harness.Rationale)
+		b.WriteString("\n")
+	}
+	if harness.Parallelism > 1 {
+		fmt.Fprintf(&b, "- Suggested parallelism: %d\n", harness.Parallelism)
+	}
+	if harness.RequiresIsolatedWorktree {
+		b.WriteString("- Worktree isolation: recommended\n")
+	}
+	if harness.StopCondition != "" {
+		b.WriteString("- Stop condition: ")
+		b.WriteString(harness.StopCondition)
+		b.WriteString("\n")
 	}
 	return strings.TrimSpace(b.String())
 }

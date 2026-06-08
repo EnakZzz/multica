@@ -7,7 +7,7 @@ export interface PipelineDraftForValidation {
 
 export function validatePipelineDraft(draft: PipelineDraftForValidation): string[] {
   const errors: string[] = [];
-  if (!draft.name.trim()) errors.push("pipeline name is required");
+  if (!draft.name.trim()) errors.push("workflow name is required");
   if (draft.nodes.length === 0) errors.push("at least one node is required");
 
   const nodeKeys = new Set<string>();

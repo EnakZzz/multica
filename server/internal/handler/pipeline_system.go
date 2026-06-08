@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -24,6 +25,8 @@ type systemPipelineNodeTemplate struct {
 	DependsOnNodeKeys []string
 	PositionX         int32
 	PositionY         int32
+	HarnessStrategy   service.HarnessStrategy
+	ExecutionRouting  service.ExecutionRouting
 }
 
 var systemPipelineTemplates = []systemPipelineTemplate{
@@ -57,6 +60,7 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 				DependsOnNodeKeys: []string{"root-cause-analysis"},
 				PositionX:         560,
 				PositionY:         0,
+				HarnessStrategy:   service.HarnessStrategy{Mode: service.HarnessStrategyModeAdversarialVerification, Summary: "Form and test competing root-cause hypotheses before implementation.", Rationale: "Independent hypothesis pressure reduces self-preferential debugging bias.", StopCondition: "One hypothesis is supported by reproduction evidence and competing theories are rejected.", Parallelism: 2},
 			},
 			{
 				Key:               "minimal-fix",
@@ -75,6 +79,7 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 				DependsOnNodeKeys: []string{"minimal-fix"},
 				PositionX:         1120,
 				PositionY:         0,
+				HarnessStrategy:   service.HarnessStrategy{Mode: service.HarnessStrategyModeLoopUntilDone, Summary: "Repeat the focused reproduction and regression checks until the failure is gone or a blocker is proven.", Rationale: "Debugging completion needs an explicit evidence-based stop condition.", StopCondition: "Reproduction and focused regression commands pass, or a blocking failure is reported.", Parallelism: 1},
 			},
 		},
 	},
@@ -150,6 +155,7 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 				DependsOnNodeKeys: []string{"implementation"},
 				PositionX:         280,
 				PositionY:         0,
+				HarnessStrategy:   service.HarnessStrategy{Mode: service.HarnessStrategyModeAdversarialVerification, Summary: "Verify implementation claims against the approved spec before downstream code review.", Rationale: "A separate verifier should challenge scope drift and missing behavior.", StopCondition: "Every accepted success criterion has matching evidence or a blocking finding.", Parallelism: 1},
 			},
 			{
 				Key:               "code-review",
@@ -159,6 +165,7 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 				DependsOnNodeKeys: []string{"spec-review"},
 				PositionX:         560,
 				PositionY:         0,
+				HarnessStrategy:   service.HarnessStrategy{Mode: service.HarnessStrategyModeAdversarialVerification, Summary: "Review correctness, regression risk, and maintainability from a skeptical perspective.", Rationale: "Code review benefits from an explicit adversarial rubric instead of accepting implementation self-report.", StopCondition: "No blocking findings remain, or repair work is required.", Parallelism: 1},
 			},
 			{
 				Key:               "ready-for-human",
@@ -195,8 +202,8 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 		Name:        "using-git-worktrees",
 		Description: "Built-in pipeline using superpowers/using-git-worktrees for isolated implementation branches and clean handoff.",
 		Nodes: []systemPipelineNodeTemplate{
-			{Key: "prepare-worktree", NodeType: "issue", Title: "Prepare isolated worktree", Description: "Create or select a worktree and branch dedicated to this change. Record repo, branch, base ref, and setup command evidence.", PositionX: 0, PositionY: 0},
-			{Key: "implement-in-worktree", NodeType: "issue", Title: "Implement in worktree", Description: "Make the scoped change only inside the isolated branch and avoid mixing unrelated workspace changes.", DependsOnNodeKeys: []string{"prepare-worktree"}, PositionX: 280, PositionY: 0},
+			{Key: "prepare-worktree", NodeType: "issue", Title: "Prepare isolated worktree", Description: "Create or select a worktree and branch dedicated to this change. Record repo, branch, base ref, and setup command evidence.", PositionX: 0, PositionY: 0, ExecutionRouting: service.ExecutionRouting{RequiresIsolatedWorktree: true, BranchPolicy: service.ExecutionBranchPolicyPerItem, MergePolicy: service.ExecutionMergePolicyManual}},
+			{Key: "implement-in-worktree", NodeType: "issue", Title: "Implement in worktree", Description: "Make the scoped change only inside the isolated branch and avoid mixing unrelated workspace changes.", DependsOnNodeKeys: []string{"prepare-worktree"}, PositionX: 280, PositionY: 0, ExecutionRouting: service.ExecutionRouting{RequiresIsolatedWorktree: true, BranchPolicy: service.ExecutionBranchPolicyPerItem, MergePolicy: service.ExecutionMergePolicyPRRequired}},
 			{Key: "verify-and-handoff", NodeType: "check", Title: "Verify and hand off branch", Description: "Run focused checks, summarize changed files and branch state, and leave merge/review instructions.", DependsOnNodeKeys: []string{"implement-in-worktree"}, PositionX: 560, PositionY: 0},
 		},
 	},
@@ -216,8 +223,8 @@ var systemPipelineTemplates = []systemPipelineTemplate{
 		Description: "Built-in pipeline using superpowers/subagent-driven-development and superpowers/dispatching-parallel-agents for coordinated multi-agent delivery.",
 		Nodes: []systemPipelineNodeTemplate{
 			{Key: "decompose-work", NodeType: "issue", Title: "Decompose agent work", Description: "Split the goal into independent deliverables with required skills, inputs, outputs, dependencies, and review points.", PositionX: 0, PositionY: 0},
-			{Key: "dispatch-agents", NodeType: "issue", Title: "Dispatch parallel agents", Description: "Assign independent work to suitable visible agents. Keep shared context and collision boundaries explicit.", DependsOnNodeKeys: []string{"decompose-work"}, PositionX: 280, PositionY: 0},
-			{Key: "integrate-results", NodeType: "issue", Title: "Integrate results", Description: "Merge agent outputs, resolve conflicts, and produce a single coherent implementation or report.", DependsOnNodeKeys: []string{"dispatch-agents"}, PositionX: 560, PositionY: 0},
+			{Key: "dispatch-agents", NodeType: "issue", Title: "Dispatch parallel agents", Description: "Assign independent work to suitable visible agents. Keep shared context and collision boundaries explicit.", DependsOnNodeKeys: []string{"decompose-work"}, PositionX: 280, PositionY: 0, HarnessStrategy: service.HarnessStrategy{Mode: service.HarnessStrategyModeFanOutSynthesize, Summary: "Fan out independent work to parallel agents with explicit ownership boundaries.", Rationale: "Independent context windows reduce interference and keep large work moving.", StopCondition: "Each delegated slice has a structured result or blocker.", Parallelism: 4, RequiresIsolatedWorktree: true}, ExecutionRouting: service.ExecutionRouting{RequiresIsolatedWorktree: true, BranchPolicy: service.ExecutionBranchPolicyPerAgent, MergePolicy: service.ExecutionMergePolicyManual}},
+			{Key: "integrate-results", NodeType: "issue", Title: "Integrate results", Description: "Merge agent outputs, resolve conflicts, and produce a single coherent implementation or report.", DependsOnNodeKeys: []string{"dispatch-agents"}, PositionX: 560, PositionY: 0, HarnessStrategy: service.HarnessStrategy{Mode: service.HarnessStrategyModeFanOutSynthesize, Summary: "Synthesize parallel agent outputs into one coherent result.", Rationale: "Fan-out needs an explicit barrier that deduplicates, resolves conflicts, and preserves the original goal.", StopCondition: "All selected outputs are merged or explicitly rejected with rationale.", Parallelism: 1}, ExecutionRouting: service.ExecutionRouting{BranchPolicy: service.ExecutionBranchPolicyPerIteration, MergePolicy: service.ExecutionMergePolicyPRRequired}},
 			{Key: "integration-check", NodeType: "check", Title: "Run integration checks", Description: "Verify the combined result with focused commands or manual evidence before handoff.", DependsOnNodeKeys: []string{"integrate-results"}, PositionX: 840, PositionY: 0},
 		},
 	},
@@ -359,6 +366,8 @@ func (h *Handler) ensureSystemPipeline(ctx context.Context, qtx *db.Queries, wor
 			PositionX:          node.PositionX,
 			PositionY:          node.PositionY,
 			RepoKeys:           []string{},
+			HarnessStrategy:    service.MarshalHarnessStrategy(node.HarnessStrategy),
+			ExecutionRouting:   service.MarshalExecutionRouting(node.ExecutionRouting),
 		}); err != nil {
 			return err
 		}
@@ -402,6 +411,8 @@ func systemPipelineStagesMatch(stages []db.PipelineStage, nodes []systemPipeline
 			stage.Position != int32(i+1) ||
 			stage.PositionX != node.PositionX ||
 			stage.PositionY != node.PositionY ||
+			string(stage.HarnessStrategy) != string(service.MarshalHarnessStrategy(node.HarnessStrategy)) ||
+			string(stage.ExecutionRouting) != string(service.MarshalExecutionRouting(node.ExecutionRouting)) ||
 			!sameStringList(stage.DependsOnStageKeys, node.DependsOnNodeKeys) {
 			return false
 		}

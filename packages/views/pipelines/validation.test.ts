@@ -11,7 +11,7 @@ describe("validatePipelineDraft", () => {
     depends_on_node_keys: [],
   };
   const valid: PipelineDraftForValidation = {
-    name: "Production pipeline",
+    name: "Production workflow",
     nodes: [validNode],
   };
 

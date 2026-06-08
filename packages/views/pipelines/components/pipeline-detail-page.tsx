@@ -12,7 +12,7 @@ import {
 } from "@xyflow/react";
 import type { NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowLeft, Bot, Copy, GitBranch, Loader2, Plus, Save, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, Bot, Copy, GitBranch, Loader2, Plus, Save, Trash2, Upload, Workflow, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@multica/ui/components/ui/button";
@@ -28,7 +28,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useDeletePipeline, useDuplicatePipeline, useUpdatePipeline } from "@multica/core/pipelines/mutations";
 import { pipelineDetailOptions } from "@multica/core/pipelines/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import type { Pipeline, PipelineNodeType, UpsertPipelineNodeRequest } from "@multica/core/types";
+import type { ExecutionRouting, HarnessStrategy, Pipeline, PipelineNodeType, UpsertPipelineNodeRequest } from "@multica/core/types";
 import type { Connection, Edge, Node, NodeProps, ReactFlowInstance } from "@xyflow/react";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
@@ -49,6 +49,9 @@ type PipelineFlowNodeData = {
   nodeType: PipelineNodeType;
   agentName: string;
   dependencyCount: number;
+  hasHarness: boolean;
+  harnessMode: HarnessStrategy["mode"];
+  hasRouting: boolean;
 };
 
 type PipelineFlowNodeModel = Node<PipelineFlowNodeData, "pipeline">;
@@ -77,7 +80,7 @@ export function PipelineDetailPage({ pipelineId: explicitPipelineId }: { pipelin
   const { resolvedTheme } = useTheme();
   const pipelineId =
     explicitPipelineId ??
-    decodeURIComponent(nav.pathname.match(/\/pipelines\/([^/]+)$/)?.[1] ?? "");
+    decodeURIComponent(nav.pathname.match(/\/(?:pipelines|workflows)\/([^/]+)$/)?.[1] ?? "");
 
   const { data: pipeline } = useQuery(pipelineDetailOptions(wsId, pipelineId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -99,17 +102,25 @@ export function PipelineDetailPage({ pipelineId: explicitPipelineId }: { pipelin
 
   const activeAgents = useMemo(() => agents.filter((a) => !a.archived_at), [agents]);
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
+  const harnessByNodeKey = useMemo(
+    () => new Map((pipeline?.nodes ?? []).map((node) => [node.key, node.harness_strategy])),
+    [pipeline?.nodes],
+  );
+  const routingByNodeKey = useMemo(
+    () => new Map((pipeline?.nodes ?? []).map((node) => [node.key, node.execution_routing])),
+    [pipeline?.nodes],
+  );
 
   // Sync ReactFlow nodes/edges from draft, preserving live positions during drag.
   useEffect(() => {
     if (!draft) return;
-    const { nodes: newNodes, edges: newEdges } = getFlowElements(draft.nodes, agentsById);
+    const { nodes: newNodes, edges: newEdges } = getFlowElements(draft.nodes, agentsById, harnessByNodeKey, routingByNodeKey);
     setRfNodes((prev) => {
       const posMap = new Map(prev.map((n) => [n.id, n.position]));
       return newNodes.map((n) => ({ ...n, position: posMap.get(n.id) ?? n.position }));
     });
     setRfEdges(newEdges);
-  }, [draft, agentsById]);
+  }, [draft, agentsById, harnessByNodeKey, routingByNodeKey]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setRfNodes((prev) => applyNodeChanges(changes, prev) as PipelineFlowNodeModel[]);
@@ -130,6 +141,8 @@ export function PipelineDetailPage({ pipelineId: explicitPipelineId }: { pipelin
     (n, i) => getFlowNodeId(n, i) === selectedNodeFlowId,
   );
   const selectedNode = selectedNodeIndex >= 0 ? (draft.nodes[selectedNodeIndex] ?? null) : null;
+  const selectedNodeHarness = selectedNode ? harnessByNodeKey.get(selectedNode.key) ?? null : null;
+  const selectedNodeRouting = selectedNode ? routingByNodeKey.get(selectedNode.key) ?? null : null;
 
   // ── Mutations ──
 
@@ -235,7 +248,7 @@ export function PipelineDetailPage({ pipelineId: explicitPipelineId }: { pipelin
   };
 
   const save = async () => {
-    if (!canEdit) { toast.error("Built-in pipelines cannot be edited. Duplicate it to customize."); return; }
+    if (!canEdit) { toast.error("Built-in workflows cannot be edited. Duplicate it to customize."); return; }
     const errors = validatePipelineDraft(draft);
     if (errors.length > 0) { toast.error(errors[0]); return; }
     try {
@@ -255,31 +268,31 @@ export function PipelineDetailPage({ pipelineId: explicitPipelineId }: { pipelin
           position_y: node.position_y ?? 0,
         })),
       });
-      toast.success("Pipeline saved");
+      toast.success("Workflow saved");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save pipeline");
+      toast.error(e instanceof Error ? e.message : "Failed to save workflow");
     }
   };
 
   const archive = async () => {
-    if (!canDelete) { toast.error("Built-in pipelines cannot be archived."); return; }
-    if (!window.confirm("Archive this pipeline? Existing run history is preserved.")) return;
+    if (!canDelete) { toast.error("Built-in workflows cannot be archived."); return; }
+    if (!window.confirm("Archive this workflow? Existing run history is preserved.")) return;
     try {
       await deletePipeline.mutateAsync();
-      toast.success("Pipeline archived");
+      toast.success("Workflow archived");
       nav.push(paths.pipelines());
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to archive pipeline");
+      toast.error(e instanceof Error ? e.message : "Failed to archive workflow");
     }
   };
 
   const duplicate = async () => {
     try {
       const copy = await duplicatePipeline.mutateAsync({});
-      toast.success("Pipeline duplicated");
+      toast.success("Workflow duplicated");
       nav.push(paths.pipelineDetail(copy.id));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to duplicate pipeline");
+      toast.error(e instanceof Error ? e.message : "Failed to duplicate workflow");
     }
   };
 
@@ -292,7 +305,7 @@ export function PipelineDetailPage({ pipelineId: explicitPipelineId }: { pipelin
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-sm font-semibold">{draft.name || "Pipeline"}</h1>
+            <h1 className="truncate text-sm font-semibold">{draft.name || "Workflow"}</h1>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               {pipeline.is_system && <Badge variant="secondary" className="text-[9px]">Built-in</Badge>}
               <span>{draft.nodes.length} nodes</span>
@@ -387,6 +400,8 @@ export function PipelineDetailPage({ pipelineId: explicitPipelineId }: { pipelin
           pipeline={pipeline}
           draft={draft}
           selectedNode={selectedNode}
+          selectedNodeHarness={selectedNodeHarness}
+          selectedNodeRouting={selectedNodeRouting}
           activeAgents={activeAgents}
           agentsById={agentsById}
           canEdit={canEdit}
@@ -413,6 +428,8 @@ function PipelinePropertiesPanel({
   pipeline,
   draft,
   selectedNode,
+  selectedNodeHarness,
+  selectedNodeRouting,
   activeAgents,
   agentsById,
   canEdit,
@@ -425,6 +442,8 @@ function PipelinePropertiesPanel({
   pipeline: Pipeline;
   draft: PipelineDraft;
   selectedNode: UpsertPipelineNodeRequest | null;
+  selectedNodeHarness: HarnessStrategy | null;
+  selectedNodeRouting: ExecutionRouting | null;
   activeAgents: Array<{ id: string; name: string }>;
   agentsById: Map<string, { name?: string }>;
   canEdit: boolean;
@@ -434,12 +453,12 @@ function PipelinePropertiesPanel({
   onPatchDraft: (patch: Partial<PipelineDraft>) => void;
   onDeselect: () => void;
 }) {
-  // ── Pipeline overview (no selection) ──
+  // ── Workflow overview (no selection) ──
   if (!selectedNode) {
     return (
       <aside className="flex w-[300px] shrink-0 flex-col border-l bg-background">
         <div className="flex h-11 shrink-0 items-center border-b px-4">
-          <span className="text-sm font-semibold">Pipeline</span>
+          <span className="text-sm font-semibold">Workflow</span>
         </div>
         <div className="flex-1 overflow-y-auto">
           <div className="space-y-4 p-4">
@@ -450,7 +469,7 @@ function PipelinePropertiesPanel({
               <Input
                 value={draft.name}
                 disabled={!canEdit}
-                placeholder="Pipeline name"
+                placeholder="Workflow name"
                 onChange={(e) => onPatchDraft({ name: e.target.value })}
               />
             </div>
@@ -462,7 +481,7 @@ function PipelinePropertiesPanel({
               <Textarea
                 value={draft.description}
                 disabled={!canEdit}
-                placeholder="What does this pipeline do?"
+                placeholder="What does this workflow do?"
                 className="min-h-[4.5rem] resize-none text-sm"
                 onChange={(e) => onPatchDraft({ description: e.target.value })}
               />
@@ -517,6 +536,8 @@ function PipelinePropertiesPanel({
   // ── Node properties (node selected) ──
   const agent = selectedNode.agent_id ? agentsById.get(selectedNode.agent_id) : undefined;
   const nodeType = selectedNode.type ?? "issue";
+  const hasHarness = hasHarnessStrategy(selectedNodeHarness);
+  const hasRouting = hasExecutionRouting(selectedNodeRouting);
 
   return (
     <aside className="flex w-[300px] shrink-0 flex-col border-l bg-background">
@@ -610,6 +631,59 @@ function PipelinePropertiesPanel({
               </SelectContent>
             </Select>
           </div>
+
+          {hasHarness && selectedNodeHarness && (
+            <div className="rounded-lg border bg-muted/25 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                  <Workflow className="h-3 w-3" />
+                  Harness
+                </div>
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-primary ring-1 ring-primary/20">
+                  {harnessModeLabel(selectedNodeHarness.mode)}
+                </span>
+              </div>
+              {selectedNodeHarness.summary && (
+                <p className="text-xs leading-relaxed text-foreground">{selectedNodeHarness.summary}</p>
+              )}
+              {selectedNodeHarness.rationale && (
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{selectedNodeHarness.rationale}</p>
+              )}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <span className="rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  Parallelism {selectedNodeHarness.parallelism || 1}
+                </span>
+                <span className="rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  Worktree {selectedNodeHarness.requires_isolated_worktree ? "isolated" : "shared"}
+                </span>
+                {selectedNodeHarness.stop_condition && (
+                  <span className="rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    Stop: {selectedNodeHarness.stop_condition}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {hasRouting && selectedNodeRouting && (
+            <div className="rounded-lg border bg-muted/25 p-3">
+              <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                <GitBranch className="h-3 w-3" />
+                Execution routing
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <span className="rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  Worktree {selectedNodeRouting.requires_isolated_worktree ? "isolated" : "shared"}
+                </span>
+                <span className="rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  Branch {executionBranchPolicyLabel(selectedNodeRouting.branch_policy)}
+                </span>
+                <span className="rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  Merge {executionMergePolicyLabel(selectedNodeRouting.merge_policy)}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Description */}
           <div className="space-y-1.5">
@@ -747,6 +821,16 @@ function PipelineFlowNode({ data, selected }: NodeProps<PipelineFlowNodeModel>) 
           <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
             {pipelineNodeTypeLabel(data.nodeType)}
           </span>
+          {data.hasHarness && (
+            <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+              Harness
+            </span>
+          )}
+          {data.hasRouting && (
+            <span className="rounded-sm bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+              Routing
+            </span>
+          )}
           {data.dependencyCount > 0 && (
             <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground/70">
               <GitBranch className="h-2.5 w-2.5" />
@@ -770,6 +854,8 @@ function PipelineFlowNode({ data, selected }: NodeProps<PipelineFlowNodeModel>) 
 function getFlowElements(
   nodes: UpsertPipelineNodeRequest[],
   agentsById: Map<string, { name?: string }>,
+  harnessByNodeKey: Map<string, HarnessStrategy>,
+  routingByNodeKey: Map<string, ExecutionRouting>,
 ): { nodes: PipelineFlowNodeModel[]; edges: Edge[] } {
   const nodeIdByKey = new Map<string, string>();
   nodes.forEach((node, index) => {
@@ -780,6 +866,8 @@ function getFlowElements(
   return {
     nodes: nodes.map((node, index) => {
       const agent = node.agent_id ? agentsById.get(node.agent_id) : undefined;
+      const harness = harnessByNodeKey.get(node.key);
+      const routing = routingByNodeKey.get(node.key);
       return {
         id: getFlowNodeId(node, index),
         type: "pipeline",
@@ -790,6 +878,9 @@ function getFlowElements(
           nodeType: node.type ?? "issue",
           agentName: agent?.name ?? "Bind later",
           dependencyCount: (node.depends_on_node_keys ?? []).length,
+          hasHarness: hasHarnessStrategy(harness),
+          harnessMode: harness?.mode ?? "none",
+          hasRouting: hasExecutionRouting(routing),
         },
       };
     }),
@@ -870,6 +961,48 @@ function pipelineNodeTypeLabel(nodeType: PipelineNodeType) {
     case "merge": return "合入 / 集成 · Merge / Integrate";
     case "subagent-driven-development": return "子智能体开发 / Subagent-driven";
     default: return "任务 / Issue";
+  }
+}
+
+function hasHarnessStrategy(harness: HarnessStrategy | null | undefined) {
+  return Boolean(harness && harness.mode && harness.mode !== "none");
+}
+
+function hasExecutionRouting(routing: ExecutionRouting | null | undefined) {
+  return Boolean(
+    routing &&
+      (routing.requires_isolated_worktree || routing.branch_policy !== "auto" || routing.merge_policy !== "none"),
+  );
+}
+
+function executionBranchPolicyLabel(policy: ExecutionRouting["branch_policy"]) {
+  switch (policy) {
+    case "shared": return "Shared";
+    case "per_item": return "Per item";
+    case "per_iteration": return "Per iteration";
+    case "per_agent": return "Per agent";
+    default: return "Auto";
+  }
+}
+
+function executionMergePolicyLabel(policy: ExecutionRouting["merge_policy"]) {
+  switch (policy) {
+    case "manual": return "Manual";
+    case "pr_required": return "PR required";
+    case "auto_when_green": return "Auto when green";
+    default: return "None";
+  }
+}
+
+function harnessModeLabel(mode: HarnessStrategy["mode"]) {
+  switch (mode) {
+    case "classify_and_act": return "Classify";
+    case "fan_out_synthesize": return "Fan-out";
+    case "adversarial_verification": return "Adversarial";
+    case "generate_and_filter": return "Generate/filter";
+    case "tournament": return "Tournament";
+    case "loop_until_done": return "Loop";
+    default: return "Standard";
   }
 }
 

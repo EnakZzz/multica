@@ -1,3 +1,5 @@
+import type { ExecutionRouting, HarnessStrategy } from "./plan";
+
 export type PipelineNodeType =
   | "issue"
   | "manual"
@@ -18,6 +20,8 @@ export interface PipelineNode {
   repo: string | null;
   repos: string[];
   depends_on_node_keys: string[];
+  harness_strategy: HarnessStrategy;
+  execution_routing: ExecutionRouting;
   position: number;
   position_x: number;
   position_y: number;

@@ -68,7 +68,7 @@ export function PipelineImportDialog({
       if (result.valid) {
         toast.success("YAML validated");
       } else {
-        toast.error(result.errors[0] ?? "Invalid pipeline YAML");
+        toast.error(result.errors[0] ?? "Invalid workflow YAML");
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to validate YAML");
@@ -80,10 +80,10 @@ export function PipelineImportDialog({
       const pipeline = await importPipeline.mutateAsync(payload);
       clearFile();
       onOpenChange(false);
-      toast.success(pipelineId ? "Pipeline imported" : "Pipeline created");
+      toast.success(pipelineId ? "Workflow imported" : "Workflow created");
       onImported?.(pipeline);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to import pipeline");
+      toast.error(e instanceof Error ? e.message : "Failed to import workflow");
     }
   };
 

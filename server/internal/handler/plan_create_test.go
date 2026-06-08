@@ -194,12 +194,73 @@ func TestPlanItemIssueDescriptionHumanConfirmationIncludesInheritedBranch(t *tes
 		IterationBranchName:  "feature/protolab-web-run-allure-mvp",
 	}
 
-	description := planItemIssueDescription(item, service.PlanSpec{})
+	description := planItemIssueDescription(item, service.PlanSpec{}, service.HarnessStrategy{})
 	for _, want := range []string{
 		"Inherited implementation branch:",
 		"feature/protolab-web-run-allure-mvp",
 		"Git commit expected:",
 		"No",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description missing %q\n---\n%s", want, description)
+		}
+	}
+}
+
+func TestPlanIssueDescriptionsIncludeHarnessStrategy(t *testing.T) {
+	harness := service.HarnessStrategy{
+		Mode:                     service.HarnessStrategyModeAdversarialVerification,
+		Summary:                  "Challenge the implementation against the accepted spec.",
+		Rationale:                "Review-heavy work needs skeptical verification.",
+		StopCondition:            "No blocking findings remain.",
+		Parallelism:              2,
+		RequiresIsolatedWorktree: true,
+	}
+
+	parentDescription := planParentIssueDescription("Parent context", harness)
+	for _, want := range []string{
+		"Parent context",
+		"Harness strategy:",
+		"Mode: adversarial_verification",
+		"Challenge the implementation",
+	} {
+		if !strings.Contains(parentDescription, want) {
+			t.Fatalf("parent description missing %q\n---\n%s", want, parentDescription)
+		}
+	}
+
+	itemDescription := planItemIssueDescription(db.PlanItem{
+		Description: "Review gate",
+		NodeType:    service.PipelineNodeTypeCodeReview,
+	}, service.PlanSpec{}, harness)
+	for _, want := range []string{
+		"Harness strategy:",
+		"Suggested parallelism: 2",
+		"Worktree isolation: recommended",
+		"Execution note:",
+	} {
+		if !strings.Contains(itemDescription, want) {
+			t.Fatalf("item description missing %q\n---\n%s", want, itemDescription)
+		}
+	}
+}
+
+func TestPlanItemIssueDescriptionIncludesExecutionRouting(t *testing.T) {
+	description := planItemIssueDescription(db.PlanItem{
+		Description: "Implementation slice",
+		NodeType:    service.PipelineNodeTypeIssue,
+		ExecutionRouting: service.MarshalExecutionRouting(service.ExecutionRouting{
+			RequiresIsolatedWorktree: true,
+			BranchPolicy:             service.ExecutionBranchPolicyPerIteration,
+			MergePolicy:              service.ExecutionMergePolicyPRRequired,
+		}),
+	}, service.PlanSpec{}, service.HarnessStrategy{})
+
+	for _, want := range []string{
+		"Execution routing:",
+		"Worktree isolation: required",
+		"Branch policy: per_iteration",
+		"Merge policy: pr_required",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("description missing %q\n---\n%s", want, description)

@@ -22,7 +22,7 @@ SET
     error = NULL,
     updated_at = now()
 WHERE id = $4
-RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type ApprovePlanSpecParams struct {
@@ -60,6 +60,7 @@ func (q *Queries) ApprovePlanSpec(ctx context.Context, arg ApprovePlanSpecParams
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -69,7 +70,7 @@ INSERT INTO plan (
     workspace_id, title, prompt, status, planner_agent_id, project_id, created_by
 ) VALUES (
     $1, $2, $3, 'planning', $4, $6, $5
-) RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+) RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type CreatePlanParams struct {
@@ -111,6 +112,7 @@ func (q *Queries) CreatePlan(ctx context.Context, arg CreatePlanParams) (Plan, e
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -122,7 +124,7 @@ INSERT INTO plan (
 ) VALUES (
     $1, $2, $3, 'planning', $4, $9,
     $5, $6, $7, $8
-) RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+) RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type CreatePlanForIssueParams struct {
@@ -170,6 +172,7 @@ func (q *Queries) CreatePlanForIssue(ctx context.Context, arg CreatePlanForIssue
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -181,6 +184,7 @@ INSERT INTO plan_item (
     execution_kind, confirmation_question, confirmation_reason, required_evidence,
     requires_git_commit, branch_name,
     iteration_index, iteration_title, iteration_branch_name,
+    execution_routing,
     node_type,
     recommended_agent_id,
     match_score, match_reason, missing_capability, depends_on_positions, selected
@@ -190,10 +194,11 @@ INSERT INTO plan_item (
     $9, $10, $11, $12,
     $13, $14,
     $15, $16, $17,
+    $25::jsonb,
     $18,
-    $25,
+    $26,
     $19, $20, $21, $22, $23
-) RETURNING id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type, unit_test_checklist, iteration_index, iteration_title, iteration_branch_name
+) RETURNING id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type, unit_test_checklist, iteration_index, iteration_title, iteration_branch_name, execution_routing
 `
 
 type CreatePlanItemParams struct {
@@ -221,6 +226,7 @@ type CreatePlanItemParams struct {
 	DependsOnPositions    []int32     `json:"depends_on_positions"`
 	Selected              bool        `json:"selected"`
 	UnitTestChecklist     []byte      `json:"unit_test_checklist"`
+	ExecutionRouting      []byte      `json:"execution_routing"`
 	RecommendedAgentID    pgtype.UUID `json:"recommended_agent_id"`
 }
 
@@ -250,6 +256,7 @@ func (q *Queries) CreatePlanItem(ctx context.Context, arg CreatePlanItemParams) 
 		arg.DependsOnPositions,
 		arg.Selected,
 		arg.UnitTestChecklist,
+		arg.ExecutionRouting,
 		arg.RecommendedAgentID,
 	)
 	var i PlanItem
@@ -283,6 +290,7 @@ func (q *Queries) CreatePlanItem(ctx context.Context, arg CreatePlanItemParams) 
 		&i.IterationIndex,
 		&i.IterationTitle,
 		&i.IterationBranchName,
+		&i.ExecutionRouting,
 	)
 	return i, err
 }
@@ -297,7 +305,7 @@ func (q *Queries) DeletePlanItems(ctx context.Context, planID pgtype.UUID) error
 }
 
 const getPlan = `-- name: GetPlan :one
-SELECT id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec FROM plan
+SELECT id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy FROM plan
 WHERE id = $1
 `
 
@@ -324,12 +332,13 @@ func (q *Queries) GetPlan(ctx context.Context, id pgtype.UUID) (Plan, error) {
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
 
 const getPlanByTask = `-- name: GetPlanByTask :one
-SELECT id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec FROM plan
+SELECT id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy FROM plan
 WHERE task_id = $1
 `
 
@@ -356,12 +365,13 @@ func (q *Queries) GetPlanByTask(ctx context.Context, taskID pgtype.UUID) (Plan, 
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
 
 const getPlanInWorkspace = `-- name: GetPlanInWorkspace :one
-SELECT id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec FROM plan
+SELECT id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy FROM plan
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -393,12 +403,13 @@ func (q *Queries) GetPlanInWorkspace(ctx context.Context, arg GetPlanInWorkspace
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
 
 const getPlanItemByGeneratedIssue = `-- name: GetPlanItemByGeneratedIssue :one
-SELECT id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type, unit_test_checklist, iteration_index, iteration_title, iteration_branch_name FROM plan_item
+SELECT id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type, unit_test_checklist, iteration_index, iteration_title, iteration_branch_name, execution_routing FROM plan_item
 WHERE generated_issue_id = $1
 LIMIT 1
 `
@@ -436,12 +447,13 @@ func (q *Queries) GetPlanItemByGeneratedIssue(ctx context.Context, generatedIssu
 		&i.IterationIndex,
 		&i.IterationTitle,
 		&i.IterationBranchName,
+		&i.ExecutionRouting,
 	)
 	return i, err
 }
 
 const listPlanItems = `-- name: ListPlanItems :many
-SELECT id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type, unit_test_checklist, iteration_index, iteration_title, iteration_branch_name FROM plan_item
+SELECT id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type, unit_test_checklist, iteration_index, iteration_title, iteration_branch_name, execution_routing FROM plan_item
 WHERE plan_id = $1
 ORDER BY position ASC, created_at ASC
 `
@@ -485,6 +497,7 @@ func (q *Queries) ListPlanItems(ctx context.Context, planID pgtype.UUID) ([]Plan
 			&i.IterationIndex,
 			&i.IterationTitle,
 			&i.IterationBranchName,
+			&i.ExecutionRouting,
 		); err != nil {
 			return nil, err
 		}
@@ -497,7 +510,7 @@ func (q *Queries) ListPlanItems(ctx context.Context, planID pgtype.UUID) ([]Plan
 }
 
 const listPlans = `-- name: ListPlans :many
-SELECT id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec FROM plan
+SELECT id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy FROM plan
 WHERE workspace_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -538,6 +551,7 @@ func (q *Queries) ListPlans(ctx context.Context, arg ListPlansParams) ([]Plan, e
 			&i.SpecApprovedAt,
 			&i.SpecApprovedBy,
 			&i.CommittedSpec,
+			&i.HarnessStrategy,
 		); err != nil {
 			return nil, err
 		}
@@ -557,7 +571,7 @@ SET
     committed_spec = spec,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type MarkPlanCommittedParams struct {
@@ -588,6 +602,7 @@ func (q *Queries) MarkPlanCommitted(ctx context.Context, arg MarkPlanCommittedPa
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -596,7 +611,7 @@ const markPlanFailed = `-- name: MarkPlanFailed :one
 UPDATE plan
 SET status = 'failed', error = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type MarkPlanFailedParams struct {
@@ -627,6 +642,7 @@ func (q *Queries) MarkPlanFailed(ctx context.Context, arg MarkPlanFailedParams) 
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -641,7 +657,7 @@ SET
     spec_approved_by = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type MarkPlanPlanningParams struct {
@@ -672,6 +688,7 @@ func (q *Queries) MarkPlanPlanning(ctx context.Context, arg MarkPlanPlanningPara
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -683,10 +700,11 @@ SET
     title = $2,
     parent_title = $3,
     parent_description = $4,
+    harness_strategy = $5::jsonb,
     error = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type MarkPlanReadyParams struct {
@@ -694,6 +712,7 @@ type MarkPlanReadyParams struct {
 	Title             string      `json:"title"`
 	ParentTitle       pgtype.Text `json:"parent_title"`
 	ParentDescription pgtype.Text `json:"parent_description"`
+	HarnessStrategy   []byte      `json:"harness_strategy"`
 }
 
 func (q *Queries) MarkPlanReady(ctx context.Context, arg MarkPlanReadyParams) (Plan, error) {
@@ -702,6 +721,7 @@ func (q *Queries) MarkPlanReady(ctx context.Context, arg MarkPlanReadyParams) (P
 		arg.Title,
 		arg.ParentTitle,
 		arg.ParentDescription,
+		arg.HarnessStrategy,
 	)
 	var i Plan
 	err := row.Scan(
@@ -724,6 +744,7 @@ func (q *Queries) MarkPlanReady(ctx context.Context, arg MarkPlanReadyParams) (P
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -734,22 +755,29 @@ SET
     status = 'spec_review',
     title = $1,
     spec = $2::jsonb,
+    harness_strategy = $3::jsonb,
     error = NULL,
     spec_approved_at = NULL,
     spec_approved_by = NULL,
     updated_at = now()
-WHERE id = $3
-RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+WHERE id = $4
+RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type MarkPlanSpecReviewParams struct {
-	Title string      `json:"title"`
-	Spec  []byte      `json:"spec"`
-	ID    pgtype.UUID `json:"id"`
+	Title           string      `json:"title"`
+	Spec            []byte      `json:"spec"`
+	HarnessStrategy []byte      `json:"harness_strategy"`
+	ID              pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) MarkPlanSpecReview(ctx context.Context, arg MarkPlanSpecReviewParams) (Plan, error) {
-	row := q.db.QueryRow(ctx, markPlanSpecReview, arg.Title, arg.Spec, arg.ID)
+	row := q.db.QueryRow(ctx, markPlanSpecReview,
+		arg.Title,
+		arg.Spec,
+		arg.HarnessStrategy,
+		arg.ID,
+	)
 	var i Plan
 	err := row.Scan(
 		&i.ID,
@@ -771,6 +799,7 @@ func (q *Queries) MarkPlanSpecReview(ctx context.Context, arg MarkPlanSpecReview
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -779,7 +808,7 @@ const setPlanTask = `-- name: SetPlanTask :one
 UPDATE plan
 SET task_id = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type SetPlanTaskParams struct {
@@ -810,6 +839,7 @@ func (q *Queries) SetPlanTask(ctx context.Context, arg SetPlanTaskParams) (Plan,
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -823,7 +853,7 @@ SET
     spec = $5::jsonb,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec
+RETURNING id, workspace_id, title, prompt, status, planner_agent_id, task_id, project_id, parent_title, parent_description, parent_issue_id, error, created_by, created_at, updated_at, spec, spec_approved_at, spec_approved_by, committed_spec, harness_strategy
 `
 
 type UpdatePlanDraftParams struct {
@@ -863,6 +893,7 @@ func (q *Queries) UpdatePlanDraft(ctx context.Context, arg UpdatePlanDraftParams
 		&i.SpecApprovedAt,
 		&i.SpecApprovedBy,
 		&i.CommittedSpec,
+		&i.HarnessStrategy,
 	)
 	return i, err
 }
@@ -871,7 +902,7 @@ const updatePlanItemGeneratedIssue = `-- name: UpdatePlanItemGeneratedIssue :one
 UPDATE plan_item
 SET generated_issue_id = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type, unit_test_checklist, iteration_index, iteration_title, iteration_branch_name
+RETURNING id, plan_id, position, title, description, recommended_agent_id, match_score, match_reason, missing_capability, depends_on_positions, selected, generated_issue_id, created_at, updated_at, acceptance_criteria, suggested_test_commands, context_resources, risk_notes, execution_kind, confirmation_question, confirmation_reason, required_evidence, requires_git_commit, branch_name, node_type, unit_test_checklist, iteration_index, iteration_title, iteration_branch_name, execution_routing
 `
 
 type UpdatePlanItemGeneratedIssueParams struct {
@@ -912,6 +943,7 @@ func (q *Queries) UpdatePlanItemGeneratedIssue(ctx context.Context, arg UpdatePl
 		&i.IterationIndex,
 		&i.IterationTitle,
 		&i.IterationBranchName,
+		&i.ExecutionRouting,
 	)
 	return i, err
 }

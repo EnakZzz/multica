@@ -74,9 +74,9 @@ DELETE FROM pipeline_stage WHERE pipeline_id = $1;
 
 -- name: CreatePipelineStage :one
 INSERT INTO pipeline_stage (
-    pipeline_id, key, title, description, role_key, node_type, agent_id, depends_on_stage_keys, position, position_x, position_y, repo_keys
+    pipeline_id, key, title, description, role_key, node_type, agent_id, depends_on_stage_keys, position, position_x, position_y, repo_keys, harness_strategy, execution_routing
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, sqlc.narg('agent_id'), $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, sqlc.narg('agent_id'), $7, $8, $9, $10, $11, sqlc.arg('harness_strategy')::jsonb, sqlc.arg('execution_routing')::jsonb
 ) RETURNING *;
 
 -- name: CreatePipelineRun :one

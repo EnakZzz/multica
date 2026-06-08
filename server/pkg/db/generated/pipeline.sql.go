@@ -198,10 +198,10 @@ func (q *Queries) CreatePipelineRunStage(ctx context.Context, arg CreatePipeline
 
 const createPipelineStage = `-- name: CreatePipelineStage :one
 INSERT INTO pipeline_stage (
-    pipeline_id, key, title, description, role_key, node_type, agent_id, depends_on_stage_keys, position, position_x, position_y, repo_keys
+    pipeline_id, key, title, description, role_key, node_type, agent_id, depends_on_stage_keys, position, position_x, position_y, repo_keys, harness_strategy, execution_routing
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $12, $7, $8, $9, $10, $11
-) RETURNING id, pipeline_id, key, title, description, role_key, depends_on_stage_keys, position, created_at, updated_at, node_type, agent_id, position_x, position_y, repo_keys
+    $1, $2, $3, $4, $5, $6, $12, $7, $8, $9, $10, $11, $13::jsonb, $14::jsonb
+) RETURNING id, pipeline_id, key, title, description, role_key, depends_on_stage_keys, position, created_at, updated_at, node_type, agent_id, position_x, position_y, repo_keys, harness_strategy, execution_routing
 `
 
 type CreatePipelineStageParams struct {
@@ -217,6 +217,8 @@ type CreatePipelineStageParams struct {
 	PositionY          int32       `json:"position_y"`
 	RepoKeys           []string    `json:"repo_keys"`
 	AgentID            pgtype.UUID `json:"agent_id"`
+	HarnessStrategy    []byte      `json:"harness_strategy"`
+	ExecutionRouting   []byte      `json:"execution_routing"`
 }
 
 func (q *Queries) CreatePipelineStage(ctx context.Context, arg CreatePipelineStageParams) (PipelineStage, error) {
@@ -233,6 +235,8 @@ func (q *Queries) CreatePipelineStage(ctx context.Context, arg CreatePipelineSta
 		arg.PositionY,
 		arg.RepoKeys,
 		arg.AgentID,
+		arg.HarnessStrategy,
+		arg.ExecutionRouting,
 	)
 	var i PipelineStage
 	err := row.Scan(
@@ -251,6 +255,8 @@ func (q *Queries) CreatePipelineStage(ctx context.Context, arg CreatePipelineSta
 		&i.PositionX,
 		&i.PositionY,
 		&i.RepoKeys,
+		&i.HarnessStrategy,
+		&i.ExecutionRouting,
 	)
 	return i, err
 }
@@ -485,7 +491,7 @@ func (q *Queries) ListPipelineRunStages(ctx context.Context, pipelineRunID pgtyp
 }
 
 const listPipelineStages = `-- name: ListPipelineStages :many
-SELECT id, pipeline_id, key, title, description, role_key, depends_on_stage_keys, position, created_at, updated_at, node_type, agent_id, position_x, position_y, repo_keys FROM pipeline_stage
+SELECT id, pipeline_id, key, title, description, role_key, depends_on_stage_keys, position, created_at, updated_at, node_type, agent_id, position_x, position_y, repo_keys, harness_strategy, execution_routing FROM pipeline_stage
 WHERE pipeline_id = $1
 ORDER BY position ASC, created_at ASC
 `
@@ -515,6 +521,8 @@ func (q *Queries) ListPipelineStages(ctx context.Context, pipelineID pgtype.UUID
 			&i.PositionX,
 			&i.PositionY,
 			&i.RepoKeys,
+			&i.HarnessStrategy,
+			&i.ExecutionRouting,
 		); err != nil {
 			return nil, err
 		}

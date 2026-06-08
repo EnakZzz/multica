@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, BookOpenText, Bot, CheckCircle2, ChevronDown, GitBranch, GitMerge, Loader2, MessageSquare, RefreshCw, Save, Send, User, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpenText, Bot, CheckCircle2, ChevronDown, GitBranch, GitMerge, Loader2, MessageSquare, RefreshCw, Save, Send, User, Workflow, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@multica/ui/components/ui/button";
@@ -29,7 +29,7 @@ import { issueListOptions } from "@multica/core/issues/queries";
 import { planDetailOptions } from "@multica/core/plans/queries";
 import { taskKnowledgeTraceOptions } from "@multica/core/project-knowledge/queries";
 import { useApprovePlanSpec, useClarifyPlanSpec, useCommitPlan, useRerunPlan, useUpdatePlan } from "@multica/core/plans/mutations";
-import type { Issue, PlanItem, PlanSpec, ProjectKnowledgeRetrievalLog, ProjectKnowledgeSearchResult, ProjectRelevantKnowledge } from "@multica/core/types";
+import type { ExecutionRouting, HarnessStrategy, Issue, PlanItem, PlanSpec, ProjectKnowledgeRetrievalLog, ProjectKnowledgeSearchResult, ProjectRelevantKnowledge } from "@multica/core/types";
 import { PageHeader } from "../../layout/page-header";
 import { AppLink, useNavigation } from "../../navigation";
 import { StatusIcon } from "../../issues/components";
@@ -356,6 +356,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
         iteration_index: item.iteration_index,
         iteration_title: item.iteration_title,
         iteration_branch_name: item.iteration_branch_name,
+        execution_routing: item.execution_routing,
         recommended_agent_id: item.recommended_agent_id,
         match_score: item.match_score,
         match_reason: item.match_reason,
@@ -524,6 +525,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
                     status={status}
                     planTitle={plan.title}
                     parentDescription={effectiveParentDescription}
+                    harnessStrategy={plan.harness_strategy}
                     onChange={setSpecDraft}
                   />
                   <SpecConversation
@@ -551,6 +553,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
                     status={status}
                     planTitle={plan.title}
                     parentDescription={effectiveParentDescription}
+                    harnessStrategy={plan.harness_strategy}
                     onChange={setSpecDraft}
                   />
 
@@ -591,6 +594,7 @@ export function PlanDetailPage({ planId: explicitPlanId }: { planId?: string }) 
                     status={status}
                     planTitle={plan.title}
                     parentDescription={effectiveParentDescription}
+                    harnessStrategy={plan.harness_strategy}
                     onChange={setSpecDraft}
                   />
                   <WikiReferencesSection
@@ -801,6 +805,99 @@ function formatKnowledgeScore(value: number | null | undefined) {
   return `score ${value.toFixed(value >= 1 ? 2 : 3)}`;
 }
 
+function hasHarnessStrategy(harness: HarnessStrategy | null | undefined) {
+  return Boolean(harness && harness.mode && harness.mode !== "none");
+}
+
+function hasExecutionRouting(routing: ExecutionRouting | null | undefined) {
+  return Boolean(
+    routing &&
+      (routing.requires_isolated_worktree || routing.branch_policy !== "auto" || routing.merge_policy !== "none"),
+  );
+}
+
+function executionBranchPolicyLabel(policy: ExecutionRouting["branch_policy"]) {
+  switch (policy) {
+    case "shared": return "Shared";
+    case "per_item": return "Per item";
+    case "per_iteration": return "Per iteration";
+    case "per_agent": return "Per agent";
+    default: return "Auto";
+  }
+}
+
+function executionMergePolicyLabel(policy: ExecutionRouting["merge_policy"]) {
+  switch (policy) {
+    case "manual": return "Manual";
+    case "pr_required": return "PR required";
+    case "auto_when_green": return "Auto when green";
+    default: return "None";
+  }
+}
+
+function ExecutionRoutingSummary({ routing }: { routing: ExecutionRouting }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 rounded border bg-muted/20 px-2 py-1.5 text-[10px] text-muted-foreground">
+      <span className="font-semibold uppercase tracking-wider text-muted-foreground/70">Routing</span>
+      <span>Worktree {routing.requires_isolated_worktree ? "isolated" : "shared"}</span>
+      <span>Branch {executionBranchPolicyLabel(routing.branch_policy)}</span>
+      <span>Merge {executionMergePolicyLabel(routing.merge_policy)}</span>
+    </div>
+  );
+}
+
+function harnessModeLabel(mode: HarnessStrategy["mode"]) {
+  switch (mode) {
+    case "classify_and_act": return "Classify and act";
+    case "fan_out_synthesize": return "Fan out + synthesize";
+    case "adversarial_verification": return "Adversarial verification";
+    case "generate_and_filter": return "Generate and filter";
+    case "tournament": return "Tournament";
+    case "loop_until_done": return "Loop until done";
+    default: return "Standard";
+  }
+}
+
+function HarnessStrategyCard({ harness }: { harness: HarnessStrategy }) {
+  return (
+    <section className="rounded-lg border bg-background p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Workflow className="h-4 w-4 shrink-0 text-primary" />
+          <h3 className="font-mono text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
+            Harness
+          </h3>
+        </div>
+        <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 font-mono text-[10px] font-semibold text-primary ring-1 ring-primary/20">
+          {harnessModeLabel(harness.mode)}
+        </span>
+      </div>
+      <div className="space-y-3 text-sm">
+        {harness.summary && <p className="leading-relaxed text-foreground">{harness.summary}</p>}
+        {harness.rationale && (
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Rationale</div>
+            <p className="leading-relaxed text-muted-foreground">{harness.rationale}</p>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+            Parallelism {harness.parallelism || 1}
+          </span>
+          <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+            Worktree {harness.requires_isolated_worktree ? "isolated" : "shared"}
+          </span>
+          {harness.stop_condition && (
+            <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+              Stop: {harness.stop_condition}
+            </span>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ─── Spec document ────────────────────────────────────────────────────────────
 
 const SPEC_SECTIONS = ["Summary", "Goal", "Approach"] as const;
@@ -812,6 +909,7 @@ function SpecDocument({
   status,
   planTitle,
   parentDescription,
+  harnessStrategy,
   onChange,
 }: {
   spec: PlanSpec;
@@ -820,6 +918,7 @@ function SpecDocument({
   status: PlanStatus;
   planTitle: string;
   parentDescription: string;
+  harnessStrategy: HarnessStrategy;
   onChange: (spec: PlanSpec) => void;
 }) {
   const [open, setOpen] = useState(!isCommitted);
@@ -924,6 +1023,10 @@ function SpecDocument({
           )}
         </div>
       </section>
+
+      {hasHarnessStrategy(harnessStrategy) && (
+        <HarnessStrategyCard harness={harnessStrategy} />
+      )}
 
       <section id="success-criteria">
         <PlanDocSectionHeader number="03" title="验收标准 / Success Criteria" meta={`${successItems.length} items`} />
@@ -1776,6 +1879,10 @@ function TasksSection({
                       })
                     }
                   />
+
+                  {hasExecutionRouting(item.execution_routing) && (
+                    <ExecutionRoutingSummary routing={item.execution_routing} />
+                  )}
 
                   {/* Dependencies */}
                   <div className="rounded border border-dashed border-border/50 bg-muted/10 p-2.5">

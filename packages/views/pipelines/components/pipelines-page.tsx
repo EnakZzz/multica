@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { GitBranch, Plus, RefreshCw, Upload } from "lucide-react";
+import { Plus, RefreshCw, Upload, Workflow } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@multica/ui/components/ui/button";
@@ -34,8 +34,8 @@ export function PipelinesPage() {
       <PageHeader>
         <div className="flex w-full items-center justify-between">
           <div className="flex items-center gap-2">
-            <GitBranch className="h-4 w-4" />
-            <h1 className="text-sm font-semibold">Pipelines</h1>
+            <Workflow className="h-4 w-4" />
+            <h1 className="text-sm font-semibold">Workflows</h1>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="icon" onClick={() => refetch()} title="Refresh">
@@ -47,7 +47,7 @@ export function PipelinesPage() {
             </Button>
             <Button size="sm" onClick={() => setOpen(true)}>
               <Plus className="mr-1 h-4 w-4" />
-              New Pipeline
+              New Workflow
             </Button>
           </div>
         </div>
@@ -55,10 +55,10 @@ export function PipelinesPage() {
 
       <div className="flex-1 overflow-auto p-4">
         {isLoading ? (
-          <div className="text-sm text-muted-foreground">Loading pipelines...</div>
+          <div className="text-sm text-muted-foreground">Loading workflows...</div>
         ) : pipelines.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            No pipelines yet.
+            No workflows yet.
           </div>
         ) : (
           <div className="divide-y rounded-md border">
@@ -144,10 +144,10 @@ function NewPipelineDialog({
       setDescription("");
       setAgentId("none");
       onOpenChange(false);
-      toast.success("Pipeline created");
+      toast.success("Workflow created");
       nav.push(paths.pipelineDetail(pipeline.id));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create pipeline");
+      toast.error(e instanceof Error ? e.message : "Failed to create workflow");
     }
   };
 
@@ -155,10 +155,10 @@ function NewPipelineDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>New Pipeline</DialogTitle>
+          <DialogTitle>New Workflow</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <Input placeholder="Pipeline name" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input placeholder="Workflow name" value={name} onChange={(e) => setName(e.target.value)} />
           <Textarea
             placeholder="Reusable process description"
             value={description}
@@ -188,7 +188,7 @@ function NewPipelineDialog({
               onClick={submit}
               disabled={!name.trim() || createPipeline.isPending}
             >
-              Create Pipeline
+              Create Workflow
             </Button>
           </div>
         </div>

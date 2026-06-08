@@ -8,6 +8,32 @@ export type PlanItemNodeType =
   | "code_review"
   | "merge"
   | "subagent-driven-development";
+export type HarnessStrategyMode =
+  | "none"
+  | "classify_and_act"
+  | "fan_out_synthesize"
+  | "adversarial_verification"
+  | "generate_and_filter"
+  | "tournament"
+  | "loop_until_done";
+
+export interface HarnessStrategy {
+  mode: HarnessStrategyMode;
+  summary: string;
+  rationale: string;
+  stop_condition: string;
+  parallelism: number;
+  requires_isolated_worktree: boolean;
+}
+
+export type ExecutionBranchPolicy = "auto" | "shared" | "per_item" | "per_iteration" | "per_agent";
+export type ExecutionMergePolicy = "none" | "manual" | "pr_required" | "auto_when_green";
+
+export interface ExecutionRouting {
+  requires_isolated_worktree: boolean;
+  branch_policy: ExecutionBranchPolicy;
+  merge_policy: ExecutionMergePolicy;
+}
 
 export interface UnitTestCheck {
   id: string;
@@ -70,6 +96,7 @@ export interface PlanItem {
   iteration_index: number;
   iteration_title: string;
   iteration_branch_name: string;
+  execution_routing: ExecutionRouting;
   recommended_agent_id: string | null;
   match_score: number;
   match_reason: string;
@@ -93,6 +120,7 @@ export interface Plan {
   parent_title: string;
   parent_description: string;
   parent_issue_id: string | null;
+  harness_strategy: HarnessStrategy;
   spec: PlanSpec;
   committed_spec: PlanSpec | null;
   spec_approved_at: string | null;
@@ -134,6 +162,7 @@ export interface UpdatePlanItemRequest {
   iteration_index?: number;
   iteration_title?: string;
   iteration_branch_name?: string;
+  execution_routing?: ExecutionRouting;
   recommended_agent_id?: string | null;
   match_score: number;
   match_reason: string;

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -64,6 +65,22 @@ func TestListPipelinesSeedsBuiltInPipelinesIdempotently(t *testing.T) {
 		if len(pipeline.Nodes) == 0 {
 			t.Fatalf("built-in pipeline %s has no nodes", key)
 		}
+	}
+	subagentPipeline, ok := systemByKey["subagent-driven-development"]
+	if !ok {
+		t.Fatalf("built-in pipeline subagent-driven-development was not seeded")
+	}
+	if got := pipelineNodeByKey(t, subagentPipeline, "dispatch-agents").HarnessStrategy.Mode; got != service.HarnessStrategyModeFanOutSynthesize {
+		t.Fatalf("subagent dispatch harness mode = %s, want fan_out_synthesize", got)
+	}
+	dispatchRouting := pipelineNodeByKey(t, subagentPipeline, "dispatch-agents").ExecutionRouting
+	if !dispatchRouting.RequiresIsolatedWorktree ||
+		dispatchRouting.BranchPolicy != service.ExecutionBranchPolicyPerAgent ||
+		dispatchRouting.MergePolicy != service.ExecutionMergePolicyManual {
+		t.Fatalf("subagent dispatch routing = %#v, want isolated/per_agent/manual", dispatchRouting)
+	}
+	if got := pipelineNodeByKey(t, systemByKey["review-gated-feature-development"], "spec-review").HarnessStrategy.Mode; got != service.HarnessStrategyModeAdversarialVerification {
+		t.Fatalf("review gate harness mode = %s, want adversarial_verification", got)
 	}
 
 	second := listPipelinesForTest(t)
@@ -224,6 +241,64 @@ func TestRunPipelineWritesTargetReposIntoChildIssueDescription(t *testing.T) {
 	if !strings.Contains(description, "Target repositories:") ||
 		!strings.Contains(description, "- app: https://github.com/acme/app.git") {
 		t.Fatalf("child issue description missing target repo:\n%s", description)
+	}
+}
+
+func TestRunPipelineWritesHarnessStrategyIntoChildIssueDescription(t *testing.T) {
+	agentID := handlerTestAgentID(t)
+	pipeline := createPipelineForTest(t, "Harness pipeline", agentID)
+	harness := service.HarnessStrategy{
+		Mode:                     service.HarnessStrategyModeFanOutSynthesize,
+		Summary:                  "Split implementation across isolated agents.",
+		Rationale:                "The change spans multiple modules.",
+		StopCondition:            "All synthesized branches are verified.",
+		Parallelism:              3,
+		RequiresIsolatedWorktree: true,
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE pipeline_stage
+		SET harness_strategy = $1::jsonb
+		WHERE pipeline_id = $2 AND key = 'build'
+	`, service.MarshalHarnessStrategy(harness), pipeline.ID); err != nil {
+		t.Fatalf("seed harness strategy: %v", err)
+	}
+
+	run := runPipelineForTest(t, pipeline.ID)
+	issues := runIssueByNode(run)
+	if !issueDescriptionContains(t, issues["build"], "Harness strategy:") ||
+		!issueDescriptionContains(t, issues["build"], "Mode: fan_out_synthesize") ||
+		!issueDescriptionContains(t, issues["build"], "Worktree isolation: recommended") {
+		var description string
+		_ = testPool.QueryRow(context.Background(), `SELECT description FROM issue WHERE id = $1`, issues["build"]).Scan(&description)
+		t.Fatalf("build issue description missing harness strategy:\n%s", description)
+	}
+}
+
+func TestRunPipelineWritesExecutionRoutingIntoChildIssueDescription(t *testing.T) {
+	agentID := handlerTestAgentID(t)
+	pipeline := createPipelineForTest(t, "Routing pipeline", agentID)
+	routing := service.ExecutionRouting{
+		RequiresIsolatedWorktree: true,
+		BranchPolicy:             service.ExecutionBranchPolicyPerItem,
+		MergePolicy:              service.ExecutionMergePolicyPRRequired,
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE pipeline_stage
+		SET execution_routing = $1::jsonb
+		WHERE pipeline_id = $2 AND key = 'build'
+	`, service.MarshalExecutionRouting(routing), pipeline.ID); err != nil {
+		t.Fatalf("seed execution routing: %v", err)
+	}
+
+	run := runPipelineForTest(t, pipeline.ID)
+	issues := runIssueByNode(run)
+	if !issueDescriptionContains(t, issues["build"], "Execution routing:") ||
+		!issueDescriptionContains(t, issues["build"], "Worktree isolation: required") ||
+		!issueDescriptionContains(t, issues["build"], "Branch policy: per_item") ||
+		!issueDescriptionContains(t, issues["build"], "Merge policy: pr_required") {
+		var description string
+		_ = testPool.QueryRow(context.Background(), `SELECT description FROM issue WHERE id = $1`, issues["build"]).Scan(&description)
+		t.Fatalf("build issue description missing execution routing:\n%s", description)
 	}
 }
 
@@ -1956,6 +2031,17 @@ func handlerTestAgentID(t *testing.T) string {
 		t.Fatalf("load handler test agent: %v", err)
 	}
 	return agentID
+}
+
+func pipelineNodeByKey(t *testing.T, pipeline PipelineResponse, key string) PipelineNodeResponse {
+	t.Helper()
+	for _, node := range pipeline.Nodes {
+		if node.Key == key {
+			return node
+		}
+	}
+	t.Fatalf("pipeline %s missing node %s", pipeline.ID, key)
+	return PipelineNodeResponse{}
 }
 
 func createPipelineForTest(t *testing.T, name, agentID string) PipelineResponse {

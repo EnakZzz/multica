@@ -22,58 +22,60 @@ const planMatchThreshold = 60
 const daemonCapabilityIssuePlan = "issue_plan"
 
 type PlanResponse struct {
-	ID                string             `json:"id"`
-	WorkspaceID       string             `json:"workspace_id"`
-	Title             string             `json:"title"`
-	Prompt            string             `json:"prompt"`
-	Status            string             `json:"status"`
-	PlannerAgentID    string             `json:"planner_agent_id"`
-	TaskID            string             `json:"task_id"`
-	ProjectID         *string            `json:"project_id"`
-	ParentTitle       string             `json:"parent_title"`
-	ParentDescription string             `json:"parent_description"`
-	ParentIssueID     *string            `json:"parent_issue_id"`
-	Spec              service.PlanSpec   `json:"spec"`
-	CommittedSpec     *service.PlanSpec  `json:"committed_spec"`
-	SpecApprovedAt    *string            `json:"spec_approved_at"`
-	SpecApprovedBy    *string            `json:"spec_approved_by"`
-	Error             *string            `json:"error"`
-	CreatedBy         string             `json:"created_by"`
-	CreatedAt         *string            `json:"created_at"`
-	UpdatedAt         *string            `json:"updated_at"`
-	Items             []PlanItemResponse `json:"items,omitempty"`
+	ID                string                  `json:"id"`
+	WorkspaceID       string                  `json:"workspace_id"`
+	Title             string                  `json:"title"`
+	Prompt            string                  `json:"prompt"`
+	Status            string                  `json:"status"`
+	PlannerAgentID    string                  `json:"planner_agent_id"`
+	TaskID            string                  `json:"task_id"`
+	ProjectID         *string                 `json:"project_id"`
+	ParentTitle       string                  `json:"parent_title"`
+	ParentDescription string                  `json:"parent_description"`
+	ParentIssueID     *string                 `json:"parent_issue_id"`
+	Spec              service.PlanSpec        `json:"spec"`
+	CommittedSpec     *service.PlanSpec       `json:"committed_spec"`
+	HarnessStrategy   service.HarnessStrategy `json:"harness_strategy"`
+	SpecApprovedAt    *string                 `json:"spec_approved_at"`
+	SpecApprovedBy    *string                 `json:"spec_approved_by"`
+	Error             *string                 `json:"error"`
+	CreatedBy         string                  `json:"created_by"`
+	CreatedAt         *string                 `json:"created_at"`
+	UpdatedAt         *string                 `json:"updated_at"`
+	Items             []PlanItemResponse      `json:"items,omitempty"`
 }
 
 type PlanItemResponse struct {
-	ID                    string                  `json:"id"`
-	PlanID                string                  `json:"plan_id"`
-	Position              int32                   `json:"position"`
-	Title                 string                  `json:"title"`
-	Description           string                  `json:"description"`
-	AcceptanceCriteria    []string                `json:"acceptance_criteria"`
-	SuggestedTestCommands []string                `json:"suggested_test_commands"`
-	UnitTestChecklist     []service.UnitTestCheck `json:"unit_test_checklist"`
-	ContextResources      []string                `json:"context_resources"`
-	RiskNotes             []string                `json:"risk_notes"`
-	NodeType              string                  `json:"node_type"`
-	ExecutionKind         string                  `json:"execution_kind"`
-	ConfirmationQuestion  string                  `json:"confirmation_question"`
-	ConfirmationReason    string                  `json:"confirmation_reason"`
-	RequiredEvidence      []string                `json:"required_evidence"`
-	RequiresGitCommit     bool                    `json:"requires_git_commit"`
-	BranchName            string                  `json:"branch_name"`
-	IterationIndex        int32                   `json:"iteration_index"`
-	IterationTitle        string                  `json:"iteration_title"`
-	IterationBranchName   string                  `json:"iteration_branch_name"`
-	RecommendedAgentID    *string                 `json:"recommended_agent_id"`
-	MatchScore            int32                   `json:"match_score"`
-	MatchReason           string                  `json:"match_reason"`
-	MissingCapability     string                  `json:"missing_capability"`
-	DependsOnPositions    []int32                 `json:"depends_on_positions"`
-	Selected              bool                    `json:"selected"`
-	GeneratedIssueID      *string                 `json:"generated_issue_id"`
-	CreatedAt             *string                 `json:"created_at"`
-	UpdatedAt             *string                 `json:"updated_at"`
+	ID                    string                   `json:"id"`
+	PlanID                string                   `json:"plan_id"`
+	Position              int32                    `json:"position"`
+	Title                 string                   `json:"title"`
+	Description           string                   `json:"description"`
+	AcceptanceCriteria    []string                 `json:"acceptance_criteria"`
+	SuggestedTestCommands []string                 `json:"suggested_test_commands"`
+	UnitTestChecklist     []service.UnitTestCheck  `json:"unit_test_checklist"`
+	ContextResources      []string                 `json:"context_resources"`
+	RiskNotes             []string                 `json:"risk_notes"`
+	NodeType              string                   `json:"node_type"`
+	ExecutionKind         string                   `json:"execution_kind"`
+	ConfirmationQuestion  string                   `json:"confirmation_question"`
+	ConfirmationReason    string                   `json:"confirmation_reason"`
+	RequiredEvidence      []string                 `json:"required_evidence"`
+	RequiresGitCommit     bool                     `json:"requires_git_commit"`
+	BranchName            string                   `json:"branch_name"`
+	IterationIndex        int32                    `json:"iteration_index"`
+	IterationTitle        string                   `json:"iteration_title"`
+	IterationBranchName   string                   `json:"iteration_branch_name"`
+	ExecutionRouting      service.ExecutionRouting `json:"execution_routing"`
+	RecommendedAgentID    *string                  `json:"recommended_agent_id"`
+	MatchScore            int32                    `json:"match_score"`
+	MatchReason           string                   `json:"match_reason"`
+	MissingCapability     string                   `json:"missing_capability"`
+	DependsOnPositions    []int32                  `json:"depends_on_positions"`
+	Selected              bool                     `json:"selected"`
+	GeneratedIssueID      *string                  `json:"generated_issue_id"`
+	CreatedAt             *string                  `json:"created_at"`
+	UpdatedAt             *string                  `json:"updated_at"`
 }
 
 type createPlanRequest struct {
@@ -106,29 +108,30 @@ type commitPlanRequest struct {
 }
 
 type updatePlanItemRequest struct {
-	Title                 string                  `json:"title"`
-	Description           string                  `json:"description"`
-	AcceptanceCriteria    []string                `json:"acceptance_criteria"`
-	SuggestedTestCommands []string                `json:"suggested_test_commands"`
-	UnitTestChecklist     []service.UnitTestCheck `json:"unit_test_checklist"`
-	ContextResources      []string                `json:"context_resources"`
-	RiskNotes             []string                `json:"risk_notes"`
-	NodeType              string                  `json:"node_type"`
-	ExecutionKind         string                  `json:"execution_kind"`
-	ConfirmationQuestion  string                  `json:"confirmation_question"`
-	ConfirmationReason    string                  `json:"confirmation_reason"`
-	RequiredEvidence      []string                `json:"required_evidence"`
-	RequiresGitCommit     *bool                   `json:"requires_git_commit"`
-	BranchName            string                  `json:"branch_name"`
-	IterationIndex        int32                   `json:"iteration_index"`
-	IterationTitle        string                  `json:"iteration_title"`
-	IterationBranchName   string                  `json:"iteration_branch_name"`
-	RecommendedAgentID    string                  `json:"recommended_agent_id"`
-	MatchScore            int32                   `json:"match_score"`
-	MatchReason           string                  `json:"match_reason"`
-	MissingCapability     string                  `json:"missing_capability"`
-	DependsOnPositions    []int32                 `json:"depends_on_positions"`
-	Selected              bool                    `json:"selected"`
+	Title                 string                   `json:"title"`
+	Description           string                   `json:"description"`
+	AcceptanceCriteria    []string                 `json:"acceptance_criteria"`
+	SuggestedTestCommands []string                 `json:"suggested_test_commands"`
+	UnitTestChecklist     []service.UnitTestCheck  `json:"unit_test_checklist"`
+	ContextResources      []string                 `json:"context_resources"`
+	RiskNotes             []string                 `json:"risk_notes"`
+	NodeType              string                   `json:"node_type"`
+	ExecutionKind         string                   `json:"execution_kind"`
+	ConfirmationQuestion  string                   `json:"confirmation_question"`
+	ConfirmationReason    string                   `json:"confirmation_reason"`
+	RequiredEvidence      []string                 `json:"required_evidence"`
+	RequiresGitCommit     *bool                    `json:"requires_git_commit"`
+	BranchName            string                   `json:"branch_name"`
+	IterationIndex        int32                    `json:"iteration_index"`
+	IterationTitle        string                   `json:"iteration_title"`
+	IterationBranchName   string                   `json:"iteration_branch_name"`
+	ExecutionRouting      service.ExecutionRouting `json:"execution_routing"`
+	RecommendedAgentID    string                   `json:"recommended_agent_id"`
+	MatchScore            int32                    `json:"match_score"`
+	MatchReason           string                   `json:"match_reason"`
+	MissingCapability     string                   `json:"missing_capability"`
+	DependsOnPositions    []int32                  `json:"depends_on_positions"`
+	Selected              bool                     `json:"selected"`
 }
 
 func normalizePlanText(s string) string {
@@ -516,7 +519,7 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 		parent, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
 			WorkspaceID: plan.WorkspaceID,
 			Title:       parentTitle,
-			Description: strOrNullText(plan.ParentDescription.String),
+			Description: strOrNullText(planParentIssueDescription(plan.ParentDescription.String, service.HarnessStrategyFromJSON(plan.HarnessStrategy))),
 			Status:      "todo",
 			Priority:    "none",
 			CreatorType: "member",
@@ -564,7 +567,7 @@ func (h *Handler) CommitPlan(w http.ResponseWriter, r *http.Request) {
 		child, err := qtx.CreateIssueWithOriginAndUnitTestsManual(r.Context(), db.CreateIssueWithOriginAndUnitTestsManualParams{
 			WorkspaceID:       plan.WorkspaceID,
 			Title:             item.Title,
-			Description:       strOrNullText(planItemIssueDescription(item, committedSpec)),
+			Description:       strOrNullText(planItemIssueDescription(item, committedSpec, service.HarnessStrategyFromJSON(plan.HarnessStrategy))),
 			Status:            "todo",
 			Priority:          "none",
 			AssigneeType:      assigneeType,
@@ -808,6 +811,7 @@ func (h *Handler) replacePlanItems(r *http.Request, plan db.Plan, reqItems []upd
 			IterationIndex:        normalizePlanIterationIndex(item.IterationIndex),
 			IterationTitle:        strings.TrimSpace(item.IterationTitle),
 			IterationBranchName:   normalizeOptionalPlanBranchName(item.IterationBranchName),
+			ExecutionRouting:      service.MarshalExecutionRouting(item.ExecutionRouting),
 			RecommendedAgentID:    agentID,
 			MatchScore:            score,
 			MatchReason:           strings.TrimSpace(item.MatchReason),
@@ -1252,6 +1256,7 @@ func planToResponse(p db.Plan, items []db.PlanItem) PlanResponse {
 		ParentIssueID:     parentIssueID,
 		Spec:              planSpecFromJSON(p.Spec),
 		CommittedSpec:     planSpecPtrFromJSON(p.CommittedSpec),
+		HarnessStrategy:   service.HarnessStrategyFromJSON(p.HarnessStrategy),
 		SpecApprovedAt:    timestampToPtr(p.SpecApprovedAt),
 		SpecApprovedBy:    specApprovedBy,
 		Error:             textToPtr(p.Error),
@@ -1352,6 +1357,7 @@ func planItemToResponse(item db.PlanItem) PlanItemResponse {
 		IterationIndex:        normalizePlanIterationIndex(item.IterationIndex),
 		IterationTitle:        strings.TrimSpace(item.IterationTitle),
 		IterationBranchName:   strings.TrimSpace(item.IterationBranchName),
+		ExecutionRouting:      service.ExecutionRoutingFromJSON(item.ExecutionRouting),
 		RecommendedAgentID:    agentID,
 		MatchScore:            item.MatchScore,
 		MatchReason:           item.MatchReason,
@@ -1364,13 +1370,25 @@ func planItemToResponse(item db.PlanItem) PlanItemResponse {
 	}
 }
 
-func planItemIssueDescription(item db.PlanItem, spec service.PlanSpec) string {
+func planParentIssueDescription(description string, harness service.HarnessStrategy) string {
+	var b strings.Builder
+	description = strings.TrimSpace(description)
+	if description != "" {
+		b.WriteString(description)
+	}
+	appendHarnessStrategySection(&b, harness, false)
+	return strings.TrimSpace(b.String())
+}
+
+func planItemIssueDescription(item db.PlanItem, spec service.PlanSpec, harness service.HarnessStrategy) string {
 	var b strings.Builder
 	description := strings.TrimSpace(item.Description)
 	if description != "" {
 		b.WriteString(description)
 	}
 	appendPlanSpecInheritanceSection(&b, item, spec)
+	appendHarnessStrategySection(&b, harness, shouldExposeHarnessOnPlanItem(item))
+	appendExecutionRoutingSection(&b, service.ExecutionRoutingFromJSON(item.ExecutionRouting))
 	if normalizePlanItemExecutionKind(item.ExecutionKind) == service.PlanItemExecutionKindHumanConfirmation {
 		appendPlanItemTextSection(&b, "Human confirmation question", item.ConfirmationQuestion)
 		appendPlanItemTextSection(&b, "Why human confirmation is required", item.ConfirmationReason)
@@ -1396,6 +1414,69 @@ func planItemIssueDescription(item db.PlanItem, spec service.PlanSpec) string {
 	appendPlanItemSection(&b, "Context resources", item.ContextResources)
 	appendPlanItemSection(&b, "Risks and notes", item.RiskNotes)
 	return strings.TrimSpace(b.String())
+}
+
+func shouldExposeHarnessOnPlanItem(item db.PlanItem) bool {
+	switch service.NormalizePlanItemNodeType(item.NodeType) {
+	case service.PipelineNodeTypeSubagentDrivenDevelopment, service.PipelineNodeTypeCheck, service.PipelineNodeTypeSpecReview, service.PipelineNodeTypeCodeReview:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendHarnessStrategySection(b *strings.Builder, harness service.HarnessStrategy, executionHint bool) {
+	harness = service.NormalizeHarnessStrategy(harness)
+	if harness.Mode == service.HarnessStrategyModeNone &&
+		harness.Summary == "" &&
+		harness.Rationale == "" &&
+		harness.StopCondition == "" &&
+		!harness.RequiresIsolatedWorktree &&
+		harness.Parallelism <= 1 {
+		return
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Harness strategy:\n")
+	b.WriteString("- Mode: ")
+	b.WriteString(harness.Mode)
+	b.WriteString("\n")
+	if harness.Summary != "" {
+		b.WriteString("- Summary: ")
+		b.WriteString(harness.Summary)
+		b.WriteString("\n")
+	}
+	if harness.Rationale != "" {
+		b.WriteString("- Rationale: ")
+		b.WriteString(harness.Rationale)
+		b.WriteString("\n")
+	}
+	if harness.Parallelism > 1 {
+		fmt.Fprintf(b, "- Suggested parallelism: %d\n", harness.Parallelism)
+	}
+	if harness.RequiresIsolatedWorktree {
+		b.WriteString("- Worktree isolation: recommended\n")
+	}
+	if harness.StopCondition != "" {
+		b.WriteString("- Stop condition: ")
+		b.WriteString(harness.StopCondition)
+		b.WriteString("\n")
+	}
+	if executionHint {
+		b.WriteString("- Execution note: preserve this orchestration intent when coordinating subagents, verification, or looped checks; do not treat it as permission to bypass the issue acceptance criteria.\n")
+	}
+}
+
+func appendExecutionRoutingSection(b *strings.Builder, routing service.ExecutionRouting) {
+	text := service.ExecutionRoutingSection(routing)
+	if text == "" {
+		return
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString(text)
 }
 
 func appendPlanSpecInheritanceSection(b *strings.Builder, item db.PlanItem, spec service.PlanSpec) {

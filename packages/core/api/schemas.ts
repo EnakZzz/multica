@@ -21,6 +21,8 @@ import type {
   PipelineImportValidationResponse,
   PipelineRun,
   Plan,
+  ExecutionRouting,
+  HarnessStrategy,
   PlanSpec,
   ProjectKnowledgeRetrievalLog,
   ProjectKnowledgeRetrievalLogsResponse,
@@ -278,19 +280,30 @@ const AIGatewayCustomHeaderEnvSchema = z.object({
   env_name: z.string(),
 }).loose();
 
+const AIGatewayAPIKeyPoolItemSchema = z.object({
+  id: z.string().optional(),
+  label: z.string(),
+  api_key: z.string().optional(),
+  key_masked: z.string().optional(),
+  shared_by_email: z.string(),
+  enabled: z.boolean().default(true),
+  reenable_at: z.string().optional(),
+}).loose();
+
 const AIGatewayRouteTargetSchema = z.object({
   id: z.string().optional(),
   provider: z.string(),
   base_url: z.string(),
   auth_mode: z.enum(["api_key", "custom_headers_cookie"]).default("api_key"),
   api_key_env: z.string().default(""),
+  api_key: z.string().optional(),
+  api_key_masked: z.string().optional(),
+  api_key_pool: z.array(AIGatewayAPIKeyPoolItemSchema).default([]),
   cookie_env: z.string().optional(),
   custom_header_envs: z.array(AIGatewayCustomHeaderEnvSchema).default([]),
   model: z.string(),
   upstream_api: z.string(),
   reasoning_effort: z.string().optional(),
-  organization_env: z.string().optional(),
-  project_env: z.string().optional(),
   timeout_seconds: z.number().default(60),
   weight: z.number().default(1),
   priority: z.number().default(0),
@@ -882,6 +895,89 @@ const PlanAcceptanceScenarioSchema = z.object({
   then: z.string().default(""),
 });
 
+export const EMPTY_HARNESS_STRATEGY: HarnessStrategy = {
+  mode: "none",
+  summary: "",
+  rationale: "",
+  stop_condition: "",
+  parallelism: 1,
+  requires_isolated_worktree: false,
+};
+
+const HarnessStrategyModeSchema = z.preprocess(
+  (value) =>
+    value === "classify_and_act" ||
+    value === "fan_out_synthesize" ||
+    value === "adversarial_verification" ||
+    value === "generate_and_filter" ||
+    value === "tournament" ||
+    value === "loop_until_done" ||
+    value === "none"
+      ? value
+      : "none",
+  z.enum([
+    "none",
+    "classify_and_act",
+    "fan_out_synthesize",
+    "adversarial_verification",
+    "generate_and_filter",
+    "tournament",
+    "loop_until_done",
+  ]),
+);
+
+const RawHarnessStrategySchema = z.object({
+  mode: HarnessStrategyModeSchema.default("none"),
+  summary: z.string().catch("").default(""),
+  rationale: z.string().catch("").default(""),
+  stop_condition: z.string().catch("").default(""),
+  parallelism: z.number().int().positive().catch(1).default(1),
+  requires_isolated_worktree: z.boolean().catch(false).default(false),
+});
+
+export const HarnessStrategySchema = RawHarnessStrategySchema
+  .catch(EMPTY_HARNESS_STRATEGY as z.infer<typeof RawHarnessStrategySchema>)
+  .default(EMPTY_HARNESS_STRATEGY as z.infer<typeof RawHarnessStrategySchema>);
+
+export const EMPTY_EXECUTION_ROUTING: ExecutionRouting = {
+  requires_isolated_worktree: false,
+  branch_policy: "auto",
+  merge_policy: "none",
+};
+
+const ExecutionBranchPolicySchema = z.preprocess(
+  (value) =>
+    value === "shared" ||
+    value === "per_item" ||
+    value === "per_iteration" ||
+    value === "per_agent" ||
+    value === "auto"
+      ? value
+      : "auto",
+  z.enum(["auto", "shared", "per_item", "per_iteration", "per_agent"]),
+);
+
+const ExecutionMergePolicySchema = z.preprocess(
+  (value) =>
+    value === "manual" ||
+    value === "pr_required" ||
+    value === "auto_when_green" ||
+    value === "none"
+      ? value
+      : "none",
+  z.enum(["none", "manual", "pr_required", "auto_when_green"]),
+);
+
+const RawExecutionRoutingSchema = z.object({
+  requires_isolated_worktree: z.boolean().catch(false).default(false),
+  branch_policy: ExecutionBranchPolicySchema.default("auto"),
+  merge_policy: ExecutionMergePolicySchema.default("none"),
+});
+
+export const ExecutionRoutingSchema = RawExecutionRoutingSchema
+  .catch(EMPTY_EXECUTION_ROUTING as z.infer<typeof RawExecutionRoutingSchema>)
+  .default(EMPTY_EXECUTION_ROUTING as z.infer<typeof RawExecutionRoutingSchema>);
+
 export const PlanSpecSchema = z.object({
   summary: z.string().default(""),
   goal: z.string().default(""),
@@ -933,6 +1029,7 @@ const PlanItemSchema = z.object({
   iteration_index: z.number().catch(1).default(1),
   iteration_title: z.string().catch("").default(""),
   iteration_branch_name: z.string().catch("").default(""),
+  execution_routing: ExecutionRoutingSchema,
   recommended_agent_id: z.string().nullable().default(null),
   match_score: z.number().default(0),
   match_reason: z.string().default(""),
@@ -956,6 +1053,7 @@ export const PlanSchema = z.object({
   parent_title: z.string().default(""),
   parent_description: z.string().default(""),
   parent_issue_id: z.string().nullable().default(null),
+  harness_strategy: HarnessStrategySchema,
   spec: PlanSpecSchema.catch(EMPTY_PLAN_SPEC as z.infer<typeof PlanSpecSchema>).default(EMPTY_PLAN_SPEC as z.infer<typeof PlanSpecSchema>),
   committed_spec: PlanSpecSchema.nullable().catch(null).default(null),
   spec_approved_at: z.string().nullable().default(null),
@@ -979,6 +1077,7 @@ export const EMPTY_PLAN: Plan = {
   parent_title: "",
   parent_description: "",
   parent_issue_id: null,
+  harness_strategy: EMPTY_HARNESS_STRATEGY,
   spec: EMPTY_PLAN_SPEC,
   committed_spec: null,
   spec_approved_at: null,
@@ -1031,6 +1130,8 @@ const PipelineNodeSchema = z.object({
   repo: z.string().nullable().default(null),
   repos: z.array(z.string()).default([]),
   depends_on_node_keys: z.array(z.string()).default([]),
+  harness_strategy: HarnessStrategySchema,
+  execution_routing: ExecutionRoutingSchema,
   position: z.number().default(0),
   position_x: z.number().default(0),
   position_y: z.number().default(0),

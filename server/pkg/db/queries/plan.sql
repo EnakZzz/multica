@@ -55,6 +55,7 @@ SET
     status = 'spec_review',
     title = sqlc.arg('title'),
     spec = sqlc.arg('spec')::jsonb,
+    harness_strategy = sqlc.arg('harness_strategy')::jsonb,
     error = NULL,
     spec_approved_at = NULL,
     spec_approved_by = NULL,
@@ -82,6 +83,7 @@ SET
     title = $2,
     parent_title = $3,
     parent_description = $4,
+    harness_strategy = sqlc.arg('harness_strategy')::jsonb,
     error = NULL,
     updated_at = now()
 WHERE id = $1
@@ -125,6 +127,7 @@ INSERT INTO plan_item (
     execution_kind, confirmation_question, confirmation_reason, required_evidence,
     requires_git_commit, branch_name,
     iteration_index, iteration_title, iteration_branch_name,
+    execution_routing,
     node_type,
     recommended_agent_id,
     match_score, match_reason, missing_capability, depends_on_positions, selected
@@ -134,6 +137,7 @@ INSERT INTO plan_item (
     $9, $10, $11, $12,
     $13, $14,
     $15, $16, $17,
+    sqlc.arg('execution_routing')::jsonb,
     $18,
     sqlc.narg('recommended_agent_id'),
     $19, $20, $21, $22, $23
