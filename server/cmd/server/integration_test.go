@@ -59,6 +59,11 @@ func TestMain(m *testing.M) {
 	}
 
 	testPool = pool
+	if err := ensureInboxFeishuColumns(ctx, pool); err != nil {
+		fmt.Printf("Failed to prepare inbox feishu test columns: %v\n", err)
+		pool.Close()
+		os.Exit(1)
+	}
 	testUserID, testWorkspaceID, err = setupIntegrationTestFixture(ctx, pool)
 	if err != nil {
 		fmt.Printf("Failed to set up integration test fixture: %v\n", err)

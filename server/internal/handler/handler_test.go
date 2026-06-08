@@ -69,6 +69,11 @@ func TestMain(m *testing.M) {
 	testHandler.WebhookRateLimiter = NewMemoryWebhookRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
 	testHandler.WebhookIPRateLimiter = NewMemoryWebhookIPRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
 	testPool = pool
+	if err := ensureInboxFeishuColumns(ctx, pool); err != nil {
+		fmt.Printf("Failed to prepare inbox feishu test columns: %v\n", err)
+		pool.Close()
+		os.Exit(1)
+	}
 
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)
 	if err != nil {

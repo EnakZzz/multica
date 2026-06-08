@@ -120,7 +120,12 @@ CREATE TABLE inbox_item (
     body TEXT,
     read BOOLEAN NOT NULL DEFAULT FALSE,
     archived BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    feishu_delivery_status TEXT NOT NULL DEFAULT 'not_applicable'
+        CHECK (feishu_delivery_status IN ('not_applicable', 'pending', 'sent', 'failed')),
+    feishu_delivered_at TIMESTAMPTZ,
+    feishu_delivery_attempts INT NOT NULL DEFAULT 0,
+    feishu_delivery_last_error TEXT
 );
 
 -- Agent task queue

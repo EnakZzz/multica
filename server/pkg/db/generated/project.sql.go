@@ -71,12 +71,40 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 	return i, err
 }
 
+const createProjectWorkspaceLink = `-- name: CreateProjectWorkspaceLink :one
+INSERT INTO project_workspace_link (project_id, workspace_id)
+VALUES ($1, $2)
+RETURNING project_id, workspace_id, created_at
+`
+
+type CreateProjectWorkspaceLinkParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CreateProjectWorkspaceLink(ctx context.Context, arg CreateProjectWorkspaceLinkParams) (ProjectWorkspaceLink, error) {
+	row := q.db.QueryRow(ctx, createProjectWorkspaceLink, arg.ProjectID, arg.WorkspaceID)
+	var i ProjectWorkspaceLink
+	err := row.Scan(&i.ProjectID, &i.WorkspaceID, &i.CreatedAt)
+	return i, err
+}
+
 const deleteProject = `-- name: DeleteProject :exec
 DELETE FROM project WHERE id = $1
 `
 
 func (q *Queries) DeleteProject(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteProject, id)
+	return err
+}
+
+const deleteProjectWorkspaceLinks = `-- name: DeleteProjectWorkspaceLinks :exec
+DELETE FROM project_workspace_link
+WHERE project_id = $1
+`
+
+func (q *Queries) DeleteProjectWorkspaceLinks(ctx context.Context, projectID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteProjectWorkspaceLinks, projectID)
 	return err
 }
 
@@ -87,35 +115,6 @@ WHERE id = $1
 
 func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, error) {
 	row := q.db.QueryRow(ctx, getProject, id)
-	var i Project
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.Title,
-		&i.Description,
-		&i.Icon,
-		&i.Status,
-		&i.LeadType,
-		&i.LeadID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Priority,
-	)
-	return i, err
-}
-
-const getProjectInWorkspace = `-- name: GetProjectInWorkspace :one
-SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority FROM project
-WHERE id = $1 AND workspace_id = $2
-`
-
-type GetProjectInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) GetProjectInWorkspace(ctx context.Context, arg GetProjectInWorkspaceParams) (Project, error) {
-	row := q.db.QueryRow(ctx, getProjectInWorkspace, arg.ID, arg.WorkspaceID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -148,6 +147,35 @@ type GetProjectAccessibleInWorkspaceParams struct {
 
 func (q *Queries) GetProjectAccessibleInWorkspace(ctx context.Context, arg GetProjectAccessibleInWorkspaceParams) (Project, error) {
 	row := q.db.QueryRow(ctx, getProjectAccessibleInWorkspace, arg.ID, arg.WorkspaceID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Icon,
+		&i.Status,
+		&i.LeadType,
+		&i.LeadID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Priority,
+	)
+	return i, err
+}
+
+const getProjectInWorkspace = `-- name: GetProjectInWorkspace :one
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority FROM project
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetProjectInWorkspaceParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetProjectInWorkspace(ctx context.Context, arg GetProjectInWorkspaceParams) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectInWorkspace, arg.ID, arg.WorkspaceID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -247,6 +275,46 @@ func (q *Queries) ListAccessibleProjects(ctx context.Context, arg ListAccessible
 	return items, nil
 }
 
+const listProjectWorkspaceLinks = `-- name: ListProjectWorkspaceLinks :many
+SELECT pwl.workspace_id, w.name, w.slug, pwl.created_at
+FROM project_workspace_link pwl
+JOIN workspace w ON w.id = pwl.workspace_id
+WHERE pwl.project_id = $1
+ORDER BY w.name ASC
+`
+
+type ListProjectWorkspaceLinksRow struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Name        string             `json:"name"`
+	Slug        string             `json:"slug"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListProjectWorkspaceLinks(ctx context.Context, projectID pgtype.UUID) ([]ListProjectWorkspaceLinksRow, error) {
+	rows, err := q.db.Query(ctx, listProjectWorkspaceLinks, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectWorkspaceLinksRow{}
+	for rows.Next() {
+		var i ListProjectWorkspaceLinksRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Slug,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority FROM project
 WHERE workspace_id = $1
@@ -291,69 +359,6 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 		return nil, err
 	}
 	return items, nil
-}
-
-const listProjectWorkspaceLinks = `-- name: ListProjectWorkspaceLinks :many
-SELECT pwl.workspace_id, w.name, w.slug, pwl.created_at
-FROM project_workspace_link pwl
-JOIN workspace w ON w.id = pwl.workspace_id
-WHERE pwl.project_id = $1
-ORDER BY w.name ASC
-`
-
-type ListProjectWorkspaceLinksRow struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Name        string             `json:"name"`
-	Slug        string             `json:"slug"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-}
-
-func (q *Queries) ListProjectWorkspaceLinks(ctx context.Context, projectID pgtype.UUID) ([]ListProjectWorkspaceLinksRow, error) {
-	rows, err := q.db.Query(ctx, listProjectWorkspaceLinks, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListProjectWorkspaceLinksRow{}
-	for rows.Next() {
-		var i ListProjectWorkspaceLinksRow
-		if err := rows.Scan(&i.WorkspaceID, &i.Name, &i.Slug, &i.CreatedAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const createProjectWorkspaceLink = `-- name: CreateProjectWorkspaceLink :one
-INSERT INTO project_workspace_link (project_id, workspace_id)
-VALUES ($1, $2)
-RETURNING project_id, workspace_id, created_at
-`
-
-type CreateProjectWorkspaceLinkParams struct {
-	ProjectID   pgtype.UUID `json:"project_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) CreateProjectWorkspaceLink(ctx context.Context, arg CreateProjectWorkspaceLinkParams) (ProjectWorkspaceLink, error) {
-	row := q.db.QueryRow(ctx, createProjectWorkspaceLink, arg.ProjectID, arg.WorkspaceID)
-	var i ProjectWorkspaceLink
-	err := row.Scan(&i.ProjectID, &i.WorkspaceID, &i.CreatedAt)
-	return i, err
-}
-
-const deleteProjectWorkspaceLinks = `-- name: DeleteProjectWorkspaceLinks :exec
-DELETE FROM project_workspace_link
-WHERE project_id = $1
-`
-
-func (q *Queries) DeleteProjectWorkspaceLinks(ctx context.Context, projectID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteProjectWorkspaceLinks, projectID)
-	return err
 }
 
 const updateProject = `-- name: UpdateProject :one
