@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
+	"net/mail"
 	"os"
 	"regexp"
 	"strings"
@@ -129,7 +131,9 @@ type Target struct {
 	Provider                    string            `json:"provider"`
 	BaseURL                     string            `json:"base_url"`
 	AuthMode                    string            `json:"auth_mode,omitempty"`
+	APIKey                      string            `json:"api_key,omitempty"`
 	APIKeyEnv                   string            `json:"api_key_env"`
+	APIKeyPool                  []APIKeyPoolItem  `json:"api_key_pool,omitempty"`
 	CookieEnv                   string            `json:"cookie_env,omitempty"`
 	CustomHeaderEnvs            []CustomHeaderEnv `json:"custom_header_envs,omitempty"`
 	Model                       string            `json:"model"`
@@ -143,6 +147,16 @@ type Target struct {
 	Enabled                     bool              `json:"enabled,omitempty"`
 	InputPricePerMillionMicros  int64             `json:"input_price_per_million_micros,omitempty"`
 	OutputPricePerMillionMicros int64             `json:"output_price_per_million_micros,omitempty"`
+}
+
+type APIKeyPoolItem struct {
+	ID            string `json:"id,omitempty"`
+	Label         string `json:"label"`
+	APIKey        string `json:"api_key,omitempty"`
+	KeyMasked     string `json:"key_masked,omitempty"`
+	SharedByEmail string `json:"shared_by_email"`
+	Enabled       bool   `json:"enabled"`
+	ReenableAt    string `json:"reenable_at,omitempty"`
 }
 
 type CustomHeaderEnv struct {
@@ -229,9 +243,15 @@ func NormalizeRoutes(routes []Route) ([]Route, error) {
 				return nil, fmt.Errorf("AI gateway route %q target %d has unsupported upstream_api %q", routes[i].Alias, j, t.UpstreamAPI)
 			}
 			t.APIKeyEnv = strings.TrimSpace(t.APIKeyEnv)
+			t.APIKey = strings.TrimSpace(t.APIKey)
 			t.OrganizationEnv = strings.TrimSpace(t.OrganizationEnv)
 			t.ProjectEnv = strings.TrimSpace(t.ProjectEnv)
 			t.CookieEnv = strings.TrimSpace(t.CookieEnv)
+			normalizedPool, err := normalizeAPIKeyPool(t.APIKeyPool)
+			if err != nil {
+				return nil, fmt.Errorf("AI gateway route %q target %d has invalid api_key_pool: %w", routes[i].Alias, j, err)
+			}
+			t.APIKeyPool = normalizedPool
 			normalizedHeaders, err := normalizeCustomHeaderEnvs(t.CustomHeaderEnvs)
 			if err != nil {
 				return nil, fmt.Errorf("AI gateway route %q target %d has invalid custom_header_envs: %w", routes[i].Alias, j, err)
@@ -239,11 +259,28 @@ func NormalizeRoutes(routes []Route) ([]Route, error) {
 			t.CustomHeaderEnvs = normalizedHeaders
 			switch t.AuthMode {
 			case AuthModeAPIKey:
-				if t.APIKeyEnv == "" {
+				if t.APIKeyEnv == "" && t.APIKey == "" && len(t.APIKeyPool) == 0 {
 					return nil, fmt.Errorf("AI gateway route %q target %d is missing api_key_env", routes[i].Alias, j)
 				}
-				if err := validateEnvName(t.APIKeyEnv); err != nil {
-					return nil, fmt.Errorf("AI gateway route %q target %d api_key_env is invalid: %w", routes[i].Alias, j, err)
+				if t.APIKeyEnv != "" {
+					if err := validateEnvName(t.APIKeyEnv); err != nil {
+						return nil, fmt.Errorf("AI gateway route %q target %d api_key_env is invalid: %w", routes[i].Alias, j, err)
+					}
+				}
+				if len(t.APIKeyPool) > 0 && !strings.EqualFold(t.Provider, "he-tokenapi") {
+					return nil, fmt.Errorf("AI gateway route %q target %d api_key_pool only supports provider he-tokenapi", routes[i].Alias, j)
+				}
+				if len(t.APIKeyPool) > 0 && t.APIKey != "" {
+					return nil, fmt.Errorf("AI gateway route %q target %d cannot set api_key together with api_key_pool", routes[i].Alias, j)
+				}
+				if len(t.APIKeyPool) > 0 && len(t.CustomHeaderEnvs) > 0 {
+					return nil, fmt.Errorf("AI gateway route %q target %d cannot set custom_header_envs with api_key_pool", routes[i].Alias, j)
+				}
+				if len(t.APIKeyPool) > 0 && t.CookieEnv != "" {
+					return nil, fmt.Errorf("AI gateway route %q target %d cannot set cookie_env with api_key_pool", routes[i].Alias, j)
+				}
+				if len(t.APIKeyPool) > 0 && t.UpstreamAPI == "" {
+					return nil, fmt.Errorf("AI gateway route %q target %d is missing upstream_api", routes[i].Alias, j)
 				}
 				if t.CookieEnv != "" || len(t.CustomHeaderEnvs) > 0 {
 					return nil, fmt.Errorf("AI gateway route %q target %d cannot set cookie_env/custom_header_envs with auth_mode %q", routes[i].Alias, j, t.AuthMode)
@@ -347,6 +384,62 @@ func normalizeCustomHeaderEnvs(items []CustomHeaderEnv) ([]CustomHeaderEnv, erro
 	return out, nil
 }
 
+func normalizeAPIKeyPool(items []APIKeyPoolItem) ([]APIKeyPoolItem, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	out := make([]APIKeyPoolItem, 0, len(items))
+	seenLabels := make(map[string]struct{}, len(items))
+	seenAPIKeys := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		normalized := APIKeyPoolItem{
+			ID:        strings.TrimSpace(item.ID),
+			Label:     strings.TrimSpace(item.Label),
+			APIKey:    strings.TrimSpace(item.APIKey),
+			KeyMasked: strings.TrimSpace(item.KeyMasked),
+			Enabled:   item.Enabled,
+		}
+		if normalized.Label == "" && normalized.APIKey == "" && normalized.KeyMasked == "" && strings.TrimSpace(item.SharedByEmail) == "" {
+			continue
+		}
+		if normalized.Label == "" {
+			return nil, errors.New("label is required")
+		}
+		normalized.SharedByEmail = strings.ToLower(strings.TrimSpace(item.SharedByEmail))
+		if normalized.SharedByEmail == "" {
+			return nil, fmt.Errorf("shared_by_email is required for %q", normalized.Label)
+		}
+		addr, err := mail.ParseAddress(normalized.SharedByEmail)
+		if err != nil || addr.Address != normalized.SharedByEmail || addr.Name != "" {
+			return nil, fmt.Errorf("shared_by_email for %q must be a valid email address", normalized.Label)
+		}
+		labelKey := strings.ToLower(normalized.Label)
+		if _, exists := seenLabels[labelKey]; exists {
+			return nil, fmt.Errorf("duplicate api_key_pool label %q", normalized.Label)
+		}
+		seenLabels[labelKey] = struct{}{}
+		if normalized.APIKey == "" && normalized.KeyMasked == "" {
+			return nil, fmt.Errorf("api_key is required for %q", normalized.Label)
+		}
+		if normalized.APIKey != "" {
+			if strings.ContainsAny(normalized.APIKey, "\r\n") {
+				return nil, fmt.Errorf("api_key for %q is invalid", normalized.Label)
+			}
+			if _, exists := seenAPIKeys[normalized.APIKey]; exists {
+				return nil, fmt.Errorf("duplicate api_key_pool api_key for %q", normalized.Label)
+			}
+			seenAPIKeys[normalized.APIKey] = struct{}{}
+		}
+		if normalized.ReenableAt = strings.TrimSpace(item.ReenableAt); normalized.ReenableAt != "" {
+			if _, err := time.Parse(time.RFC3339Nano, normalized.ReenableAt); err != nil {
+				return nil, fmt.Errorf("reenable_at for %q is invalid", normalized.Label)
+			}
+		}
+		out = append(out, normalized)
+	}
+	return out, nil
+}
+
 func FindRoute(routes []Route, model string) (Route, bool) {
 	for _, route := range routes {
 		if route.Alias == model {
@@ -359,6 +452,159 @@ func FindRoute(routes []Route, model string) (Route, bool) {
 		}
 	}
 	return Route{}, false
+}
+
+func inheritWildcardHEAPIKeyPools(routes []Route, route Route) Route {
+	if route.Alias == "*" {
+		return route
+	}
+	var wildcard Route
+	foundWildcard := false
+	for _, candidate := range routes {
+		if candidate.Alias == "*" {
+			wildcard = candidate
+			foundWildcard = true
+			break
+		}
+	}
+	if !foundWildcard {
+		return route
+	}
+	for idx := range route.Targets {
+		target := &route.Targets[idx]
+		if !strings.EqualFold(strings.TrimSpace(target.Provider), "he-tokenapi") {
+			continue
+		}
+		if normalizeAuthMode(target.AuthMode) != AuthModeAPIKey {
+			continue
+		}
+		if len(target.APIKeyPool) > 0 {
+			continue
+		}
+		for _, wildcardTarget := range wildcard.Targets {
+			if !strings.EqualFold(strings.TrimSpace(wildcardTarget.Provider), "he-tokenapi") {
+				continue
+			}
+			if normalizeAuthMode(wildcardTarget.AuthMode) != AuthModeAPIKey {
+				continue
+			}
+			if len(wildcardTarget.APIKeyPool) == 0 {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(wildcardTarget.BaseURL), strings.TrimSpace(target.BaseURL)) {
+				continue
+			}
+			if strings.TrimSpace(wildcardTarget.APIKeyEnv) != strings.TrimSpace(target.APIKeyEnv) {
+				continue
+			}
+			target.APIKeyPool = append([]APIKeyPoolItem(nil), wildcardTarget.APIKeyPool...)
+			break
+		}
+	}
+	return route
+}
+
+func mergeWildcardFallbackTargets(routes []Route, route Route, requestedModel string) Route {
+	if route.Alias == "*" {
+		return route
+	}
+	var wildcard Route
+	foundWildcard := false
+	for _, candidate := range routes {
+		if candidate.Alias == "*" {
+			wildcard = candidate
+			foundWildcard = true
+			break
+		}
+	}
+	if !foundWildcard {
+		return route
+	}
+	mergedTargets := append([]Target(nil), route.Targets...)
+	for _, wildcardTarget := range wildcard.Targets {
+		if shouldSkipWildcardFallbackTarget(route.Targets, wildcardTarget, requestedModel) {
+			continue
+		}
+		mergedTargets = append(mergedTargets, wildcardTarget)
+	}
+	route.Targets = mergedTargets
+	return route
+}
+
+func shouldSkipWildcardFallbackTarget(localTargets []Target, wildcardTarget Target, requestedModel string) bool {
+	if !wildcardFallbackTargetMatchesRequestedModel(wildcardTarget, requestedModel) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(wildcardTarget.Provider), "he-tokenapi") &&
+		normalizeAuthMode(wildcardTarget.AuthMode) == AuthModeAPIKey &&
+		len(wildcardTarget.APIKeyPool) > 0 {
+		for _, localTarget := range localTargets {
+			if !strings.EqualFold(strings.TrimSpace(localTarget.Provider), "he-tokenapi") {
+				continue
+			}
+			if normalizeAuthMode(localTarget.AuthMode) != AuthModeAPIKey {
+				continue
+			}
+			if !sameTargetAuthSource(localTarget, wildcardTarget) {
+				continue
+			}
+			return true
+		}
+	}
+	for _, localTarget := range localTargets {
+		if !sameTargetFallbackIdentity(localTarget, wildcardTarget, requestedModel) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func sameTargetAuthSource(left Target, right Target) bool {
+	return strings.EqualFold(strings.TrimSpace(left.BaseURL), strings.TrimSpace(right.BaseURL)) &&
+		normalizeAuthMode(left.AuthMode) == normalizeAuthMode(right.AuthMode) &&
+		strings.TrimSpace(left.APIKeyEnv) == strings.TrimSpace(right.APIKeyEnv) &&
+		strings.TrimSpace(left.CookieEnv) == strings.TrimSpace(right.CookieEnv)
+}
+
+func sameTargetFallbackIdentity(left Target, right Target, requestedModel string) bool {
+	if !strings.EqualFold(strings.TrimSpace(left.Provider), strings.TrimSpace(right.Provider)) {
+		return false
+	}
+	if !sameTargetAuthSource(left, right) {
+		return false
+	}
+	if strings.TrimSpace(left.UpstreamAPI) != strings.TrimSpace(right.UpstreamAPI) {
+		return false
+	}
+	leftModel := comparableTargetModel(left.Model, requestedModel)
+	rightModel := comparableTargetModel(right.Model, requestedModel)
+	return strings.EqualFold(leftModel, rightModel)
+}
+
+func comparableTargetModel(model string, requestedModel string) string {
+	model = strings.TrimSpace(model)
+	if model != "" {
+		return normalizeFallbackComparableModel(model)
+	}
+	return normalizeFallbackComparableModel(requestedModel)
+}
+
+func wildcardFallbackTargetMatchesRequestedModel(target Target, requestedModel string) bool {
+	targetModel := strings.TrimSpace(target.Model)
+	if targetModel == "" {
+		return false
+	}
+	return strings.EqualFold(
+		normalizeFallbackComparableModel(targetModel),
+		normalizeFallbackComparableModel(requestedModel),
+	)
+}
+
+func normalizeFallbackComparableModel(model string) string {
+	model = strings.TrimSpace(strings.ToLower(model))
+	model = strings.TrimPrefix(model, "openai/")
+	return model
 }
 
 func (rt *Runtime) LoadRoutes(ctx context.Context, workspaceID string) ([]Route, error) {
@@ -392,7 +638,7 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 	rows, err := rt.DB.Query(ctx, `
 		SELECT
 			r.id, r.alias, r.strategy, r.enabled, r.created_at, r.updated_at,
-			t.id, t.provider, t.base_url, COALESCE(t.auth_mode, ''), COALESCE(t.api_key_env, ''), COALESCE(t.cookie_env, ''), COALESCE(t.custom_header_envs, '[]'::jsonb),
+			t.id, t.provider, t.base_url, COALESCE(t.auth_mode, ''), COALESCE(t.api_key_env, ''), COALESCE(t.api_key, ''), COALESCE(t.cookie_env, ''), COALESCE(t.custom_header_envs, '[]'::jsonb),
 			t.model, t.upstream_api,
 			COALESCE(t.reasoning_effort, ''), COALESCE(t.organization_env, ''), COALESCE(t.project_env, ''),
 			t.timeout_seconds, t.weight, t.priority, t.enabled,
@@ -403,7 +649,7 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 		ORDER BY r.alias ASC, t.priority ASC, t.created_at ASC
 	`, util.MustParseUUID(workspaceID))
 	legacyColumns := false
-	if err != nil && isAIGatewayAuthModeColumnError(err) {
+	if err != nil && (isAIGatewayAuthModeColumnError(err) || isAIGatewayAPIKeyColumnError(err)) {
 		legacyColumns = true
 		rows, err = rt.DB.Query(ctx, `
 			SELECT
@@ -425,6 +671,7 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 	defer rows.Close()
 
 	byID := map[string]int{}
+	targetIndexByID := map[string][2]int{}
 	routes := []Route{}
 	for rows.Next() {
 		var routeID, targetID pgtype.UUID
@@ -445,7 +692,7 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 		} else {
 			if err := rows.Scan(
 				&routeID, &route.Alias, &route.Strategy, &route.Enabled, &createdAt, &updatedAt,
-				&targetID, &target.Provider, &target.BaseURL, &target.AuthMode, &target.APIKeyEnv, &target.CookieEnv, &customHeaderEnvs, &target.Model, &target.UpstreamAPI,
+				&targetID, &target.Provider, &target.BaseURL, &target.AuthMode, &target.APIKeyEnv, &target.APIKey, &target.CookieEnv, &customHeaderEnvs, &target.Model, &target.UpstreamAPI,
 				&target.ReasoningEffort, &target.OrganizationEnv, &target.ProjectEnv, &target.TimeoutSeconds, &target.Weight, &target.Priority, &target.Enabled,
 				&target.InputPricePerMillionMicros, &target.OutputPricePerMillionMicros,
 			); err != nil {
@@ -463,13 +710,69 @@ func (rt *Runtime) LoadRoutesFromDB(ctx context.Context, workspaceID string, inc
 		target.ID = util.UUIDToString(targetID)
 		if idx, ok := byID[route.ID]; ok {
 			routes[idx].Targets = append(routes[idx].Targets, target)
+			targetIndexByID[target.ID] = [2]int{idx, len(routes[idx].Targets) - 1}
 		} else {
 			route.Targets = []Target{target}
 			byID[route.ID] = len(routes)
+			targetIndexByID[target.ID] = [2]int{len(routes), 0}
 			routes = append(routes, route)
 		}
 	}
-	return routes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(targetIndexByID) == 0 {
+		return routes, nil
+	}
+	targetIDs := make([]uuid.UUID, 0, len(targetIndexByID))
+	for id := range targetIndexByID {
+		targetIDs = append(targetIDs, uuid.MustParse(id))
+	}
+	poolRows, err := rt.DB.Query(ctx, `
+		SELECT id, route_target_id, label, api_key, COALESCE(key_masked, ''), shared_by_email, enabled, reenable_at
+		FROM ai_gateway_route_target_api_key_pool
+		WHERE route_target_id = ANY($1)
+		ORDER BY created_at ASC, id ASC
+	`, targetIDs)
+	if err != nil && !isAIGatewayAPIKeyPoolTableMissing(err) {
+		return nil, err
+	}
+	if err == nil {
+		defer poolRows.Close()
+		for poolRows.Next() {
+			var itemID pgtype.UUID
+			var targetID pgtype.UUID
+			var label string
+			var apiKey string
+			var keyMasked string
+			var sharedByEmail string
+			var enabled bool
+			var reenableAt pgtype.Timestamptz
+			if err := poolRows.Scan(&itemID, &targetID, &label, &apiKey, &keyMasked, &sharedByEmail, &enabled, &reenableAt); err != nil {
+				return nil, err
+			}
+			targetPos, ok := targetIndexByID[util.UUIDToString(targetID)]
+			if !ok {
+				continue
+			}
+			item := APIKeyPoolItem{
+				ID:            util.UUIDToString(itemID),
+				Label:         label,
+				APIKey:        apiKey,
+				KeyMasked:     keyMasked,
+				SharedByEmail: sharedByEmail,
+				Enabled:       enabled,
+			}
+			if reenableAt.Valid {
+				item.ReenableAt = reenableAt.Time.UTC().Format(time.RFC3339Nano)
+			}
+			routes[targetPos[0]].Targets[targetPos[1]].APIKeyPool = append(routes[targetPos[0]].Targets[targetPos[1]].APIKeyPool, item)
+		}
+		if err := poolRows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return routes, nil
 }
 
 func isAIGatewayAuthModeColumnError(err error) bool {
@@ -480,6 +783,14 @@ func isAIGatewayAuthModeColumnError(err error) bool {
 	return strings.Contains(msg, "auth_mode") ||
 		strings.Contains(msg, "cookie_env") ||
 		strings.Contains(msg, "custom_header_envs")
+}
+
+func isAIGatewayAPIKeyColumnError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "api_key")
+}
+
+func isAIGatewayAPIKeyPoolTableMissing(err error) bool {
+	return err != nil && strings.Contains(err.Error(), `relation "ai_gateway_route_target_api_key_pool" does not exist`)
 }
 
 func (rt *Runtime) Models(w http.ResponseWriter, r *http.Request) {
@@ -535,12 +846,12 @@ func ResolveUpstreamAuth(target Target) (UpstreamAuth, error) {
 	headers := make(http.Header)
 	switch normalizeAuthMode(target.AuthMode) {
 	case AuthModeAPIKey:
-		if err := validateEnvName(target.APIKeyEnv); err != nil {
+		apiKey, err := resolveConfiguredAPIKey(target)
+		if err != nil {
 			return UpstreamAuth{}, err
 		}
-		apiKey := envValue(target.APIKeyEnv)
 		if apiKey == "" {
-			return UpstreamAuth{}, fmt.Errorf("environment variable %s is not set", target.APIKeyEnv)
+			return UpstreamAuth{}, errors.New("api key is not configured")
 		}
 		headers.Set("Authorization", "Bearer "+apiKey)
 		if target.OrganizationEnv != "" {
@@ -584,6 +895,37 @@ func ResolveUpstreamAuth(target Target) (UpstreamAuth, error) {
 		return UpstreamAuth{}, fmt.Errorf("unsupported auth_mode %q", target.AuthMode)
 	}
 	return UpstreamAuth{Headers: headers}, nil
+}
+
+func resolveConfiguredAPIKey(target Target) (string, error) {
+	if target.APIKey != "" {
+		return target.APIKey, nil
+	}
+	if item, ok := firstAvailableAPIKeyPoolItem(target.APIKeyPool, time.Now()); ok && item.APIKey != "" {
+		return item.APIKey, nil
+	}
+	if target.APIKeyEnv == "" {
+		return "", nil
+	}
+	if err := validateEnvName(target.APIKeyEnv); err != nil {
+		return "", err
+	}
+	return envValue(target.APIKeyEnv), nil
+}
+
+func firstAvailableAPIKeyPoolItem(items []APIKeyPoolItem, now time.Time) (APIKeyPoolItem, bool) {
+	for _, item := range items {
+		if !item.Enabled {
+			if reenableAt, ok := parseAPIKeyPoolReenableAt(item.ReenableAt); !ok || reenableAt.After(now) {
+				continue
+			}
+		}
+		if item.APIKey == "" {
+			continue
+		}
+		return item, true
+	}
+	return APIKeyPoolItem{}, false
 }
 
 func modelListItem(model string) map[string]any {
@@ -718,6 +1060,8 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 		WriteError(w, http.StatusNotFound, "model is not configured")
 		return
 	}
+	route = inheritWildcardHEAPIKeyPools(routes, route)
+	route = mergeWildcardFallbackTargets(routes, route, model)
 
 	stream, _ := payload["stream"].(bool)
 	requestID := uuid.NewString()
@@ -729,50 +1073,25 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 		WriteError(w, http.StatusNotFound, "model is not configured")
 		return
 	}
+	slog.Info("AI gateway target selection",
+		"request_id", requestID,
+		"caller_id", callerID,
+		"endpoint", endpoint,
+		"model_alias", model,
+		"target_count", len(targets),
+		"targets", summarizeAIGatewayTargets(targets),
+	)
 	for _, target := range targets {
-		auth, err := ResolveUpstreamAuth(target)
-		if err != nil {
-			lastErr = err.Error()
-			continue
-		}
-		targetModel := resolveTargetModelForEndpoint(endpoint, model, target)
-		upstreamPayload := rt.preparePayloadForUpstream(r.Context(), key, endpoint, payload)
-		previousResponseID := ""
-		if endpoint == "/responses" {
-			previousResponseID = strings.TrimSpace(stringValue(upstreamPayload["previous_response_id"]))
-		}
-		upstreamEndpoint, upstreamBody, err := BuildUpstreamRequest(endpoint, upstreamPayload, target, targetModel)
-		if err != nil {
-			WriteError(w, http.StatusBadRequest, err.Error())
+		status, retry, errText, fatalErr := rt.forwardTargetWithRouting(w, r, key, requestID, callerID, endpoint, model, payload, stream, target)
+		if fatalErr != nil {
+			WriteError(w, http.StatusBadRequest, fatalErr.Error())
 			return
 		}
-		reasoningEffort := extractAIGatewayReasoningEffort(upstreamBody, upstreamEndpoint)
-		forwardTarget := target
-		if reasoningEffort != "" {
-			forwardTarget.ReasoningEffort = reasoningEffort
-		}
-		status, retry, errText := rt.forward(w, r, ForwardRequest{
-			Key:                key,
-			RequestID:          requestID,
-			CallerID:           callerID,
-			Endpoint:           endpoint,
-			UpstreamEndpoint:   upstreamEndpoint,
-			ModelAlias:         model,
-			Target:             forwardTarget,
-			TargetModel:        targetModel,
-			PreviousResponseID: previousResponseID,
-			AuthHeaders:        auth.Headers,
-			Body:               upstreamBody,
-			Stream:             stream,
-		})
 		if !retry {
 			return
 		}
 		lastStatus = status
 		lastErr = errText
-		if status > 0 && status < http.StatusInternalServerError && status != http.StatusTooManyRequests {
-			break
-		}
 	}
 	if lastErr == "" {
 		lastErr = "no usable upstream target configured"
@@ -782,6 +1101,554 @@ func (rt *Runtime) proxy(w http.ResponseWriter, r *http.Request, endpoint string
 		finalStatus = http.StatusTooManyRequests
 	}
 	WriteError(w, finalStatus, lastErr)
+}
+
+func (rt *Runtime) forwardTargetWithRouting(
+	w http.ResponseWriter,
+	r *http.Request,
+	key VirtualKey,
+	requestID string,
+	callerID string,
+	endpoint string,
+	model string,
+	payload map[string]any,
+	stream bool,
+	target Target,
+) (status int, retry bool, errText string, fatalErr error) {
+	if targetUsesHEAPIKeyPool(target) {
+		return rt.forwardTargetWithHEAPIKeyPool(w, r, key, requestID, callerID, endpoint, model, payload, stream, target)
+	}
+	return rt.forwardSingleTarget(w, r, key, requestID, callerID, endpoint, model, payload, stream, target, apiKeyPoolAttempt{})
+}
+
+func (rt *Runtime) forwardSingleTarget(
+	w http.ResponseWriter,
+	r *http.Request,
+	key VirtualKey,
+	requestID string,
+	callerID string,
+	endpoint string,
+	model string,
+	payload map[string]any,
+	stream bool,
+	target Target,
+	poolAttempt apiKeyPoolAttempt,
+) (status int, retry bool, errText string, fatalErr error) {
+	auth, err := ResolveUpstreamAuth(target)
+	if err != nil {
+		lastErr := err.Error()
+		slog.Warn("AI gateway target auth resolution failed",
+			appendLogFields([]any{
+				"request_id", requestID,
+				"caller_id", callerID,
+				"endpoint", endpoint,
+				"model_alias", model,
+				"provider", target.Provider,
+				"target_model", target.Model,
+				"error", lastErr,
+			}, apiKeyPoolLogFields(poolAttempt)...)...,
+		)
+		return 0, true, lastErr, nil
+	}
+	targetModel := resolveTargetModelForEndpoint(endpoint, model, target)
+	upstreamPayload := rt.preparePayloadForUpstream(r.Context(), key, endpoint, payload, target)
+	previousResponseID := ""
+	if endpoint == "/responses" {
+		previousResponseID = strings.TrimSpace(stringValue(upstreamPayload["previous_response_id"]))
+	}
+	upstreamEndpoint, upstreamBody, err := BuildUpstreamRequest(endpoint, upstreamPayload, target, targetModel)
+	if err != nil {
+		return 0, false, "", err
+	}
+	requestSummary := summarizeAIGatewayRequest(upstreamBody)
+	reasoningEffort := extractAIGatewayReasoningEffort(upstreamBody, upstreamEndpoint)
+	forwardTarget := target
+	if reasoningEffort != "" {
+		forwardTarget.ReasoningEffort = reasoningEffort
+	}
+	slog.Info("AI gateway target attempt",
+		appendLogFields([]any{
+			"request_id", requestID,
+			"caller_id", callerID,
+			"endpoint", endpoint,
+			"model_alias", model,
+			"provider", forwardTarget.Provider,
+			"target_model", targetModel,
+			"upstream_endpoint", upstreamEndpoint,
+			"request_has_image_url", requestSummary.HasImageURL,
+			"request_tool_count", requestSummary.ToolCount,
+			"request_tool_types", requestSummary.ToolTypes,
+			"request_tool_descriptors", requestSummary.ToolDescriptors,
+			"request_text_only", requestSummary.TextOnly,
+			"request_input_item_types", requestSummary.InputItemTypes,
+		}, apiKeyPoolLogFields(poolAttempt)...)...,
+	)
+	status, retry, errText = rt.forward(w, r, ForwardRequest{
+		Key:                key,
+		RequestID:          requestID,
+		CallerID:           callerID,
+		Endpoint:           endpoint,
+		UpstreamEndpoint:   upstreamEndpoint,
+		ModelAlias:         model,
+		Target:             forwardTarget,
+		TargetModel:        targetModel,
+		PreviousResponseID: previousResponseID,
+		AuthHeaders:        auth.Headers,
+		Body:               upstreamBody,
+		Stream:             stream,
+	})
+	slog.Info("AI gateway target result",
+		appendLogFields([]any{
+			"request_id", requestID,
+			"caller_id", callerID,
+			"endpoint", endpoint,
+			"model_alias", model,
+			"provider", forwardTarget.Provider,
+			"target_model", targetModel,
+			"status", status,
+			"retry", retry,
+			"error", errText,
+		}, apiKeyPoolLogFields(poolAttempt)...)...,
+	)
+	return status, retry, errText, nil
+}
+
+func (rt *Runtime) forwardTargetWithHEAPIKeyPool(
+	w http.ResponseWriter,
+	r *http.Request,
+	key VirtualKey,
+	requestID string,
+	callerID string,
+	endpoint string,
+	model string,
+	payload map[string]any,
+	stream bool,
+	target Target,
+) (status int, retry bool, errText string, fatalErr error) {
+	refreshed, err := rt.refreshExpiredAPIKeyPoolItems(r.Context(), target)
+	if err != nil {
+		slog.Warn("AI gateway pool key refresh failed",
+			"request_id", requestID,
+			"caller_id", callerID,
+			"endpoint", endpoint,
+			"model_alias", model,
+			"provider", target.Provider,
+			"error", err.Error(),
+		)
+	}
+	target = refreshed
+	attempts := buildAPIKeyPoolAttempts(target, callerID)
+	if len(attempts) == 0 {
+		errText = "no enabled HE API key pool item available"
+		slog.Warn("AI gateway HE api key pool unavailable",
+			"request_id", requestID,
+			"caller_id", callerID,
+			"endpoint", endpoint,
+			"model_alias", model,
+			"provider", target.Provider,
+			"pool_size", len(target.APIKeyPool),
+			"error", errText,
+		)
+		return 0, true, errText, nil
+	}
+	for _, attempt := range attempts {
+		attemptTarget := target
+		attemptTarget.APIKey = attempt.Item.APIKey
+		status, retry, errText, fatalErr = rt.forwardSingleTarget(w, r, key, requestID, callerID, endpoint, model, payload, stream, attemptTarget, attempt)
+		if fatalErr != nil {
+			return status, retry, errText, fatalErr
+		}
+		if !retry {
+			return status, retry, errText, nil
+		}
+		if shouldCooldownAPIKeyPoolItem(status, errText) {
+			reenableAt := time.Now().Add(time.Hour)
+			target = rt.applyAPIKeyPoolCooldown(target, attempt.Item.ID, reenableAt)
+			if err := rt.persistAPIKeyPoolCooldown(context.Background(), target.ID, attempt.Item, reenableAt); err != nil {
+				slog.Warn("AI gateway pool key cooldown update failed",
+					appendLogFields([]any{
+						"request_id", requestID,
+						"caller_id", callerID,
+						"endpoint", endpoint,
+						"model_alias", model,
+						"provider", target.Provider,
+						"error", err.Error(),
+					}, apiKeyPoolLogFields(attempt)...)...,
+				)
+			}
+			continue
+		}
+		if retry && status > 0 {
+			continue
+		}
+		return status, retry, errText, nil
+	}
+	if errText == "" {
+		errText = "no usable HE API key pool item available"
+	}
+	return status, true, errText, nil
+}
+
+func summarizeAIGatewayTargets(targets []Target) []string {
+	if len(targets) == 0 {
+		return nil
+	}
+	summary := make([]string, 0, len(targets))
+	for _, target := range targets {
+		model := strings.TrimSpace(target.Model)
+		if model == "" {
+			model = "*"
+		}
+		summary = append(summary, fmt.Sprintf("%s:%s", strings.TrimSpace(target.Provider), model))
+	}
+	return summary
+}
+
+type apiKeyPoolAttempt struct {
+	Item       APIKeyPoolItem
+	Attempt    int
+	PoolSize   int
+	OwnerMatch bool
+}
+
+func targetUsesHEAPIKeyPool(target Target) bool {
+	return strings.EqualFold(strings.TrimSpace(target.Provider), "he-tokenapi") &&
+		normalizeAuthMode(target.AuthMode) == AuthModeAPIKey &&
+		len(target.APIKeyPool) > 0
+}
+
+func parseAPIKeyPoolReenableAt(value string) (time.Time, bool) {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func rotateAPIKeyPoolItems(items []APIKeyPoolItem) []APIKeyPoolItem {
+	if len(items) <= 1 {
+		return append([]APIKeyPoolItem(nil), items...)
+	}
+	idx := int(time.Now().UnixNano() % int64(len(items)))
+	return append(append([]APIKeyPoolItem(nil), items[idx:]...), items[:idx]...)
+}
+
+func buildAPIKeyPoolAttempts(target Target, callerID string) []apiKeyPoolAttempt {
+	now := time.Now()
+	available := make([]APIKeyPoolItem, 0, len(target.APIKeyPool))
+	callerID = strings.ToLower(strings.TrimSpace(callerID))
+	var ownerItem APIKeyPoolItem
+	ownerMatched := false
+	for _, item := range target.APIKeyPool {
+		if item.APIKey == "" {
+			continue
+		}
+		if !item.Enabled {
+			if reenableAt, ok := parseAPIKeyPoolReenableAt(item.ReenableAt); !ok || reenableAt.After(now) {
+				continue
+			}
+		}
+		if callerID != "" && strings.EqualFold(strings.TrimSpace(item.SharedByEmail), callerID) {
+			ownerItem = item
+			ownerMatched = true
+			continue
+		}
+		available = append(available, item)
+	}
+	available = rotateAPIKeyPoolItems(available)
+	attempts := make([]apiKeyPoolAttempt, 0, len(available)+1)
+	poolSize := len(target.APIKeyPool)
+	if ownerMatched {
+		attempts = append(attempts, apiKeyPoolAttempt{
+			Item:       ownerItem,
+			Attempt:    1,
+			PoolSize:   poolSize,
+			OwnerMatch: true,
+		})
+	}
+	for _, item := range available {
+		attempts = append(attempts, apiKeyPoolAttempt{
+			Item:       item,
+			Attempt:    len(attempts) + 1,
+			PoolSize:   poolSize,
+			OwnerMatch: false,
+		})
+	}
+	return attempts
+}
+
+func shouldCooldownAPIKeyPoolItem(status int, errorText string) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusPaymentRequired, http.StatusForbidden, http.StatusTooManyRequests:
+		return isAIGatewayPoolQuotaCooldownError(errorText)
+	default:
+		return false
+	}
+}
+
+func isAIGatewayPoolQuotaCooldownError(errorText string) bool {
+	text := strings.ToLower(strings.TrimSpace(errorText))
+	if text == "" {
+		return false
+	}
+	markers := []string{
+		"quota",
+		"insufficient_quota",
+		"credit",
+		"credits",
+		"balance",
+		"exhausted",
+		"out of credit",
+		"out of credits",
+		"insufficient balance",
+	}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func apiKeyPoolLogFields(attempt apiKeyPoolAttempt) []any {
+	fields := []any{
+		"pool_size", attempt.PoolSize,
+		"pool_key_id", attempt.Item.ID,
+		"pool_key_label", attempt.Item.Label,
+		"pool_key_shared_by_email", attempt.Item.SharedByEmail,
+		"pool_key_owner_match", attempt.OwnerMatch,
+		"pool_attempt", attempt.Attempt,
+	}
+	if attempt.Item.ReenableAt != "" {
+		fields = append(fields, "pool_key_reenable_at", attempt.Item.ReenableAt)
+	}
+	return fields
+}
+
+func appendLogFields(fields []any, extras ...any) []any {
+	if len(extras) == 0 {
+		return fields
+	}
+	return append(fields, extras...)
+}
+
+func (rt *Runtime) refreshExpiredAPIKeyPoolItems(ctx context.Context, target Target) (Target, error) {
+	if !targetUsesHEAPIKeyPool(target) {
+		return target, nil
+	}
+	now := time.Now()
+	updated := false
+	for idx := range target.APIKeyPool {
+		item := &target.APIKeyPool[idx]
+		if item.Enabled {
+			continue
+		}
+		reenableAt, ok := parseAPIKeyPoolReenableAt(item.ReenableAt)
+		if !ok || reenableAt.After(now) {
+			continue
+		}
+		if rt.DB != nil && target.ID != "" && item.ID != "" {
+			if _, err := rt.DB.Exec(ctx, `
+				UPDATE ai_gateway_route_target_api_key_pool
+				SET enabled = true, reenable_at = NULL, updated_at = now()
+				WHERE id = $1 AND route_target_id = $2
+			`, util.MustParseUUID(item.ID), util.MustParseUUID(target.ID)); err != nil {
+				return target, err
+			}
+		}
+		item.Enabled = true
+		item.ReenableAt = ""
+		updated = true
+		slog.Info("AI gateway pool key re-enabled after cooldown",
+			"route_target_id", target.ID,
+			"pool_key_id", item.ID,
+			"pool_key_label", item.Label,
+			"pool_key_shared_by_email", item.SharedByEmail,
+		)
+	}
+	if !updated {
+		return target, nil
+	}
+	return target, nil
+}
+
+func (rt *Runtime) applyAPIKeyPoolCooldown(target Target, itemID string, reenableAt time.Time) Target {
+	for idx := range target.APIKeyPool {
+		if target.APIKeyPool[idx].ID != itemID {
+			continue
+		}
+		target.APIKeyPool[idx].Enabled = false
+		target.APIKeyPool[idx].ReenableAt = reenableAt.UTC().Format(time.RFC3339Nano)
+		break
+	}
+	return target
+}
+
+func (rt *Runtime) persistAPIKeyPoolCooldown(ctx context.Context, targetID string, item APIKeyPoolItem, reenableAt time.Time) error {
+	slog.Warn("AI gateway pool key disabled for quota cooldown",
+		"route_target_id", targetID,
+		"pool_key_id", item.ID,
+		"pool_key_label", item.Label,
+		"pool_key_shared_by_email", item.SharedByEmail,
+		"pool_key_reenable_at", reenableAt.UTC().Format(time.RFC3339Nano),
+	)
+	if rt.DB == nil || targetID == "" || item.ID == "" {
+		return nil
+	}
+	_, err := rt.DB.Exec(ctx, `
+		UPDATE ai_gateway_route_target_api_key_pool
+		SET enabled = false, reenable_at = $3, updated_at = now()
+		WHERE id = $1 AND route_target_id = $2
+	`, util.MustParseUUID(item.ID), util.MustParseUUID(targetID), reenableAt.UTC())
+	return err
+}
+
+type requestAuditSummary struct {
+	HasImageURL     bool
+	ToolCount       int
+	ToolTypes       []string
+	ToolDescriptors []string
+	TextOnly        bool
+	InputItemTypes  []string
+}
+
+func summarizeAIGatewayRequest(body []byte) requestAuditSummary {
+	if len(body) == 0 {
+		return requestAuditSummary{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return requestAuditSummary{}
+	}
+	summary := requestAuditSummary{}
+	summary.ToolTypes, summary.ToolDescriptors = collectToolDetails(payload["tools"])
+	summary.ToolCount = len(summary.ToolTypes)
+	types, hasImage, nonText := collectInputShape(payload)
+	summary.InputItemTypes = uniqueNonEmptyStrings(types)
+	summary.HasImageURL = hasImage
+	summary.TextOnly = len(summary.InputItemTypes) > 0 && !summary.HasImageURL && !nonText
+	return summary
+}
+
+func collectInputShape(payload map[string]any) ([]string, bool, bool) {
+	var types []string
+	hasImage := false
+	nonText := false
+	appendPart := func(kind string) {
+		kind = strings.TrimSpace(kind)
+		if kind == "" {
+			return
+		}
+		types = append(types, kind)
+		switch kind {
+		case "text", "input_text", "output_text":
+		case "message":
+		case "image_url", "input_image", "image":
+			hasImage = true
+			nonText = true
+		default:
+			nonText = true
+		}
+	}
+	walkContent := func(content any) {
+		switch value := content.(type) {
+		case string:
+			appendPart("text")
+		case []any:
+			for _, raw := range value {
+				if obj, ok := raw.(map[string]any); ok {
+					appendPart(stringValue(obj["type"]))
+					continue
+				}
+				appendPart("text")
+			}
+		case map[string]any:
+			appendPart(stringValue(value["type"]))
+		}
+	}
+	switch input := payload["input"].(type) {
+	case string:
+		appendPart("text")
+	case []any:
+		for _, raw := range input {
+			obj, ok := raw.(map[string]any)
+			if !ok {
+				appendPart("text")
+				continue
+			}
+			typ := stringValue(obj["type"])
+			if typ != "" {
+				appendPart(typ)
+			}
+			if content, ok := obj["content"]; ok {
+				walkContent(content)
+			}
+		}
+	}
+	if messages, ok := payload["messages"].([]any); ok {
+		for _, raw := range messages {
+			obj, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if content, ok := obj["content"]; ok {
+				walkContent(content)
+			}
+		}
+	}
+	return types, hasImage, nonText
+}
+
+func collectToolDetails(raw any) ([]string, []string) {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, nil
+	}
+	types := make([]string, 0, len(items))
+	descriptors := make([]string, 0, len(items))
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		toolType := strings.TrimSpace(stringValue(obj["type"]))
+		if toolType != "" {
+			types = append(types, toolType)
+		}
+		toolName := strings.TrimSpace(stringValue(obj["name"]))
+		switch {
+		case toolType != "" && toolName != "":
+			descriptors = append(descriptors, toolType+":"+toolName)
+		case toolType != "":
+			descriptors = append(descriptors, toolType)
+		case toolName != "":
+			descriptors = append(descriptors, "name:"+toolName)
+		}
+	}
+	return uniqueNonEmptyStrings(types), uniqueNonEmptyStrings(descriptors)
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func PatchedBody(payload map[string]any, model string, endpoint string, target Target) ([]byte, error) {
@@ -794,7 +1661,7 @@ func PatchedBody(payload map[string]any, model string, endpoint string, target T
 	return json.Marshal(copyPayload)
 }
 
-func (rt *Runtime) preparePayloadForUpstream(ctx context.Context, key VirtualKey, endpoint string, payload map[string]any) map[string]any {
+func (rt *Runtime) preparePayloadForUpstream(ctx context.Context, key VirtualKey, endpoint string, payload map[string]any, target Target) map[string]any {
 	copyPayload := make(map[string]any, len(payload))
 	for k, v := range payload {
 		copyPayload[k] = v
@@ -802,7 +1669,64 @@ func (rt *Runtime) preparePayloadForUpstream(ctx context.Context, key VirtualKey
 	if endpoint == "/responses" {
 		rt.scopeResponsesState(ctx, key, copyPayload)
 	}
+	sanitizeAnthropicHEResponsesPayload(copyPayload, endpoint, target)
+	filterUnsupportedResponseTools(copyPayload, endpoint, target)
 	return copyPayload
+}
+
+func sanitizeAnthropicHEResponsesPayload(payload map[string]any, endpoint string, target Target) {
+	if endpoint != "/responses" || !strings.EqualFold(strings.TrimSpace(target.Provider), "he-tokenapi") || !targetUsesAnthropicResponsesModel(target) {
+		return
+	}
+	for _, key := range []string{
+		"background",
+		"client_metadata",
+		"include",
+		"max_tool_calls",
+		"metadata",
+		"parallel_tool_calls",
+		"prompt_cache_retention",
+		"service_tier",
+		"store",
+		"text",
+	} {
+		delete(payload, key)
+	}
+}
+
+func filterUnsupportedResponseTools(payload map[string]any, endpoint string, target Target) {
+	if endpoint != "/responses" || !strings.EqualFold(strings.TrimSpace(target.Provider), "he-tokenapi") {
+		return
+	}
+	items, ok := payload["tools"].([]any)
+	if !ok || len(items) == 0 {
+		return
+	}
+	filtered := make([]any, 0, len(items))
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		toolType := strings.TrimSpace(stringValue(obj["type"]))
+		if strings.EqualFold(toolType, "image_generation") {
+			continue
+		}
+		if targetUsesAnthropicResponsesModel(target) && !strings.EqualFold(toolType, "function") {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if len(filtered) == 0 {
+		delete(payload, "tools")
+		return
+	}
+	payload["tools"] = filtered
+}
+
+func targetUsesAnthropicResponsesModel(target Target) bool {
+	model := strings.TrimSpace(strings.ToLower(target.Model))
+	return strings.HasPrefix(model, "anthropic/")
 }
 
 func (rt *Runtime) scopeResponsesState(ctx context.Context, key VirtualKey, payload map[string]any) {
@@ -1211,7 +2135,7 @@ func (rt *Runtime) forward(w http.ResponseWriter, r *http.Request, req ForwardRe
 		if errText == "" {
 			errText = resp.Status
 		}
-		if shouldRetryAIGatewayFailure(resp.StatusCode, errText) {
+		if shouldRetryAIGatewayFailure(req.Target, resp.StatusCode, errText) {
 			rt.RecordUsage(context.Background(), UsageRecord{
 				Key:         req.Key,
 				RequestID:   req.RequestID,
@@ -1374,13 +2298,19 @@ func shouldRetryAIGatewayStatus(status int) bool {
 	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
 }
 
-func shouldRetryAIGatewayFailure(status int, errorText string) bool {
+func shouldRetryAIGatewayFailure(target Target, status int, errorText string) bool {
 	if shouldRetryAIGatewayStatus(status) {
 		return true
 	}
 	switch status {
 	case http.StatusBadRequest, http.StatusPaymentRequired, http.StatusForbidden:
-		return isAIGatewayQuotaError(errorText)
+		if isAIGatewayQuotaError(errorText) {
+			return true
+		}
+		if strings.EqualFold(target.Provider, "he-tokenapi") && isAIGatewayHardPermissionError(errorText) {
+			return false
+		}
+		return isAIGatewayFallbackablePermissionError(errorText)
 	default:
 		return false
 	}
@@ -1408,6 +2338,43 @@ func isAIGatewayQuotaError(errorText string) bool {
 		"额度",
 		"超限",
 		"余额不足",
+	}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAIGatewayFallbackablePermissionError(errorText string) bool {
+	text := strings.ToLower(strings.TrimSpace(errorText))
+	if text == "" {
+		return false
+	}
+	markers := []string{
+		"permission_error",
+		"available model group fallbacks=none",
+		"key_model_access_denied",
+		"key not allowed to access model",
+		"model group",
+	}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAIGatewayHardPermissionError(errorText string) bool {
+	text := strings.ToLower(strings.TrimSpace(errorText))
+	if text == "" {
+		return false
+	}
+	markers := []string{
+		"not enabled for this group",
+		"image generation is not enabled for this group",
 	}
 	for _, marker := range markers {
 		if strings.Contains(text, marker) {
@@ -2569,29 +3536,56 @@ func (rt *Runtime) RecordUsage(ctx context.Context, record UsageRecord) {
 		err = insertUsageLegacyResponseSession(includeAuthMode)
 	}
 	if err != nil && isLegacyUsageInsertError(err) {
-		_, _ = rt.DB.Exec(ctx, `
-			INSERT INTO ai_gateway_usage (
-				virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
-				upstream_provider, upstream_model, status_code, prompt_tokens,
-				completion_tokens, total_tokens, latency_ms, error
+		if includeAuthMode {
+			_, _ = rt.DB.Exec(ctx, `
+				INSERT INTO ai_gateway_usage (
+					virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
+					upstream_provider, upstream_model, auth_mode, status_code, prompt_tokens,
+					completion_tokens, total_tokens, latency_ms, error
+				)
+				VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, NULLIF($15, ''))
+			`,
+				util.MustParseUUID(record.Key.ID),
+				util.MustParseUUID(record.Key.WorkspaceID),
+				record.RequestID,
+				record.CallerID,
+				record.Endpoint,
+				record.ModelAlias,
+				record.Target.Provider,
+				record.TargetModel,
+				authMode,
+				int32(record.StatusCode),
+				record.PromptTokens,
+				record.CompletionTokens,
+				record.TotalTokens,
+				record.LatencyMs,
+				errText,
 			)
-			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, ''))
-		`,
-			util.MustParseUUID(record.Key.ID),
-			util.MustParseUUID(record.Key.WorkspaceID),
-			record.RequestID,
-			record.CallerID,
-			record.Endpoint,
-			record.ModelAlias,
-			record.Target.Provider,
-			record.TargetModel,
-			int32(record.StatusCode),
-			record.PromptTokens,
-			record.CompletionTokens,
-			record.TotalTokens,
-			record.LatencyMs,
-			errText,
-		)
+		} else {
+			_, _ = rt.DB.Exec(ctx, `
+				INSERT INTO ai_gateway_usage (
+					virtual_key_id, workspace_id, request_id, caller_id, endpoint, model_alias,
+					upstream_provider, upstream_model, status_code, prompt_tokens,
+					completion_tokens, total_tokens, latency_ms, error
+				)
+				VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, ''))
+			`,
+				util.MustParseUUID(record.Key.ID),
+				util.MustParseUUID(record.Key.WorkspaceID),
+				record.RequestID,
+				record.CallerID,
+				record.Endpoint,
+				record.ModelAlias,
+				record.Target.Provider,
+				record.TargetModel,
+				int32(record.StatusCode),
+				record.PromptTokens,
+				record.CompletionTokens,
+				record.TotalTokens,
+				record.LatencyMs,
+				errText,
+			)
+		}
 	}
 }
 

@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, BarChart3, Check, ChevronLeft, ChevronRight, Copy, KeyRound, Plus, RefreshCw, Route, Save, Trash2, Zap } from "lucide-react";
+import { Activity, ArrowRight, BarChart3, Check, ChevronLeft, ChevronRight, Copy, KeyRound, Plus, RefreshCw, Route, Save, Trash2, Zap } from "lucide-react";
 import { toast } from "sonner";
 import type {
   AIGatewayAuthMode,
+  AIGatewayAPIKeyPoolItem,
   AIGatewayCustomHeaderEnv,
   AIGatewayKey,
   AIGatewayProbeResult,
@@ -81,6 +82,7 @@ function blankTarget(priority = 0): RouteTargetForm {
     base_url: "https://api.openai.com/v1",
     auth_mode: "api_key",
     api_key_env: "OPENAI_API_KEY",
+    api_key_pool: [],
     cookie_env: "",
     custom_header_envs: [],
     model: "gpt-5-codex",
@@ -195,6 +197,16 @@ function blankCustomHeaderEnv(): AIGatewayCustomHeaderEnv {
   };
 }
 
+function blankAPIKeyPoolItem(): AIGatewayAPIKeyPoolItem {
+  return {
+    label: "",
+    api_key: "",
+    key_masked: "",
+    shared_by_email: "",
+    enabled: true,
+  };
+}
+
 function validateEnvRef(label: string, value: string) {
   const trimmed = value.trim();
   if (trimmed.startsWith("sk-") || trimmed.includes("\n") || trimmed.includes("\r")) {
@@ -209,6 +221,135 @@ function targetLabel(target: AIGatewayRouteTarget) {
   const effort = target.reasoning_effort ? ` · ${target.reasoning_effort}` : "";
   const authMode = target.auth_mode === "custom_headers_cookie" ? "cookie" : "key";
   return `${target.provider}/${target.model || "<requested>"} · ${authMode}${effort}`;
+}
+
+function isHETokenAPITarget(target: AIGatewayRouteTarget) {
+  return (target.auth_mode ?? "api_key") === "api_key" && target.provider.trim().toLowerCase() === "he-tokenapi";
+}
+
+function targetUsesHEKeyPool(target: AIGatewayRouteTarget) {
+  return isHETokenAPITarget(target) && (target.api_key_pool?.length ?? 0) > 0;
+}
+
+function findWildcardHEPoolSource(
+  routes: AIGatewayRoute[],
+  routeAlias: string,
+  target: AIGatewayRouteTarget,
+) {
+  if (routeAlias.trim() === "*" || !isHETokenAPITarget(target) || (target.api_key_pool?.length ?? 0) > 0) {
+    return null;
+  }
+  const normalizedBaseURL = target.base_url.trim().replace(/\/+$/, "");
+  const normalizedAPIKeyEnv = target.api_key_env.trim();
+  const wildcardRoute = routes.find((route) => route.alias === "*");
+  if (!wildcardRoute) {
+    return null;
+  }
+  return wildcardRoute.targets.find((candidate) =>
+    isHETokenAPITarget(candidate) &&
+    (candidate.api_key_pool?.length ?? 0) > 0 &&
+    candidate.base_url.trim().replace(/\/+$/, "") === normalizedBaseURL &&
+    candidate.api_key_env.trim() === normalizedAPIKeyEnv,
+  ) ?? null;
+}
+
+function targetPoolVisual(target: AIGatewayRouteTarget, inheritedFromWildcard: AIGatewayRouteTarget | null) {
+  if ((target.api_key_pool?.length ?? 0) > 0) {
+    return {
+      count: target.api_key_pool?.length ?? 0,
+      inherited: false,
+    };
+  }
+  if (inheritedFromWildcard && (inheritedFromWildcard.api_key_pool?.length ?? 0) > 0) {
+    return {
+      count: inheritedFromWildcard.api_key_pool?.length ?? 0,
+      inherited: true,
+    };
+  }
+  return null;
+}
+
+function sameTargetAuthSource(left: AIGatewayRouteTarget, right: AIGatewayRouteTarget) {
+  return left.base_url.trim().replace(/\/+$/, "") === right.base_url.trim().replace(/\/+$/, "") &&
+    (left.auth_mode ?? "api_key") === (right.auth_mode ?? "api_key") &&
+    left.api_key_env.trim() === right.api_key_env.trim() &&
+    (left.cookie_env ?? "").trim() === (right.cookie_env ?? "").trim();
+}
+
+function comparableTargetModel(model: string, requestedModel: string) {
+  const normalized = model.trim().toLowerCase().replace(/^openai\//, "");
+  const fallback = requestedModel.trim().toLowerCase().replace(/^openai\//, "");
+  return normalized || fallback;
+}
+
+function wildcardFallbackTargetMatchesRequestedModel(
+  target: AIGatewayRouteTarget,
+  requestedModel: string,
+) {
+  if (!target.model.trim()) {
+    return false;
+  }
+  return comparableTargetModel(target.model, requestedModel) === comparableTargetModel(requestedModel, requestedModel);
+}
+
+function sameTargetFallbackIdentity(
+  left: AIGatewayRouteTarget,
+  right: AIGatewayRouteTarget,
+  requestedModel: string,
+) {
+  if (left.provider.trim().toLowerCase() !== right.provider.trim().toLowerCase()) {
+    return false;
+  }
+  if (!sameTargetAuthSource(left, right)) {
+    return false;
+  }
+  if (left.upstream_api !== right.upstream_api) {
+    return false;
+  }
+  return comparableTargetModel(left.model, requestedModel).toLowerCase() === comparableTargetModel(right.model, requestedModel).toLowerCase();
+}
+
+function shouldSkipWildcardFallbackTarget(
+  localTargets: AIGatewayRouteTarget[],
+  wildcardTarget: AIGatewayRouteTarget,
+  requestedModel: string,
+) {
+  if (!wildcardFallbackTargetMatchesRequestedModel(wildcardTarget, requestedModel)) {
+    return true;
+  }
+  if (
+    isHETokenAPITarget(wildcardTarget) &&
+    (wildcardTarget.api_key_pool?.length ?? 0) > 0 &&
+    localTargets.some((localTarget) =>
+      isHETokenAPITarget(localTarget) &&
+      sameTargetAuthSource(localTarget, wildcardTarget),
+    )
+  ) {
+    return true;
+  }
+  return localTargets.some((localTarget) => sameTargetFallbackIdentity(localTarget, wildcardTarget, requestedModel));
+}
+
+function appendInheritedWildcardFallbackTargets(
+  routes: AIGatewayRoute[],
+  route: AIGatewayRoute,
+): Array<{ target: AIGatewayRouteTarget; inherited: boolean }> {
+  if (route.alias.trim() === "*") {
+    return route.targets.map((target) => ({ target, inherited: false as const }));
+  }
+  const wildcardRoute = routes.find((candidate) => candidate.alias === "*");
+  if (!wildcardRoute) {
+    return route.targets.map((target) => ({ target, inherited: false as const }));
+  }
+  const effectiveTargets: Array<{ target: AIGatewayRouteTarget; inherited: boolean }> =
+    route.targets.map((target) => ({ target, inherited: false }));
+  for (const wildcardTarget of wildcardRoute.targets) {
+    if (shouldSkipWildcardFallbackTarget(route.targets, wildcardTarget, route.alias)) {
+      continue;
+    }
+    effectiveTargets.push({ target: wildcardTarget, inherited: true });
+  }
+  return effectiveTargets;
 }
 
 function formatRouteJson(payload: RouteFormPayload) {
@@ -227,7 +368,20 @@ function routeToPayload(route: AIGatewayRoute): RouteFormPayload {
 function normalizeRoutePayload(payload: RouteFormPayload): RouteFormPayload {
   for (const [index, target] of payload.targets.entries()) {
     const authMode = target.auth_mode ?? "api_key";
+    const isHEKeyPoolTarget = authMode === "api_key" && target.provider.trim().toLowerCase() === "he-tokenapi";
+    const hasStoredAPIKey = Boolean(target.api_key?.trim() || target.api_key_masked?.trim());
     const cookieEnv = target.cookie_env?.trim() ?? "";
+    const apiKeyPool = (target.api_key_pool ?? [])
+      .map((item) => ({
+        id: item.id?.trim(),
+        label: item.label.trim(),
+        api_key: item.api_key?.trim() ?? "",
+        key_masked: item.key_masked?.trim(),
+        shared_by_email: item.shared_by_email.trim().toLowerCase(),
+        enabled: item.enabled,
+        reenable_at: item.reenable_at?.trim(),
+      }))
+      .filter((item) => item.label || item.api_key || item.key_masked || item.shared_by_email);
     const customHeaderEnvs = (target.custom_header_envs ?? [])
       .map((item) => ({
         header_name: item.header_name.trim(),
@@ -235,13 +389,39 @@ function normalizeRoutePayload(payload: RouteFormPayload): RouteFormPayload {
       }))
       .filter((item) => item.header_name || item.env_name);
     if (authMode === "api_key") {
-      validateEnvRef(`target ${index + 1} api_key_env`, target.api_key_env.trim());
+      if (isHEKeyPoolTarget && apiKeyPool.length > 0) {
+        const seenLabels = new Set<string>();
+        for (const [poolIndex, item] of apiKeyPool.entries()) {
+          if (!item.label) {
+            throw new Error(`target ${index + 1} key ${poolIndex + 1} label is required`);
+          }
+          if (!item.shared_by_email || !isAIGatewayApplicantEmail(item.shared_by_email)) {
+            throw new Error(`target ${index + 1} key ${poolIndex + 1} shared_by_email is invalid`);
+          }
+          if (!item.api_key && !item.key_masked) {
+            throw new Error(`target ${index + 1} key ${poolIndex + 1} api_key is required`);
+          }
+          const labelKey = item.label.toLowerCase();
+          if (seenLabels.has(labelKey)) {
+            throw new Error(`target ${index + 1} has duplicate key label ${item.label}`);
+          }
+          seenLabels.add(labelKey);
+        }
+      } else if (hasStoredAPIKey) {
+        if (target.api_key?.includes("\n") || target.api_key?.includes("\r")) {
+          throw new Error(`target ${index + 1} api_key is invalid`);
+        }
+      } else if (target.api_key_env.trim()) {
+        validateEnvRef(`target ${index + 1} api_key_env`, target.api_key_env.trim());
+      } else {
+        throw new Error(`target ${index + 1} api_key or api_key_env is required`);
+      }
       if (cookieEnv || customHeaderEnvs.length > 0) {
         throw new Error(`target ${index + 1} cannot mix cookie/header envs with api_key auth_mode`);
       }
     } else {
-      if (target.api_key_env.trim() || target.organization_env?.trim() || target.project_env?.trim()) {
-        throw new Error(`target ${index + 1} cannot mix api_key/org/project envs with custom_headers_cookie auth_mode`);
+      if (target.api_key_env.trim()) {
+        throw new Error(`target ${index + 1} cannot mix api_key env with custom_headers_cookie auth_mode`);
       }
       if (!cookieEnv && customHeaderEnvs.length === 0) {
         throw new Error(`target ${index + 1} must provide cookie_env or at least one custom header env`);
@@ -271,6 +451,19 @@ function normalizeRoutePayload(payload: RouteFormPayload): RouteFormPayload {
       base_url: target.base_url.trim(),
       auth_mode: (target.auth_mode ?? "api_key") as AIGatewayAuthMode,
       api_key_env: (target.auth_mode ?? "api_key") === "api_key" ? target.api_key_env.trim() : "",
+      api_key: (target.auth_mode ?? "api_key") === "api_key" ? target.api_key?.trim() || undefined : undefined,
+      api_key_masked: target.api_key_masked?.trim() || undefined,
+      api_key_pool: (target.api_key_pool ?? [])
+        .map((item) => ({
+          id: item.id?.trim(),
+          label: item.label.trim(),
+          api_key: item.api_key?.trim() || undefined,
+          key_masked: item.key_masked?.trim() || undefined,
+          shared_by_email: item.shared_by_email.trim().toLowerCase(),
+          enabled: item.enabled,
+          reenable_at: item.reenable_at?.trim() || undefined,
+        }))
+        .filter((item) => item.label || item.api_key || item.key_masked || item.shared_by_email),
       cookie_env: target.cookie_env?.trim() || undefined,
       custom_header_envs: (target.custom_header_envs ?? [])
         .map((item) => ({
@@ -281,8 +474,6 @@ function normalizeRoutePayload(payload: RouteFormPayload): RouteFormPayload {
       model: target.model.trim(),
       upstream_api: target.upstream_api,
       reasoning_effort: target.reasoning_effort?.trim() || undefined,
-      organization_env: (target.auth_mode ?? "api_key") === "api_key" ? target.organization_env?.trim() || undefined : undefined,
-      project_env: (target.auth_mode ?? "api_key") === "api_key" ? target.project_env?.trim() || undefined : undefined,
     })),
   };
 }
@@ -325,6 +516,20 @@ function parseRouteJson(raw: string): RouteFormPayload {
         base_url: typeof target.base_url === "string" ? target.base_url : "https://api.openai.com/v1",
         auth_mode: target.auth_mode === "custom_headers_cookie" ? "custom_headers_cookie" : "api_key",
         api_key_env: typeof target.api_key_env === "string" ? target.api_key_env : "OPENAI_API_KEY",
+        api_key_pool: Array.isArray(target.api_key_pool)
+          ? target.api_key_pool.map((item) => {
+            const pool = item as Partial<AIGatewayAPIKeyPoolItem>;
+            return {
+              id: typeof pool.id === "string" ? pool.id : undefined,
+              label: typeof pool.label === "string" ? pool.label : "",
+              api_key: typeof pool.api_key === "string" ? pool.api_key : "",
+              key_masked: typeof pool.key_masked === "string" ? pool.key_masked : "",
+              shared_by_email: typeof pool.shared_by_email === "string" ? pool.shared_by_email : "",
+              enabled: typeof pool.enabled === "boolean" ? pool.enabled : true,
+              reenable_at: typeof pool.reenable_at === "string" ? pool.reenable_at : undefined,
+            };
+          })
+          : [],
         cookie_env: typeof target.cookie_env === "string" ? target.cookie_env : "",
         custom_header_envs: Array.isArray(target.custom_header_envs)
           ? target.custom_header_envs.map((item) => {
@@ -337,12 +542,10 @@ function parseRouteJson(raw: string): RouteFormPayload {
           : [],
         model: typeof target.model === "string" ? target.model : "",
         upstream_api: typeof target.upstream_api === "string" ? target.upstream_api : "responses",
-        reasoning_effort: typeof target.reasoning_effort === "string" ? target.reasoning_effort : "",
-        organization_env: typeof target.organization_env === "string" ? target.organization_env : "",
-        project_env: typeof target.project_env === "string" ? target.project_env : "",
-        timeout_seconds: Number(target.timeout_seconds) > 0 ? Number(target.timeout_seconds) : 60,
-        weight: Number(target.weight) > 0 ? Number(target.weight) : 1,
-        priority: i,
+      reasoning_effort: typeof target.reasoning_effort === "string" ? target.reasoning_effort : "",
+      timeout_seconds: Number(target.timeout_seconds) > 0 ? Number(target.timeout_seconds) : 60,
+      weight: Number(target.weight) > 0 ? Number(target.weight) : 1,
+      priority: i,
         enabled: typeof target.enabled === "boolean" ? target.enabled : true,
         input_price_per_million_micros: Number(target.input_price_per_million_micros) || 0,
         output_price_per_million_micros: Number(target.output_price_per_million_micros) || 0,
@@ -418,15 +621,30 @@ export function AIGatewayTab() {
     routeTargets.map(targetLabel).join(" -> ")
   ), [routeTargets]);
 
-  const routePayload = useMemo(() => normalizeRoutePayload({
-    alias: routeAlias,
-    strategy: routeStrategy,
-    enabled: routeEnabled,
-    targets: routeTargets,
-  }), [routeAlias, routeStrategy, routeEnabled, routeTargets]);
+  const routeDraftValidation = useMemo(() => {
+    try {
+      return {
+        payload: normalizeRoutePayload({
+          alias: routeAlias,
+          strategy: routeStrategy,
+          enabled: routeEnabled,
+          targets: routeTargets,
+        }),
+        error: null,
+      };
+    } catch (error) {
+      return {
+        payload: null,
+        error: error instanceof Error ? error.message : "invalid route",
+      };
+    }
+  }, [routeAlias, routeStrategy, routeEnabled, routeTargets]);
+
+  const routePayload = routeDraftValidation.payload;
+  const routeDraftValidationError = routeDraftValidation.error;
 
   useEffect(() => {
-    if (routeEditorMode === "ui") {
+    if (routeEditorMode === "ui" && routePayload) {
       setRouteJson(formatRouteJson(routePayload));
     }
   }, [routeEditorMode, routePayload]);
@@ -567,6 +785,32 @@ export function AIGatewayTab() {
     setRouteTargets((items) => items.map((item, i) => i === index ? { ...item, ...patch } : item));
   };
 
+  const updateTargetAPIKeyPoolItem = (targetIndex: number, itemIndex: number, patch: Partial<AIGatewayAPIKeyPoolItem>) => {
+    setRouteTargets((items) => items.map((item, i) => {
+      if (i !== targetIndex) return item;
+      const nextPool = [...(item.api_key_pool ?? [])];
+      const existing = nextPool[itemIndex] ?? blankAPIKeyPoolItem();
+      const nextItem = { ...existing, ...patch };
+      if (patch.api_key !== undefined && patch.api_key.trim()) {
+        nextItem.key_masked = "";
+      }
+      nextPool[itemIndex] = nextItem;
+      return { ...item, api_key_pool: nextPool };
+    }));
+  };
+
+  const addTargetAPIKeyPoolItem = (targetIndex: number) => {
+    setRouteTargets((items) => items.map((item, i) => i === targetIndex
+      ? { ...item, api_key_pool: [...(item.api_key_pool ?? []), blankAPIKeyPoolItem()] }
+      : item));
+  };
+
+  const removeTargetAPIKeyPoolItem = (targetIndex: number, itemIndex: number) => {
+    setRouteTargets((items) => items.map((item, i) => i === targetIndex
+      ? { ...item, api_key_pool: (item.api_key_pool ?? []).filter((_, idx) => idx !== itemIndex) }
+      : item));
+  };
+
   const updateTargetCustomHeader = (targetIndex: number, headerIndex: number, patch: Partial<AIGatewayCustomHeaderEnv>) => {
     setRouteTargets((items) => items.map((item, i) => {
       if (i !== targetIndex) return item;
@@ -658,6 +902,10 @@ export function AIGatewayTab() {
   const handleRouteEditorModeChange = (mode: RouteEditorMode) => {
     if (mode === routeEditorMode) return;
     if (mode === "json") {
+      if (!routePayload) {
+        toast.error(routeDraftValidationError ?? t(($) => $.ai_gateway.route_json_invalid));
+        return;
+      }
       setRouteJson(formatRouteJson(routePayload));
       setRouteEditorMode("json");
       return;
@@ -681,7 +929,10 @@ export function AIGatewayTab() {
   const saveRoute = async () => {
     setSavingRoute(true);
     try {
-      const payload = routeEditorMode === "json" ? parseRouteJson(routeJson) : routePayload;
+      if (routeEditorMode === "ui" && !routePayload) {
+        throw new Error(routeDraftValidationError ?? t(($) => $.ai_gateway.route_json_invalid));
+      }
+      const payload = routeEditorMode === "json" ? parseRouteJson(routeJson) : routePayload!;
       if (editingRouteId) {
         await api.updateAIGatewayRoute(editingRouteId, payload);
       } else {
@@ -712,9 +963,11 @@ export function AIGatewayTab() {
     setProbing(true);
     try {
       const result = await api.probeAIGatewayProvider({
+        target_id: firstTarget.id,
         base_url: firstTarget.base_url,
         auth_mode: firstTarget.auth_mode,
         api_key_env: firstTarget.api_key_env,
+        api_key_pool: firstTarget.api_key_pool,
         cookie_env: firstTarget.cookie_env,
         custom_header_envs: firstTarget.custom_header_envs,
         model: firstTarget.model,
@@ -726,6 +979,328 @@ export function AIGatewayTab() {
       setProbing(false);
     }
   };
+
+  const renderRouteEditorCard = () => (
+    <Card>
+      <CardContent className="space-y-4">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-sm font-semibold">
+              {editingRouteId
+                ? t(($) => $.ai_gateway.route_editor_title_edit, { alias: routeAlias || "*" })
+                : t(($) => $.ai_gateway.route_editor_title_create)}
+            </div>
+            <Badge variant="outline">
+              {t(($) => $.ai_gateway.route_targets_count, { count: routeTargets.length })}
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {editingRouteId
+              ? t(($) => $.ai_gateway.route_editor_description_edit)
+              : t(($) => $.ai_gateway.route_editor_description_create)}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="inline-flex rounded-md border bg-muted/30 p-0.5">
+            <Button type="button" size="sm" variant={routeEditorMode === "ui" ? "secondary" : "ghost"} onClick={() => handleRouteEditorModeChange("ui")}>{t(($) => $.ai_gateway.route_mode_ui)}</Button>
+            <Button type="button" size="sm" variant={routeEditorMode === "json" ? "secondary" : "ghost"} onClick={() => handleRouteEditorModeChange("json")}>{t(($) => $.ai_gateway.route_mode_json)}</Button>
+          </div>
+          {routeEditorMode === "json" && (
+            <Button type="button" variant="outline" size="sm" onClick={formatJsonEditor}>{t(($) => $.ai_gateway.route_json_format)}</Button>
+          )}
+        </div>
+
+        {routeEditorMode === "ui" ? (
+          <>
+            <div className="grid gap-3 lg:grid-cols-[1fr_160px_auto]">
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.route_alias_label)}</span>
+                <Input value={routeAlias} onChange={(e) => setRouteAlias(e.target.value)} placeholder={t(($) => $.ai_gateway.route_alias_placeholder)} />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.route_strategy_label)}</span>
+                <Select value={routeStrategy} onValueChange={(v) => { if (v) setRouteStrategy(v); }}>
+                  <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>{STRATEGIES.map((s) => <SelectItem key={s} value={s}>{t(($) => $.ai_gateway.strategy[s])}</SelectItem>)}</SelectContent>
+                </Select>
+              </label>
+              <label className="flex items-end gap-2 pb-2">
+                <Switch checked={routeEnabled} onCheckedChange={setRouteEnabled} />
+                <span className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.route_enabled)}</span>
+              </label>
+            </div>
+            <div className="space-y-1 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              <p>{t(($) => $.ai_gateway.route_editor_hint)}</p>
+              <p>{t(($) => $.ai_gateway.route_model_hint)}</p>
+              <p>{t(($) => $.ai_gateway.route_target_order_hint)}</p>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+              <Select value={selectedPresetId} onValueChange={(v) => { if (v) applyPreset(v); }}>
+                <SelectTrigger size="sm"><SelectValue placeholder={t(($) => $.ai_gateway.preset_placeholder)} /></SelectTrigger>
+                <SelectContent>{presets.map((preset) => <SelectItem key={preset.id} value={preset.id}>{preset.name}</SelectItem>)}</SelectContent>
+              </Select>
+              <Button type="button" variant="outline" onClick={() => setRouteTargets((items) => [...items, blankTarget(items.length)])}>
+                <Plus className="h-4 w-4" /> {t(($) => $.ai_gateway.add_target)}
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              {routeTargets.map((target, index) => {
+                const isHEKeyPoolTarget = (target.auth_mode ?? "api_key") === "api_key" && target.provider.trim().toLowerCase() === "he-tokenapi";
+                const hasHEKeyPool = targetUsesHEKeyPool(target);
+                const hasStoredAPIKey = Boolean(target.api_key?.trim() || target.api_key_masked?.trim());
+                return (
+                  <div key={index} className="rounded-md border p-4 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-sm font-medium">{t(($) => $.ai_gateway.target_label, { index: index + 1 })}</div>
+                          <Badge variant="outline">{t(($) => $.ai_gateway.auth_mode[target.auth_mode ?? "api_key"])}</Badge>
+                          <Badge variant="outline">{t(($) => $.ai_gateway.upstream_api[target.upstream_api as keyof typeof $.ai_gateway.upstream_api])}</Badge>
+                          {index === 0 ? <Badge variant="secondary">{t(($) => $.ai_gateway.target_primary_badge)}</Badge> : null}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {target.provider} · {target.model || t(($) => $.ai_gateway.target_model_passthrough)}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Switch checked={target.enabled} onCheckedChange={(v) => updateTarget(index, { enabled: v })} />
+                        {routeTargets.length > 1 && <Button type="button" variant="ghost" size="icon-sm" onClick={() => setRouteTargets((items) => items.filter((_, i) => i !== index))}><Trash2 className="h-3.5 w-3.5" /></Button>}
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_basic_section)}</div>
+                      <div className="grid gap-3 lg:grid-cols-4">
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.provider_label)}</span>
+                          <Input value={target.provider} onChange={(e) => updateTarget(index, { provider: e.target.value })} placeholder={t(($) => $.ai_gateway.provider_placeholder)} />
+                        </label>
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.model_label)}</span>
+                          <Input value={target.model} onChange={(e) => updateTarget(index, { model: e.target.value })} placeholder={t(($) => $.ai_gateway.model_placeholder)} />
+                        </label>
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.upstream_api_label)}</span>
+                          <Select value={target.upstream_api} onValueChange={(v) => { if (v) updateTarget(index, { upstream_api: v }); }}>
+                            <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+                            <SelectContent>{UPSTREAM_APIS.map((apiName) => <SelectItem key={apiName} value={apiName}>{t(($) => $.ai_gateway.upstream_api[apiName])}</SelectItem>)}</SelectContent>
+                          </Select>
+                        </label>
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.base_url_label)}</span>
+                          <Input value={target.base_url} onChange={(e) => updateTarget(index, { base_url: e.target.value })} placeholder={t(($) => $.ai_gateway.base_url_placeholder)} />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_auth_section)}</div>
+                      <div className="grid gap-3 lg:grid-cols-3">
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.auth_mode_label)}</span>
+                          <Select
+                            value={target.auth_mode ?? "api_key"}
+                            onValueChange={(v) => updateTarget(index, v === "custom_headers_cookie" ? {
+                              auth_mode: "custom_headers_cookie",
+                              api_key_env: "",
+                              api_key_pool: [],
+                            } : {
+                              auth_mode: "api_key",
+                              api_key_env: target.api_key_env || "OPENAI_API_KEY",
+                              cookie_env: "",
+                              custom_header_envs: [],
+                            })}
+                          >
+                            <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {AUTH_MODES.map((mode) => (
+                                <SelectItem key={mode} value={mode}>{t(($) => $.ai_gateway.auth_mode[mode])}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </label>
+                        {target.auth_mode === "custom_headers_cookie" ? (
+                          <label className="space-y-1.5 lg:col-span-2">
+                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.cookie_env_label)}</span>
+                            <Input value={target.cookie_env ?? ""} onChange={(e) => updateTarget(index, { cookie_env: e.target.value })} placeholder={t(($) => $.ai_gateway.cookie_env_placeholder)} />
+                          </label>
+                        ) : (
+                          <>
+                            {!isHEKeyPoolTarget ? (
+                              <label className="space-y-1.5">
+                                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.api_key_label)}</span>
+                                <Input
+                                  value={target.api_key ?? ""}
+                                  onChange={(e) => updateTarget(index, { api_key: e.target.value })}
+                                  placeholder={target.api_key_masked || t(($) => $.ai_gateway.api_key_placeholder)}
+                                />
+                                {target.api_key_masked ? (
+                                  <span className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.api_key_masked, { masked: target.api_key_masked })}</span>
+                                ) : null}
+                              </label>
+                            ) : null}
+                            {!hasHEKeyPool && !hasStoredAPIKey ? (
+                              <label className="space-y-1.5">
+                                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.api_key_env_label)}</span>
+                                <Input value={target.api_key_env} onChange={(e) => updateTarget(index, { api_key_env: e.target.value })} placeholder={t(($) => $.ai_gateway.api_key_env_placeholder)} />
+                              </label>
+                            ) : null}
+                            {isHEKeyPoolTarget ? (
+                              <div className="space-y-1.5">
+                                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.he_key_pool_label)}</span>
+                                <div className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.he_key_pool_hint)}</div>
+                              </div>
+                            ) : null}
+                          </>
+                        )}
+                      </div>
+                      {isHEKeyPoolTarget ? (
+                        <div className="space-y-3 rounded-md border border-dashed p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.he_key_pool_label)}</div>
+                              <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.he_key_pool_summary_hint)}</p>
+                            </div>
+                            <Button type="button" variant="outline" size="sm" onClick={() => addTargetAPIKeyPoolItem(index)}>
+                              <Plus className="h-4 w-4" /> {t(($) => $.ai_gateway.he_key_pool_add)}
+                            </Button>
+                          </div>
+                          {(target.api_key_pool ?? []).length > 0 ? (
+                            <div className="space-y-3">
+                              {(target.api_key_pool ?? []).map((item, itemIndex) => (
+                                <div key={item.id ?? itemIndex} className="grid gap-2 rounded-md border p-3 lg:grid-cols-[1fr_1.2fr_1.2fr_auto_auto]">
+                                  <Input value={item.label} onChange={(e) => updateTargetAPIKeyPoolItem(index, itemIndex, { label: e.target.value })} placeholder={t(($) => $.ai_gateway.he_key_pool_label_placeholder)} />
+                                  <Input value={item.shared_by_email} onChange={(e) => updateTargetAPIKeyPoolItem(index, itemIndex, { shared_by_email: e.target.value })} placeholder={t(($) => $.ai_gateway.he_key_pool_email_placeholder)} />
+                                  <Input value={item.api_key ?? ""} onChange={(e) => updateTargetAPIKeyPoolItem(index, itemIndex, { api_key: e.target.value })} placeholder={item.key_masked || t(($) => $.ai_gateway.he_key_pool_key_placeholder)} />
+                                  <label className="flex items-center gap-2">
+                                    <Switch checked={item.enabled} onCheckedChange={(value) => updateTargetAPIKeyPoolItem(index, itemIndex, { enabled: value })} />
+                                    <span className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.route_enabled)}</span>
+                                  </label>
+                                  <Button type="button" variant="ghost" size="icon-sm" onClick={() => removeTargetAPIKeyPoolItem(index, itemIndex)}>
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                  {(item.key_masked || item.reenable_at) ? (
+                                    <div className="text-xs text-muted-foreground lg:col-span-5">
+                                      {item.key_masked ? t(($) => $.ai_gateway.he_key_pool_masked, { masked: item.key_masked }) : ""}
+                                      {item.reenable_at ? ` · ${t(($) => $.ai_gateway.he_key_pool_reenable_at, { date: formatDateTime(item.reenable_at) })}` : ""}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.he_key_pool_empty)}</div>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {target.auth_mode === "custom_headers_cookie" ? (
+                      <div className="space-y-3 rounded-md border border-dashed p-3">
+                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_header_section)}</div>
+                        <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.browser_helper_hint)}</p>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.custom_headers_label)}</div>
+                            <Button type="button" variant="outline" size="sm" onClick={() => addTargetCustomHeader(index)}>
+                              <Plus className="h-4 w-4" /> {t(($) => $.ai_gateway.add_custom_header)}
+                            </Button>
+                          </div>
+                          {(target.custom_header_envs ?? []).length > 0 ? (
+                            <div className="space-y-2">
+                              {(target.custom_header_envs ?? []).map((header, headerIndex) => (
+                                <div key={headerIndex} className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                                  <Input value={header.header_name} onChange={(e) => updateTargetCustomHeader(index, headerIndex, { header_name: e.target.value })} placeholder={t(($) => $.ai_gateway.custom_header_name_placeholder)} />
+                                  <Input value={header.env_name} onChange={(e) => updateTargetCustomHeader(index, headerIndex, { env_name: e.target.value })} placeholder={t(($) => $.ai_gateway.custom_header_env_placeholder)} />
+                                  <Button type="button" variant="ghost" size="icon-sm" onClick={() => removeTargetCustomHeader(index, headerIndex)}>
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.custom_headers_empty)}</div>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="space-y-3">
+                      <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_runtime_section)}</div>
+                      <div className="grid gap-3 lg:grid-cols-3">
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.reasoning_effort_label)}</span>
+                          <Select value={target.reasoning_effort || REASONING_EFFORT_DEFAULT} onValueChange={(v) => updateTarget(index, { reasoning_effort: v && v !== REASONING_EFFORT_DEFAULT ? v : "" })}>
+                            <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={REASONING_EFFORT_DEFAULT}>{t(($) => $.ai_gateway.reasoning_effort_default)}</SelectItem>
+                              {REASONING_EFFORTS.map((effort) => (
+                                <SelectItem key={effort} value={effort}>{t(($) => $.ai_gateway.reasoning_effort[effort])}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </label>
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.timeout_label)}</span>
+                          <Input type="number" value={target.timeout_seconds} onChange={(e) => updateTarget(index, { timeout_seconds: Number(e.target.value) || 60 })} />
+                        </label>
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.weight_label)}</span>
+                          <Input type="number" value={target.weight} onChange={(e) => updateTarget(index, { weight: Number(e.target.value) || 1 })} />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_pricing_section)}</div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.input_price_label)}</span>
+                          <Input value={microsToUSD(target.input_price_per_million_micros)} onChange={(e) => updateTarget(index, { input_price_per_million_micros: usdToMicros(e.target.value) })} placeholder={t(($) => $.ai_gateway.input_price_placeholder)} />
+                        </label>
+                        <label className="space-y-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.output_price_label)}</span>
+                          <Input value={microsToUSD(target.output_price_per_million_micros)} onChange={(e) => updateTarget(index, { output_price_per_million_micros: usdToMicros(e.target.value) })} placeholder={t(($) => $.ai_gateway.output_price_placeholder)} />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.route_json_label)}</span>
+            <Textarea className="min-h-80 font-mono text-xs" value={routeJson} onChange={(e) => setRouteJson(e.target.value)} spellCheck={false} placeholder={t(($) => $.ai_gateway.route_json_placeholder)} />
+          </label>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 text-xs text-muted-foreground truncate">{routeEditorMode === "ui" ? routePreview : t(($) => $.ai_gateway.route_json_hint)}</div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={probeTarget} disabled={routeEditorMode === "json" || probing || !firstTarget.base_url}>
+              <Zap className="h-4 w-4" /> {probing ? t(($) => $.ai_gateway.probing) : t(($) => $.ai_gateway.probe)}
+            </Button>
+            {editingRouteId && <Button type="button" variant="outline" onClick={() => resetRouteForm()}>{t(($) => $.ai_gateway.cancel_edit)}</Button>}
+            <Button type="button" onClick={saveRoute} disabled={savingRoute || (routeEditorMode === "ui" ? !routeAlias.trim() : !routeJson.trim())}>
+              <Save className="h-4 w-4" /> {savingRoute ? t(($) => $.ai_gateway.saving_route) : t(($) => $.ai_gateway.save_route)}
+            </Button>
+          </div>
+        </div>
+
+        {probeResult && (
+          <div className="flex flex-wrap gap-2 text-xs">
+            <Badge variant={probeResult.models_endpoint.ok ? "secondary" : "outline"}>{t(($) => $.ai_gateway.probe_models, { status: probeResult.models_endpoint.status })}</Badge>
+            <Badge variant={probeResult.responses.ok ? "secondary" : probeResult.responses.supported ? "outline" : "destructive"}>{t(($) => $.ai_gateway.probe_responses, { status: probeResult.responses.status })}</Badge>
+            <Badge variant={probeResult.chat_completions.ok ? "secondary" : probeResult.chat_completions.supported ? "outline" : "destructive"}>{t(($) => $.ai_gateway.probe_chat, { status: probeResult.chat_completions.status })}</Badge>
+            <Badge variant="outline">{t(($) => $.ai_gateway.probe_model_count, { count: probeResult.models.length })}</Badge>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 
   if (!canManage) {
     return (
@@ -766,7 +1341,7 @@ export function AIGatewayTab() {
                   ))}
                 </SelectContent>
               </Select>
-              <Button onClick={handleCreateKey} disabled={creating || !keyEmailValid}>
+              <Button type="button" onClick={handleCreateKey} disabled={creating || !keyEmailValid}>
                 {creating ? t(($) => $.ai_gateway.creating) : t(($) => $.ai_gateway.create)}
               </Button>
             </div>
@@ -789,7 +1364,7 @@ export function AIGatewayTab() {
                   </div>
                   {key.status === "active" && (
                     <Tooltip>
-                      <TooltipTrigger render={<Button variant="ghost" size="icon-sm" onClick={() => setRevokeConfirmId(key.id)} disabled={revoking === key.id} aria-label={t(($) => $.ai_gateway.revoke_aria, { name: key.name })}><Trash2 className="h-3.5 w-3.5" /></Button>} />
+                  <TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" onClick={() => setRevokeConfirmId(key.id)} disabled={revoking === key.id} aria-label={t(($) => $.ai_gateway.revoke_aria, { name: key.name })}><Trash2 className="h-3.5 w-3.5" /></Button>} />
                       <TooltipContent>{t(($) => $.ai_gateway.revoke_tooltip)}</TooltipContent>
                     </Tooltip>
                   )}
@@ -808,296 +1383,13 @@ export function AIGatewayTab() {
             <Route className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t(($) => $.ai_gateway.routes_title)}</h2>
           </div>
-          <Button variant="outline" size="sm" onClick={startRouteCreate}>
+              <Button type="button" variant="outline" size="sm" onClick={startRouteCreate}>
             <Plus className="h-4 w-4" /> {t(($) => $.ai_gateway.create_route)}
           </Button>
         </div>
 
-        {routeEditorOpen ? (
-          <Card>
-            <CardContent className="space-y-4">
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="text-sm font-semibold">
-                    {editingRouteId
-                      ? t(($) => $.ai_gateway.route_editor_title_edit, { alias: routeAlias || "*" })
-                      : t(($) => $.ai_gateway.route_editor_title_create)}
-                  </div>
-                  <Badge variant="outline">
-                    {t(($) => $.ai_gateway.route_targets_count, { count: routeTargets.length })}
-                  </Badge>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {editingRouteId
-                    ? t(($) => $.ai_gateway.route_editor_description_edit)
-                    : t(($) => $.ai_gateway.route_editor_description_create)}
-                </p>
-              </div>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="inline-flex rounded-md border bg-muted/30 p-0.5">
-                <Button type="button" size="sm" variant={routeEditorMode === "ui" ? "secondary" : "ghost"} onClick={() => handleRouteEditorModeChange("ui")}>{t(($) => $.ai_gateway.route_mode_ui)}</Button>
-                <Button type="button" size="sm" variant={routeEditorMode === "json" ? "secondary" : "ghost"} onClick={() => handleRouteEditorModeChange("json")}>{t(($) => $.ai_gateway.route_mode_json)}</Button>
-              </div>
-              {routeEditorMode === "json" && (
-                <Button type="button" variant="outline" size="sm" onClick={formatJsonEditor}>{t(($) => $.ai_gateway.route_json_format)}</Button>
-              )}
-            </div>
-
-            {routeEditorMode === "ui" ? (
-              <>
-                <div className="grid gap-3 lg:grid-cols-[1fr_160px_auto]">
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.route_alias_label)}</span>
-                    <Input value={routeAlias} onChange={(e) => setRouteAlias(e.target.value)} placeholder={t(($) => $.ai_gateway.route_alias_placeholder)} />
-                  </label>
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.route_strategy_label)}</span>
-                    <Select value={routeStrategy} onValueChange={(v) => { if (v) setRouteStrategy(v); }}>
-                      <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
-                      <SelectContent>{STRATEGIES.map((s) => <SelectItem key={s} value={s}>{t(($) => $.ai_gateway.strategy[s])}</SelectItem>)}</SelectContent>
-                    </Select>
-                  </label>
-                  <label className="flex items-end gap-2 pb-2">
-                    <Switch checked={routeEnabled} onCheckedChange={setRouteEnabled} />
-                    <span className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.route_enabled)}</span>
-                  </label>
-                </div>
-                <div className="space-y-1 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                  <p>{t(($) => $.ai_gateway.route_editor_hint)}</p>
-                  <p>{t(($) => $.ai_gateway.route_model_hint)}</p>
-                  <p>{t(($) => $.ai_gateway.route_target_order_hint)}</p>
-                </div>
-
-                <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
-                  <Select value={selectedPresetId} onValueChange={(v) => { if (v) applyPreset(v); }}>
-                    <SelectTrigger size="sm"><SelectValue placeholder={t(($) => $.ai_gateway.preset_placeholder)} /></SelectTrigger>
-                    <SelectContent>{presets.map((preset) => <SelectItem key={preset.id} value={preset.id}>{preset.name}</SelectItem>)}</SelectContent>
-                  </Select>
-                  <Button variant="outline" onClick={() => setRouteTargets((items) => [...items, blankTarget(items.length)])}>
-                    <Plus className="h-4 w-4" /> {t(($) => $.ai_gateway.add_target)}
-                  </Button>
-                </div>
-
-                <div className="space-y-3">
-                  {routeTargets.map((target, index) => (
-                    <div key={index} className="rounded-md border p-4 space-y-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-sm font-medium">{t(($) => $.ai_gateway.target_label, { index: index + 1 })}</div>
-                            <Badge variant="outline">{t(($) => $.ai_gateway.auth_mode[target.auth_mode ?? "api_key"])}</Badge>
-                            <Badge variant="outline">{t(($) => $.ai_gateway.upstream_api[target.upstream_api as keyof typeof $.ai_gateway.upstream_api])}</Badge>
-                            {index === 0 ? <Badge variant="secondary">{t(($) => $.ai_gateway.target_primary_badge)}</Badge> : null}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {target.provider} · {target.model || t(($) => $.ai_gateway.target_model_passthrough)}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Switch checked={target.enabled} onCheckedChange={(v) => updateTarget(index, { enabled: v })} />
-                          {routeTargets.length > 1 && <Button variant="ghost" size="icon-sm" onClick={() => setRouteTargets((items) => items.filter((_, i) => i !== index))}><Trash2 className="h-3.5 w-3.5" /></Button>}
-                        </div>
-                      </div>
-                      <div className="space-y-3">
-                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_basic_section)}</div>
-                        <div className="grid gap-3 lg:grid-cols-4">
-                          <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.provider_label)}</span>
-                            <Input value={target.provider} onChange={(e) => updateTarget(index, { provider: e.target.value })} placeholder={t(($) => $.ai_gateway.provider_placeholder)} />
-                          </label>
-                          <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.model_label)}</span>
-                            <Input value={target.model} onChange={(e) => updateTarget(index, { model: e.target.value })} placeholder={t(($) => $.ai_gateway.model_placeholder)} />
-                          </label>
-                          <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.upstream_api_label)}</span>
-                            <Select value={target.upstream_api} onValueChange={(v) => { if (v) updateTarget(index, { upstream_api: v }); }}>
-                              <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
-                              <SelectContent>{UPSTREAM_APIS.map((apiName) => <SelectItem key={apiName} value={apiName}>{t(($) => $.ai_gateway.upstream_api[apiName])}</SelectItem>)}</SelectContent>
-                            </Select>
-                          </label>
-                          <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.base_url_label)}</span>
-                            <Input value={target.base_url} onChange={(e) => updateTarget(index, { base_url: e.target.value })} placeholder={t(($) => $.ai_gateway.base_url_placeholder)} />
-                          </label>
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_auth_section)}</div>
-                        <div className="grid gap-3 lg:grid-cols-3">
-                          <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.auth_mode_label)}</span>
-                            <Select
-                              value={target.auth_mode ?? "api_key"}
-                              onValueChange={(v) => updateTarget(index, v === "custom_headers_cookie" ? {
-                                auth_mode: "custom_headers_cookie",
-                                api_key_env: "",
-                                organization_env: "",
-                                project_env: "",
-                              } : {
-                                auth_mode: "api_key",
-                                api_key_env: target.api_key_env || "OPENAI_API_KEY",
-                                cookie_env: "",
-                                custom_header_envs: [],
-                              })}
-                            >
-                              <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {AUTH_MODES.map((mode) => (
-                                  <SelectItem key={mode} value={mode}>{t(($) => $.ai_gateway.auth_mode[mode])}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </label>
-                          {target.auth_mode === "custom_headers_cookie" ? (
-                            <label className="space-y-1.5 lg:col-span-2">
-                              <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.cookie_env_label)}</span>
-                              <Input value={target.cookie_env ?? ""} onChange={(e) => updateTarget(index, { cookie_env: e.target.value })} placeholder={t(($) => $.ai_gateway.cookie_env_placeholder)} />
-                            </label>
-                          ) : (
-                            <>
-                              <label className="space-y-1.5">
-                                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.api_key_env_label)}</span>
-                                <Input value={target.api_key_env} onChange={(e) => updateTarget(index, { api_key_env: e.target.value })} placeholder={t(($) => $.ai_gateway.api_key_env_placeholder)} />
-                              </label>
-                              <label className="space-y-1.5">
-                                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.organization_env_label)}</span>
-                                <Input value={target.organization_env ?? ""} onChange={(e) => updateTarget(index, { organization_env: e.target.value })} placeholder={t(($) => $.ai_gateway.organization_env_placeholder)} />
-                              </label>
-                            </>
-                          )}
-                        </div>
-                        {target.auth_mode === "api_key" ? (
-                          <div className="grid gap-3 lg:grid-cols-3">
-                            <label className="space-y-1.5 lg:col-span-1">
-                              <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.project_env_label)}</span>
-                              <Input value={target.project_env ?? ""} onChange={(e) => updateTarget(index, { project_env: e.target.value })} placeholder={t(($) => $.ai_gateway.project_env_placeholder)} />
-                            </label>
-                          </div>
-                        ) : null}
-                      </div>
-
-                      {target.auth_mode === "custom_headers_cookie" ? (
-                        <div className="space-y-3 rounded-md border border-dashed p-3">
-                          <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_header_section)}</div>
-                          <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.browser_helper_hint)}</p>
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.custom_headers_label)}</div>
-                              <Button type="button" variant="outline" size="sm" onClick={() => addTargetCustomHeader(index)}>
-                                <Plus className="h-4 w-4" /> {t(($) => $.ai_gateway.add_custom_header)}
-                              </Button>
-                            </div>
-                            {(target.custom_header_envs ?? []).length > 0 ? (
-                              <div className="space-y-2">
-                                {(target.custom_header_envs ?? []).map((header, headerIndex) => (
-                                  <div key={headerIndex} className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                                    <Input
-                                      value={header.header_name}
-                                      onChange={(e) => updateTargetCustomHeader(index, headerIndex, { header_name: e.target.value })}
-                                      placeholder={t(($) => $.ai_gateway.custom_header_name_placeholder)}
-                                    />
-                                    <Input
-                                      value={header.env_name}
-                                      onChange={(e) => updateTargetCustomHeader(index, headerIndex, { env_name: e.target.value })}
-                                      placeholder={t(($) => $.ai_gateway.custom_header_env_placeholder)}
-                                    />
-                                    <Button type="button" variant="ghost" size="icon-sm" onClick={() => removeTargetCustomHeader(index, headerIndex)}>
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </Button>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.custom_headers_empty)}</div>
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <div className="space-y-3">
-                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_runtime_section)}</div>
-                        <div className="grid gap-3 lg:grid-cols-3">
-                          <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.reasoning_effort_label)}</span>
-                            <Select
-                              value={target.reasoning_effort || REASONING_EFFORT_DEFAULT}
-                              onValueChange={(v) => updateTarget(index, { reasoning_effort: v && v !== REASONING_EFFORT_DEFAULT ? v : "" })}
-                            >
-                              <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value={REASONING_EFFORT_DEFAULT}>{t(($) => $.ai_gateway.reasoning_effort_default)}</SelectItem>
-                                {REASONING_EFFORTS.map((effort) => (
-                                  <SelectItem key={effort} value={effort}>{t(($) => $.ai_gateway.reasoning_effort[effort])}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </label>
-                          <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.timeout_label)}</span>
-                            <Input type="number" value={target.timeout_seconds} onChange={(e) => updateTarget(index, { timeout_seconds: Number(e.target.value) || 60 })} />
-                          </label>
-                          <label className="space-y-1.5">
-                            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.weight_label)}</span>
-                            <Input type="number" value={target.weight} onChange={(e) => updateTarget(index, { weight: Number(e.target.value) || 1 })} />
-                          </label>
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="text-xs font-semibold text-muted-foreground">{t(($) => $.ai_gateway.target_pricing_section)}</div>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.input_price_label)}</span>
-                          <Input value={microsToUSD(target.input_price_per_million_micros)} onChange={(e) => updateTarget(index, { input_price_per_million_micros: usdToMicros(e.target.value) })} placeholder={t(($) => $.ai_gateway.input_price_placeholder)} />
-                        </label>
-                        <label className="space-y-1.5">
-                          <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.output_price_label)}</span>
-                          <Input value={microsToUSD(target.output_price_per_million_micros)} onChange={(e) => updateTarget(index, { output_price_per_million_micros: usdToMicros(e.target.value) })} placeholder={t(($) => $.ai_gateway.output_price_placeholder)} />
-                        </label>
-                      </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">{t(($) => $.ai_gateway.route_json_label)}</span>
-                <Textarea
-                  className="min-h-80 font-mono text-xs"
-                  value={routeJson}
-                  onChange={(e) => setRouteJson(e.target.value)}
-                  spellCheck={false}
-                  placeholder={t(($) => $.ai_gateway.route_json_placeholder)}
-                />
-              </label>
-            )}
-
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0 text-xs text-muted-foreground truncate">{routeEditorMode === "ui" ? routePreview : t(($) => $.ai_gateway.route_json_hint)}</div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={probeTarget} disabled={routeEditorMode === "json" || probing || !firstTarget.base_url}>
-                  <Zap className="h-4 w-4" /> {probing ? t(($) => $.ai_gateway.probing) : t(($) => $.ai_gateway.probe)}
-                </Button>
-                {editingRouteId && <Button variant="outline" onClick={() => resetRouteForm()}>{t(($) => $.ai_gateway.cancel_edit)}</Button>}
-                <Button onClick={saveRoute} disabled={savingRoute || (routeEditorMode === "ui" ? !routeAlias.trim() : !routeJson.trim())}>
-                  <Save className="h-4 w-4" /> {savingRoute ? t(($) => $.ai_gateway.saving_route) : t(($) => $.ai_gateway.save_route)}
-                </Button>
-              </div>
-            </div>
-
-            {probeResult && (
-              <div className="flex flex-wrap gap-2 text-xs">
-                <Badge variant={probeResult.models_endpoint.ok ? "secondary" : "outline"}>{t(($) => $.ai_gateway.probe_models, { status: probeResult.models_endpoint.status })}</Badge>
-                <Badge variant={probeResult.responses.ok ? "secondary" : probeResult.responses.supported ? "outline" : "destructive"}>{t(($) => $.ai_gateway.probe_responses, { status: probeResult.responses.status })}</Badge>
-                <Badge variant={probeResult.chat_completions.ok ? "secondary" : probeResult.chat_completions.supported ? "outline" : "destructive"}>{t(($) => $.ai_gateway.probe_chat, { status: probeResult.chat_completions.status })}</Badge>
-                <Badge variant="outline">{t(($) => $.ai_gateway.probe_model_count, { count: probeResult.models.length })}</Badge>
-              </div>
-            )}
-            </CardContent>
-          </Card>
+        {routeEditorOpen && !editingRouteId ? (
+          renderRouteEditorCard()
         ) : (
           <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.route_editor_collapsed_hint)}</p>
         )}
@@ -1108,8 +1400,9 @@ export function AIGatewayTab() {
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">{t(($) => $.ai_gateway.routes_list_hint)}</p>
             {routes.map((route) => (
-              <Card key={route.id}>
-                <CardContent className="space-y-3">
+              <div key={route.id} className="space-y-2">
+              <Card className={editingRouteId === route.id ? "border-primary ring-1 ring-primary/20" : undefined}>
+                <CardContent className="space-y-4">
                   <div className="flex items-start gap-3">
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1120,41 +1413,89 @@ export function AIGatewayTab() {
                       <div className="truncate text-xs text-muted-foreground">{route.targets.map(targetLabel).join(" -> ")}</div>
                     </div>
                     <div className="flex shrink-0 gap-2">
-                      <Button variant="outline" size="sm" onClick={() => editRoute(route)}>{t(($) => $.ai_gateway.edit_route)}</Button>
-                      <Button variant="ghost" size="icon-sm" onClick={() => deleteRoute(route.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      <Button type="button" variant="outline" size="sm" onClick={() => editRoute(route)}>{t(($) => $.ai_gateway.edit_route)}</Button>
+                      <Button type="button" variant="ghost" size="icon-sm" onClick={() => deleteRoute(route.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                     </div>
-                  </div>
+                </div>
 
-                  <div className="space-y-2">
-                    {route.targets.map((target, index) => (
-                      <div key={target.id ?? `${route.id}-${index}`} className="rounded-md border bg-muted/20 px-3 py-2">
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className="font-medium text-foreground">{t(($) => $.ai_gateway.target_label, { index: index + 1 })}</span>
-                          {index === 0 ? <Badge variant="secondary">{t(($) => $.ai_gateway.target_primary_badge)}</Badge> : null}
-                          <Badge variant="outline">{t(($) => $.ai_gateway.auth_mode[target.auth_mode ?? "api_key"])}</Badge>
-                          <Badge variant="outline">{t(($) => $.ai_gateway.upstream_api[target.upstream_api as keyof typeof $.ai_gateway.upstream_api])}</Badge>
-                          {!target.enabled ? <Badge variant="outline">{t(($) => $.ai_gateway.route_target_disabled)}</Badge> : null}
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                          <span>{target.provider}</span>
-                          <span>{target.model || t(($) => $.ai_gateway.target_model_passthrough)}</span>
-                          <span>{t(($) => $.ai_gateway.route_target_auth_summary, {
-                            value: target.auth_mode === "custom_headers_cookie"
-                              ? [
-                                target.cookie_env ? `Cookie ${target.cookie_env}` : "",
-                                (target.custom_header_envs?.length ?? 0) > 0 ? t(($) => $.ai_gateway.route_target_header_count, { count: target.custom_header_envs?.length ?? 0 }) : "",
-                              ].filter(Boolean).join(" · ")
-                              : target.api_key_env,
-                          })}</span>
-                          <span>{t(($) => $.ai_gateway.route_target_timeout, { seconds: target.timeout_seconds })}</span>
-                          <span>{t(($) => $.ai_gateway.route_target_weight, { weight: target.weight })}</span>
-                          {target.reasoning_effort ? <span>{t(($) => $.ai_gateway.route_target_reasoning, { effort: t(($) => $.ai_gateway.reasoning_effort[target.reasoning_effort as keyof typeof $.ai_gateway.reasoning_effort]) })}</span> : null}
-                        </div>
-                      </div>
-                    ))}
+                  <div className="rounded-md border bg-muted/10 p-3">
+                    <div className="mb-3 text-xs font-medium text-foreground">Execution Path</div>
+                    <div className="space-y-3">
+                      {(() => {
+                        const effectiveTargets = appendInheritedWildcardFallbackTargets(routes, route);
+                        return effectiveTargets.map(({ target, inherited }, index) => {
+                        const inheritedPoolSource = findWildcardHEPoolSource(routes, route.alias, target);
+                        const poolVisual = targetPoolVisual(target, inheritedPoolSource);
+                        return (
+                          <div key={target.id ?? `${route.id}-${index}`} className="space-y-2">
+                            <div className="rounded-md border bg-background px-3 py-3">
+                              <div className="flex flex-wrap items-center gap-2 text-xs">
+                                <span className="font-medium text-foreground">{t(($) => $.ai_gateway.target_label, { index: index + 1 })}</span>
+                                {index === 0 ? <Badge variant="secondary">{t(($) => $.ai_gateway.target_primary_badge)}</Badge> : null}
+                                {inherited ? <Badge variant="outline">inherit *</Badge> : null}
+                                <Badge variant="outline">{target.provider}</Badge>
+                                <Badge variant="outline">{target.model || t(($) => $.ai_gateway.target_model_passthrough)}</Badge>
+                                <Badge variant="outline">{t(($) => $.ai_gateway.upstream_api[target.upstream_api as keyof typeof $.ai_gateway.upstream_api])}</Badge>
+                                {!target.enabled ? <Badge variant="outline">{t(($) => $.ai_gateway.route_target_disabled)}</Badge> : null}
+                                {poolVisual ? (
+                                  <Badge variant={poolVisual.inherited ? "outline" : "secondary"}>
+                                    {poolVisual.inherited
+                                      ? `HE pool ${poolVisual.count} (inherit *)`
+                                      : `HE pool ${poolVisual.count}`}
+                                  </Badge>
+                                ) : null}
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                <span>{t(($) => $.ai_gateway.route_target_auth_summary, {
+                                  value: target.auth_mode === "custom_headers_cookie"
+                                    ? [
+                                      target.cookie_env ? `Cookie ${target.cookie_env}` : "",
+                                      (target.custom_header_envs?.length ?? 0) > 0 ? t(($) => $.ai_gateway.route_target_header_count, { count: target.custom_header_envs?.length ?? 0 }) : "",
+                                    ].filter(Boolean).join(" · ")
+                                    : poolVisual
+                                      ? poolVisual.inherited
+                                        ? `inherit * HE pool (${poolVisual.count})`
+                                        : t(($) => $.ai_gateway.route_target_he_key_pool_count, { count: poolVisual.count })
+                                      : target.api_key_masked
+                                        ? t(($) => $.ai_gateway.api_key_masked, { masked: target.api_key_masked })
+                                        : target.api_key_env,
+                                })}</span>
+                                <span>{t(($) => $.ai_gateway.route_target_timeout, { seconds: target.timeout_seconds })}</span>
+                                <span>{t(($) => $.ai_gateway.route_target_weight, { weight: target.weight })}</span>
+                                {target.reasoning_effort ? <span>{t(($) => $.ai_gateway.route_target_reasoning, { effort: t(($) => $.ai_gateway.reasoning_effort[target.reasoning_effort as keyof typeof $.ai_gateway.reasoning_effort]) })}</span> : null}
+                              </div>
+                              {poolVisual?.inherited && inheritedPoolSource ? (
+                                <div className="mt-2 text-xs text-muted-foreground">
+                                  {"inherit from * -> "}
+                                  {inheritedPoolSource.provider}/{inheritedPoolSource.model || "*"}
+                                </div>
+                              ) : null}
+                              {inherited && !poolVisual?.inherited ? (
+                                <div className="mt-2 text-xs text-muted-foreground">
+                                  {"shared fallback from *"}
+                                </div>
+                              ) : null}
+                            </div>
+                            {index < effectiveTargets.length - 1 ? (
+                              <div className="flex items-center gap-2 pl-2 text-xs text-muted-foreground">
+                                <ArrowRight className="h-3.5 w-3.5" />
+                                <span>
+                                  {target.provider.trim().toLowerCase() === "he-tokenapi" && poolVisual
+                                    ? "quota exhausted / pool unavailable -> fallback"
+                                    : "retryable failure -> fallback"}
+                                </span>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      });
+                      })()}
+                    </div>
                   </div>
                 </CardContent>
               </Card>
+              {editingRouteId === route.id ? renderRouteEditorCard() : null}
+              </div>
             ))}
           </div>
         ) : (

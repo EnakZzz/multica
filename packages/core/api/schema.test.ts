@@ -232,6 +232,62 @@ describe("ApiClient schema fallback", () => {
       });
       expect(res.plans[0]?.spec_approved_at).toBeNull();
       expect(res.plans[0]?.committed_spec).toBeNull();
+      expect(res.plans[0]?.harness_strategy).toEqual({
+        mode: "none",
+        summary: "",
+        rationale: "",
+        stop_condition: "",
+        parallelism: 1,
+        requires_isolated_worktree: false,
+      });
+    });
+
+    it("parses plan harness strategy and downgrades unknown modes", async () => {
+      stubFetchJson({
+        plans: [
+          {
+            id: "plan-1",
+            workspace_id: "ws-1",
+            title: "Plan",
+            prompt: "Build it",
+            status: "ready",
+            planner_agent_id: "agent-1",
+            harness_strategy: {
+              mode: "fan_out_synthesize",
+              summary: "Split work across agents.",
+              rationale: "Multiple modules need parallel implementation.",
+              stop_condition: "All branches merged",
+              parallelism: 3,
+              requires_isolated_worktree: true,
+            },
+          },
+          {
+            id: "plan-2",
+            workspace_id: "ws-1",
+            title: "Legacy plan",
+            prompt: "Build it",
+            status: "ready",
+            planner_agent_id: "agent-1",
+            harness_strategy: { mode: "future_mode", parallelism: -1 },
+          },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPlans();
+      expect(res.plans[0]?.harness_strategy).toMatchObject({
+        mode: "fan_out_synthesize",
+        summary: "Split work across agents.",
+        parallelism: 3,
+        requires_isolated_worktree: true,
+      });
+      expect(res.plans[1]?.harness_strategy).toEqual({
+        mode: "none",
+        summary: "",
+        rationale: "",
+        stop_condition: "",
+        parallelism: 1,
+        requires_isolated_worktree: false,
+      });
     });
 
     it("parses plan spec clarification history", async () => {
@@ -340,6 +396,11 @@ describe("ApiClient schema fallback", () => {
                 iteration_title: "Memory core",
                 iteration_branch_name: "feature/lost-pet-loop-2-memory-core",
                 branch_name: "feature/lost-pet-loop-2-memory-core",
+                execution_routing: {
+                  requires_isolated_worktree: true,
+                  branch_policy: "per_iteration",
+                  merge_policy: "pr_required",
+                },
               },
             ],
           },
@@ -352,6 +413,11 @@ describe("ApiClient schema fallback", () => {
         iteration_title: "Memory core",
         iteration_branch_name: "feature/lost-pet-loop-2-memory-core",
         branch_name: "feature/lost-pet-loop-2-memory-core",
+        execution_routing: {
+          requires_isolated_worktree: true,
+          branch_policy: "per_iteration",
+          merge_policy: "pr_required",
+        },
       });
     });
   });
@@ -451,6 +517,71 @@ describe("ApiClient schema fallback", () => {
         editable: true,
         deletable: true,
         nodes: [],
+      });
+    });
+
+    it("parses pipeline node harness strategy with safe defaults", async () => {
+      stubFetchJson({
+        pipelines: [
+          {
+            id: "pipe-1",
+            workspace_id: "ws-1",
+            name: "Production",
+            nodes: [
+              {
+                id: "node-1",
+                pipeline_id: "pipe-1",
+                key: "review",
+                type: "code_review",
+                title: "Review",
+                harness_strategy: {
+                  mode: "adversarial_verification",
+                  summary: "Review against implementation.",
+                  parallelism: 2,
+                },
+                execution_routing: {
+                  requires_isolated_worktree: true,
+                  branch_policy: "per_agent",
+                  merge_policy: "manual",
+                },
+              },
+              {
+                id: "node-2",
+                pipeline_id: "pipe-1",
+                key: "legacy",
+                type: "issue",
+                title: "Legacy",
+                harness_strategy: "bad-shape",
+                execution_routing: "bad-shape",
+              },
+            ],
+          },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listPipelines();
+      expect(res.pipelines[0]?.nodes[0]?.harness_strategy).toMatchObject({
+        mode: "adversarial_verification",
+        summary: "Review against implementation.",
+        parallelism: 2,
+      });
+      expect(res.pipelines[0]?.nodes[0]?.execution_routing).toEqual({
+        requires_isolated_worktree: true,
+        branch_policy: "per_agent",
+        merge_policy: "manual",
+      });
+      expect(res.pipelines[0]?.nodes[1]?.harness_strategy).toEqual({
+        mode: "none",
+        summary: "",
+        rationale: "",
+        stop_condition: "",
+        parallelism: 1,
+        requires_isolated_worktree: false,
+      });
+      expect(res.pipelines[0]?.nodes[1]?.execution_routing).toEqual({
+        requires_isolated_worktree: false,
+        branch_policy: "auto",
+        merge_policy: "none",
       });
     });
 

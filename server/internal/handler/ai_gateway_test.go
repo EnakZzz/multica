@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/aigateway"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -97,6 +98,137 @@ func TestNormalizeAIGatewayKeyEmailRequiresPlainEmail(t *testing.T) {
 				t.Fatalf("email: want %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestPrepareAIGatewayTargetsForSavePreservesExistingPoolKey(t *testing.T) {
+	targets, err := prepareAIGatewayTargetsForSave([]aiGatewayTarget{{
+		ID:       "target-1",
+		Provider: "he-tokenapi",
+		AuthMode: aigateway.AuthModeAPIKey,
+		APIKeyPool: []aigateway.APIKeyPoolItem{{
+			ID:            "pool-1",
+			Label:         "team-a",
+			KeyMasked:     "he-k****1234",
+			SharedByEmail: "team-a@example.com",
+			Enabled:       true,
+		}},
+	}}, map[string]aiGatewayTarget{
+		"target-1": {
+			ID:       "target-1",
+			Provider: "he-tokenapi",
+			AuthMode: aigateway.AuthModeAPIKey,
+			APIKeyPool: []aigateway.APIKeyPoolItem{{
+				ID:            "pool-1",
+				Label:         "team-a",
+				APIKey:        "secret-value",
+				KeyMasked:     "he-k****1234",
+				SharedByEmail: "team-a@example.com",
+				Enabled:       true,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepareAIGatewayTargetsForSave: %v", err)
+	}
+	if len(targets) != 1 || len(targets[0].APIKeyPool) != 1 {
+		t.Fatalf("unexpected prepared targets: %+v", targets)
+	}
+	if targets[0].APIKeyPool[0].APIKey != "secret-value" {
+		t.Fatalf("expected existing api key to be preserved, got %+v", targets[0].APIKeyPool[0])
+	}
+}
+
+func TestPrepareAIGatewayTargetsForSavePreservesExistingSingleAPIKey(t *testing.T) {
+	targets, err := prepareAIGatewayTargetsForSave([]aiGatewayTarget{{
+		ID:        "target-1",
+		Provider:  "openai",
+		AuthMode:  aigateway.AuthModeAPIKey,
+		APIKeyEnv: "OPENAI_API_KEY",
+		APIKey:    aiGatewayKeepStoredAPIKeySentinel,
+	}}, map[string]aiGatewayTarget{
+		"target-1": {
+			ID:        "target-1",
+			Provider:  "openai",
+			AuthMode:  aigateway.AuthModeAPIKey,
+			APIKeyEnv: "OPENAI_API_KEY",
+			APIKey:    "sk-stored-value",
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepareAIGatewayTargetsForSave: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("unexpected prepared targets: %+v", targets)
+	}
+	if targets[0].APIKey != "sk-stored-value" {
+		t.Fatalf("expected existing api key to be preserved, got %+v", targets[0])
+	}
+}
+
+func TestPrepareAIGatewayTargetsForSaveRejectsDuplicatePoolLabels(t *testing.T) {
+	_, err := prepareAIGatewayTargetsForSave([]aiGatewayTarget{{
+		Provider: "he-tokenapi",
+		AuthMode: aigateway.AuthModeAPIKey,
+		APIKeyPool: []aigateway.APIKeyPoolItem{
+			{Label: "team-a", APIKey: "key-1", SharedByEmail: "a@example.com", Enabled: true},
+			{Label: "Team-A", APIKey: "key-2", SharedByEmail: "b@example.com", Enabled: true},
+		},
+	}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "duplicate api_key_pool label") {
+		t.Fatalf("expected duplicate label error, got %v", err)
+	}
+}
+
+func TestAIGatewayRoutesToResponseMasksPoolKeys(t *testing.T) {
+	resp := aiGatewayRoutesToResponse([]aiGatewayRoute{{
+		ID:    "route-1",
+		Alias: "openai/gpt-5.5",
+		Targets: []aiGatewayTarget{{
+			ID:        "target-1",
+			Provider:  "he-tokenapi",
+			AuthMode:  aigateway.AuthModeAPIKey,
+			APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+			APIKeyPool: []aigateway.APIKeyPoolItem{{
+				ID:            "pool-1",
+				Label:         "team-a",
+				APIKey:        "secret-value",
+				KeyMasked:     "secr****alue",
+				SharedByEmail: "a@example.com",
+				Enabled:       true,
+			}},
+		}},
+	}})
+	if len(resp) != 1 || len(resp[0].Targets) != 1 || len(resp[0].Targets[0].APIKeyPool) != 1 {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	item := resp[0].Targets[0].APIKeyPool[0]
+	if item.APIKey != "" {
+		t.Fatalf("response should not expose raw api key: %+v", item)
+	}
+	if item.KeyMasked != "secr****alue" {
+		t.Fatalf("expected masked key, got %+v", item)
+	}
+}
+
+func TestAIGatewayRoutesToResponseMasksSingleAPIKey(t *testing.T) {
+	resp := aiGatewayRoutesToResponse([]aiGatewayRoute{{
+		ID:    "route-1",
+		Alias: "gpt-5-codex",
+		Targets: []aiGatewayTarget{{
+			ID:        "target-1",
+			Provider:  "openai",
+			AuthMode:  aigateway.AuthModeAPIKey,
+			APIKeyEnv: "OPENAI_API_KEY",
+			APIKey:    "sk-stored-value",
+		}},
+	}})
+	if len(resp) != 1 || len(resp[0].Targets) != 1 {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	target := resp[0].Targets[0]
+	if target.APIKeyMasked != "sk-s*******alue" {
+		t.Fatalf("expected masked key, got %+v", target)
 	}
 }
 

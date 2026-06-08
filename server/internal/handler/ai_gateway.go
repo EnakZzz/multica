@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/aigateway"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -27,6 +28,7 @@ const (
 	aiGatewayDefaultURL                 = "https://api.openai.com/v1"
 	aiGatewayReportDefaultWorkspaceSlug = "local-agents"
 	aiGatewayUsageSummaryTimezone       = "Asia/Shanghai"
+	aiGatewayKeepStoredAPIKeySentinel   = "__MULTICA_KEEP_STORED_API_KEY__"
 )
 
 type aiGatewayKeyResponse struct {
@@ -78,13 +80,13 @@ type aiGatewayTargetResponse struct {
 	BaseURL                     string                      `json:"base_url"`
 	AuthMode                    string                      `json:"auth_mode,omitempty"`
 	APIKeyEnv                   string                      `json:"api_key_env"`
+	APIKeyMasked                string                      `json:"api_key_masked,omitempty"`
+	APIKeyPool                  []aigateway.APIKeyPoolItem  `json:"api_key_pool,omitempty"`
 	CookieEnv                   string                      `json:"cookie_env,omitempty"`
 	CustomHeaderEnvs            []aigateway.CustomHeaderEnv `json:"custom_header_envs,omitempty"`
 	Model                       string                      `json:"model"`
 	UpstreamAPI                 string                      `json:"upstream_api"`
 	ReasoningEffort             string                      `json:"reasoning_effort,omitempty"`
-	OrganizationEnv             string                      `json:"organization_env,omitempty"`
-	ProjectEnv                  string                      `json:"project_env,omitempty"`
 	TimeoutSeconds              int                         `json:"timeout_seconds"`
 	Weight                      int                         `json:"weight"`
 	Priority                    int                         `json:"priority"`
@@ -106,13 +108,14 @@ type saveAIGatewayRouteTargetForm struct {
 	BaseURL                     string                      `json:"base_url"`
 	AuthMode                    string                      `json:"auth_mode,omitempty"`
 	APIKeyEnv                   string                      `json:"api_key_env"`
+	APIKey                      string                      `json:"api_key,omitempty"`
+	APIKeyMasked                string                      `json:"api_key_masked,omitempty"`
+	APIKeyPool                  []aigateway.APIKeyPoolItem  `json:"api_key_pool,omitempty"`
 	CookieEnv                   string                      `json:"cookie_env,omitempty"`
 	CustomHeaderEnvs            []aigateway.CustomHeaderEnv `json:"custom_header_envs,omitempty"`
 	Model                       string                      `json:"model"`
 	UpstreamAPI                 string                      `json:"upstream_api"`
 	ReasoningEffort             string                      `json:"reasoning_effort,omitempty"`
-	OrganizationEnv             string                      `json:"organization_env,omitempty"`
-	ProjectEnv                  string                      `json:"project_env,omitempty"`
 	TimeoutSeconds              int                         `json:"timeout_seconds,omitempty"`
 	Weight                      int                         `json:"weight,omitempty"`
 	Priority                    int                         `json:"priority,omitempty"`
@@ -122,10 +125,12 @@ type saveAIGatewayRouteTargetForm struct {
 }
 
 type aiGatewayProbeRequest struct {
+	TargetID         string                      `json:"target_id,omitempty"`
 	BaseURL          string                      `json:"base_url"`
 	AuthMode         string                      `json:"auth_mode,omitempty"`
 	APIKeyEnv        string                      `json:"api_key_env,omitempty"`
 	APIKey           string                      `json:"api_key,omitempty"`
+	APIKeyPool       []aigateway.APIKeyPoolItem  `json:"api_key_pool,omitempty"`
 	CookieEnv        string                      `json:"cookie_env,omitempty"`
 	CustomHeaderEnvs []aigateway.CustomHeaderEnv `json:"custom_header_envs,omitempty"`
 	Model            string                      `json:"model,omitempty"`
@@ -432,6 +437,11 @@ func (h *Handler) CreateAIGatewayRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	route.Targets, err = prepareAIGatewayTargetsForSave(route.Targets, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	var routeID pgtype.UUID
 	err = h.DB.QueryRow(r.Context(), `
 		INSERT INTO ai_gateway_route (workspace_id, alias, strategy, enabled)
@@ -443,7 +453,7 @@ func (h *Handler) CreateAIGatewayRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, target := range route.Targets {
-		if err := insertAIGatewayRouteTarget(r.Context(), h.DB, routeID, target, i); err != nil {
+		if _, err := insertAIGatewayRouteTarget(r.Context(), h.DB, routeID, target, i); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create AI gateway route target")
 			return
 		}
@@ -485,6 +495,31 @@ func (h *Handler) UpdateAIGatewayRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	existingRoutes, err := h.loadAIGatewayRoutesFromDB(r.Context(), workspaceID, true)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load existing AI gateway route")
+		return
+	}
+	var existingRoute *aiGatewayRoute
+	for i := range existingRoutes {
+		if existingRoutes[i].ID == uuidToString(routeID) {
+			existingRoute = &existingRoutes[i]
+			break
+		}
+	}
+	if existingRoute == nil {
+		writeError(w, http.StatusNotFound, "AI gateway route not found")
+		return
+	}
+	existingTargetsByID := make(map[string]aiGatewayTarget, len(existingRoute.Targets))
+	for _, existingTarget := range existingRoute.Targets {
+		existingTargetsByID[existingTarget.ID] = existingTarget
+	}
+	route.Targets, err = prepareAIGatewayTargetsForSave(route.Targets, existingTargetsByID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	tag, err := h.DB.Exec(r.Context(), `
 		UPDATE ai_gateway_route
 		SET alias = $3, strategy = $4, enabled = $5, updated_at = now()
@@ -503,7 +538,7 @@ func (h *Handler) UpdateAIGatewayRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, target := range route.Targets {
-		if err := insertAIGatewayRouteTarget(r.Context(), h.DB, routeID, target, i); err != nil {
+		if _, err := insertAIGatewayRouteTarget(r.Context(), h.DB, routeID, target, i); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update AI gateway route target")
 			return
 		}
@@ -553,6 +588,7 @@ func (h *Handler) ProbeAIGatewayProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	req.BaseURL = strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	req.TargetID = strings.TrimSpace(req.TargetID)
 	req.AuthMode = strings.TrimSpace(req.AuthMode)
 	req.APIKeyEnv = strings.TrimSpace(req.APIKeyEnv)
 	req.APIKey = strings.TrimSpace(req.APIKey)
@@ -566,8 +602,20 @@ func (h *Handler) ProbeAIGatewayProvider(w http.ResponseWriter, r *http.Request)
 		BaseURL:          req.BaseURL,
 		AuthMode:         req.AuthMode,
 		APIKeyEnv:        req.APIKeyEnv,
+		APIKeyPool:       req.APIKeyPool,
 		CookieEnv:        req.CookieEnv,
 		CustomHeaderEnvs: req.CustomHeaderEnvs,
+	}
+	if target.AuthMode == "" {
+		target.AuthMode = aigateway.AuthModeAPIKey
+	}
+	if len(target.APIKeyPool) > 0 && req.TargetID != "" && h.DB != nil {
+		if storedTarget, ok, err := h.loadAIGatewayTargetByID(r.Context(), req.TargetID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load AI gateway target")
+			return
+		} else if ok {
+			target.APIKeyPool = mergeAIGatewayPoolProbeSecrets(target.APIKeyPool, storedTarget.APIKeyPool)
+		}
 	}
 	authHeaders := make(http.Header)
 	if req.APIKey != "" {
@@ -1038,6 +1086,10 @@ func isAIGatewayAuthModeColumnError(err error) bool {
 		strings.Contains(msg, "custom_header_envs")
 }
 
+func isAIGatewayAPIKeyColumnError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "api_key")
+}
+
 func aiGatewayUsageSummaryStartExpr(daysParam string) string {
 	return fmt.Sprintf(`(
 		(
@@ -1348,6 +1400,62 @@ func (h *Handler) loadAIGatewayRoutes(ctx context.Context, workspaceID string) (
 func (h *Handler) loadAIGatewayRoutesFromDB(ctx context.Context, workspaceID string, includeDisabled bool) ([]aiGatewayRoute, error) {
 	return h.aiGatewayRuntime().LoadRoutesFromDB(ctx, workspaceID, includeDisabled)
 }
+
+func (h *Handler) loadAIGatewayTargetByID(ctx context.Context, targetID string) (aiGatewayTarget, bool, error) {
+	if h.DB == nil {
+		return aiGatewayTarget{}, false, nil
+	}
+	var workspaceID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		SELECT r.workspace_id
+		FROM ai_gateway_route_target t
+		JOIN ai_gateway_route r ON r.id = t.route_id
+		WHERE t.id = $1
+	`, parseUUID(targetID)).Scan(&workspaceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return aiGatewayTarget{}, false, nil
+		}
+		return aiGatewayTarget{}, false, err
+	}
+	routes, err := h.loadAIGatewayRoutesFromDB(ctx, uuidToString(workspaceID), true)
+	if err != nil {
+		return aiGatewayTarget{}, false, err
+	}
+	for _, route := range routes {
+		for _, target := range route.Targets {
+			if target.ID == targetID {
+				return target, true, nil
+			}
+		}
+	}
+	return aiGatewayTarget{}, false, nil
+}
+
+func mergeAIGatewayPoolProbeSecrets(requested []aigateway.APIKeyPoolItem, stored []aigateway.APIKeyPoolItem) []aigateway.APIKeyPoolItem {
+	if len(requested) == 0 {
+		return nil
+	}
+	storedByID := make(map[string]aigateway.APIKeyPoolItem, len(stored))
+	for _, item := range stored {
+		storedByID[item.ID] = item
+	}
+	merged := make([]aigateway.APIKeyPoolItem, 0, len(requested))
+	for _, item := range requested {
+		next := item
+		if next.APIKey == "" {
+			if storedItem, ok := storedByID[next.ID]; ok {
+				next.APIKey = storedItem.APIKey
+				if next.KeyMasked == "" {
+					next.KeyMasked = storedItem.KeyMasked
+				}
+			}
+		}
+		merged = append(merged, next)
+	}
+	return merged
+}
+
 func (h *Handler) AIGatewayModels(w http.ResponseWriter, r *http.Request) {
 	h.aiGatewayRuntime().Models(w, r)
 }
@@ -1403,19 +1511,22 @@ func normalizeAIGatewayRouteRequest(req saveAIGatewayRouteRequest) (aiGatewayRou
 			BaseURL:                     strings.TrimRight(strings.TrimSpace(raw.BaseURL), "/"),
 			AuthMode:                    strings.TrimSpace(raw.AuthMode),
 			APIKeyEnv:                   strings.TrimSpace(raw.APIKeyEnv),
+			APIKey:                      strings.TrimSpace(raw.APIKey),
+			APIKeyPool:                  raw.APIKeyPool,
 			CookieEnv:                   strings.TrimSpace(raw.CookieEnv),
 			CustomHeaderEnvs:            raw.CustomHeaderEnvs,
 			Model:                       strings.TrimSpace(raw.Model),
 			UpstreamAPI:                 strings.TrimSpace(raw.UpstreamAPI),
 			ReasoningEffort:             strings.TrimSpace(raw.ReasoningEffort),
-			OrganizationEnv:             strings.TrimSpace(raw.OrganizationEnv),
-			ProjectEnv:                  strings.TrimSpace(raw.ProjectEnv),
 			TimeoutSeconds:              raw.TimeoutSeconds,
 			Weight:                      raw.Weight,
 			Priority:                    raw.Priority,
 			Enabled:                     true,
 			InputPricePerMillionMicros:  raw.InputPricePerMillionMicros,
 			OutputPricePerMillionMicros: raw.OutputPricePerMillionMicros,
+		}
+		if target.APIKey == "" && strings.TrimSpace(raw.APIKeyMasked) != "" {
+			target.APIKey = aiGatewayKeepStoredAPIKeySentinel
 		}
 		if target.Provider == "" {
 			target.Provider = "openai-compatible"
@@ -1438,7 +1549,7 @@ func normalizeAIGatewayRouteRequest(req saveAIGatewayRouteRequest) (aiGatewayRou
 	return routes[0], nil
 }
 
-func insertAIGatewayRouteTarget(ctx context.Context, db dbExecutor, routeID pgtype.UUID, target aiGatewayTarget, fallbackPriority int) error {
+func insertAIGatewayRouteTarget(ctx context.Context, db dbExecutor, routeID pgtype.UUID, target aiGatewayTarget, fallbackPriority int) (pgtype.UUID, error) {
 	priority := target.Priority
 	if priority == 0 {
 		priority = fallbackPriority
@@ -1447,33 +1558,156 @@ func insertAIGatewayRouteTarget(ctx context.Context, db dbExecutor, routeID pgty
 	if len(target.CustomHeaderEnvs) > 0 {
 		data, err := json.Marshal(target.CustomHeaderEnvs)
 		if err != nil {
-			return fmt.Errorf("marshal custom_header_envs: %w", err)
+			return pgtype.UUID{}, fmt.Errorf("marshal custom_header_envs: %w", err)
 		}
 		customHeaderEnvs = data
 	}
-	_, err := db.Exec(ctx, `
+	var targetID pgtype.UUID
+	err := db.QueryRow(ctx, `
 		INSERT INTO ai_gateway_route_target (
-			route_id, provider, base_url, auth_mode, api_key_env, cookie_env, custom_header_envs, model, upstream_api,
-			reasoning_effort, organization_env, project_env, timeout_seconds, weight, priority, enabled,
+			route_id, provider, base_url, auth_mode, api_key_env, api_key, cookie_env, custom_header_envs, model, upstream_api,
+			reasoning_effort, timeout_seconds, weight, priority, enabled,
 			input_price_per_million_micros, output_price_per_million_micros
 		)
-		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7::jsonb, $8, $9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), $13, $14, $15, $16, $17, $18)
-	`, routeID, target.Provider, target.BaseURL, target.AuthMode, target.APIKeyEnv, target.CookieEnv, string(customHeaderEnvs), target.Model, target.UpstreamAPI,
-		target.ReasoningEffort, target.OrganizationEnv, target.ProjectEnv, target.TimeoutSeconds, target.Weight, priority, target.Enabled,
-		target.InputPricePerMillionMicros, target.OutputPricePerMillionMicros)
-	if err != nil && isAIGatewayAuthModeColumnError(err) {
-		_, err = db.Exec(ctx, `
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''), $8::jsonb, $9, $10, NULLIF($11, ''), $12, $13, $14, $15, $16, $17)
+		RETURNING id
+	`, routeID, target.Provider, target.BaseURL, target.AuthMode, target.APIKeyEnv, target.APIKey, target.CookieEnv, string(customHeaderEnvs), target.Model, target.UpstreamAPI,
+		target.ReasoningEffort, target.TimeoutSeconds, target.Weight, priority, target.Enabled,
+		target.InputPricePerMillionMicros, target.OutputPricePerMillionMicros).Scan(&targetID)
+	if err != nil && isAIGatewayAPIKeyColumnError(err) {
+		err = db.QueryRow(ctx, `
 			INSERT INTO ai_gateway_route_target (
-				route_id, provider, base_url, api_key_env, model, upstream_api,
-				reasoning_effort, organization_env, project_env, timeout_seconds, weight, priority, enabled,
+				route_id, provider, base_url, auth_mode, api_key_env, cookie_env, custom_header_envs, model, upstream_api,
+				reasoning_effort, timeout_seconds, weight, priority, enabled,
 				input_price_per_million_micros, output_price_per_million_micros
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), $10, $11, $12, $13, $14, $15)
-		`, routeID, target.Provider, target.BaseURL, target.APIKeyEnv, target.Model, target.UpstreamAPI,
-			target.ReasoningEffort, target.OrganizationEnv, target.ProjectEnv, target.TimeoutSeconds, target.Weight, priority, target.Enabled,
-			target.InputPricePerMillionMicros, target.OutputPricePerMillionMicros)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7::jsonb, $8, $9, NULLIF($10, ''), $11, $12, $13, $14, $15)
+			RETURNING id
+		`, routeID, target.Provider, target.BaseURL, target.AuthMode, target.APIKeyEnv, target.CookieEnv, string(customHeaderEnvs), target.Model, target.UpstreamAPI,
+			target.ReasoningEffort, target.TimeoutSeconds, target.Weight, priority, target.Enabled,
+			target.InputPricePerMillionMicros, target.OutputPricePerMillionMicros).Scan(&targetID)
 	}
-	return err
+	if err != nil && isAIGatewayAuthModeColumnError(err) {
+		err = db.QueryRow(ctx, `
+			INSERT INTO ai_gateway_route_target (
+				route_id, provider, base_url, api_key_env, model, upstream_api,
+				reasoning_effort, timeout_seconds, weight, priority, enabled,
+				input_price_per_million_micros, output_price_per_million_micros
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, $9, $10, $11, $12)
+			RETURNING id
+		`, routeID, target.Provider, target.BaseURL, target.APIKeyEnv, target.Model, target.UpstreamAPI,
+			target.ReasoningEffort, target.TimeoutSeconds, target.Weight, priority, target.Enabled,
+			target.InputPricePerMillionMicros, target.OutputPricePerMillionMicros).Scan(&targetID)
+	}
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	if len(target.APIKeyPool) == 0 {
+		return targetID, nil
+	}
+	for _, item := range target.APIKeyPool {
+		if _, err := db.Exec(ctx, `
+			INSERT INTO ai_gateway_route_target_api_key_pool (
+				route_target_id, label, api_key, key_masked, shared_by_email, enabled, reenable_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, targetID, item.Label, item.APIKey, item.KeyMasked, item.SharedByEmail, item.Enabled, nullTimestamp(item.ReenableAt)); err != nil {
+			return pgtype.UUID{}, err
+		}
+	}
+	return targetID, nil
+}
+
+func prepareAIGatewayTargetsForSave(targets []aiGatewayTarget, existingByID map[string]aiGatewayTarget) ([]aiGatewayTarget, error) {
+	prepared := make([]aiGatewayTarget, 0, len(targets))
+	for _, target := range targets {
+		next := target
+		var existing *aiGatewayTarget
+		if existingByID != nil {
+			if found, ok := existingByID[target.ID]; ok {
+				existing = &found
+			}
+		}
+		if next.APIKey == aiGatewayKeepStoredAPIKeySentinel {
+			next.APIKey = ""
+			if existing != nil {
+				next.APIKey = existing.APIKey
+			}
+		}
+		resolvedPool, err := resolveAIGatewayTargetAPIKeyPool(next, existing)
+		if err != nil {
+			return nil, err
+		}
+		next.APIKeyPool = resolvedPool
+		prepared = append(prepared, next)
+	}
+	return prepared, nil
+}
+
+func resolveAIGatewayTargetAPIKeyPool(target aiGatewayTarget, existing *aiGatewayTarget) ([]aigateway.APIKeyPoolItem, error) {
+	if len(target.APIKeyPool) == 0 {
+		return nil, nil
+	}
+	existingByID := map[string]aigateway.APIKeyPoolItem{}
+	if existing != nil {
+		for _, item := range existing.APIKeyPool {
+			existingByID[item.ID] = item
+		}
+	}
+	seenLabels := map[string]struct{}{}
+	seenKeys := map[string]struct{}{}
+	resolved := make([]aigateway.APIKeyPoolItem, 0, len(target.APIKeyPool))
+	for _, item := range target.APIKeyPool {
+		current := item
+		if current.APIKey == "" {
+			existingItem, ok := existingByID[current.ID]
+			if !ok || existingItem.APIKey == "" {
+				return nil, fmt.Errorf("api_key is required for %q", current.Label)
+			}
+			current.APIKey = existingItem.APIKey
+			if current.KeyMasked == "" {
+				current.KeyMasked = existingItem.KeyMasked
+			}
+		}
+		if current.KeyMasked == "" {
+			current.KeyMasked = maskAIGatewayAPIKey(current.APIKey)
+		}
+		labelKey := strings.ToLower(strings.TrimSpace(current.Label))
+		if _, exists := seenLabels[labelKey]; exists {
+			return nil, fmt.Errorf("duplicate api_key_pool label %q", current.Label)
+		}
+		seenLabels[labelKey] = struct{}{}
+		if _, exists := seenKeys[current.APIKey]; exists {
+			return nil, fmt.Errorf("duplicate api_key_pool api_key for %q", current.Label)
+		}
+		seenKeys[current.APIKey] = struct{}{}
+		resolved = append(resolved, current)
+	}
+	return resolved, nil
+}
+
+func maskAIGatewayAPIKey(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if len(raw) <= 8 {
+		return strings.Repeat("*", len(raw))
+	}
+	return raw[:4] + strings.Repeat("*", len(raw)-8) + raw[len(raw)-4:]
+}
+
+func nullTimestamp(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil
+	}
+	return parsed.UTC()
 }
 
 func aiGatewayRoutesToResponse(routes []aiGatewayRoute) []aiGatewayRouteResponse {
@@ -1489,19 +1723,30 @@ func aiGatewayRoutesToResponse(routes []aiGatewayRoute) []aiGatewayRouteResponse
 			Targets:   make([]aiGatewayTargetResponse, 0, len(route.Targets)),
 		}
 		for _, target := range route.Targets {
+			pool := make([]aigateway.APIKeyPoolItem, 0, len(target.APIKeyPool))
+			for _, item := range target.APIKeyPool {
+				pool = append(pool, aigateway.APIKeyPoolItem{
+					ID:            item.ID,
+					Label:         item.Label,
+					KeyMasked:     item.KeyMasked,
+					SharedByEmail: item.SharedByEmail,
+					Enabled:       item.Enabled,
+					ReenableAt:    item.ReenableAt,
+				})
+			}
 			item.Targets = append(item.Targets, aiGatewayTargetResponse{
 				ID:                          target.ID,
 				Provider:                    target.Provider,
 				BaseURL:                     target.BaseURL,
 				AuthMode:                    target.AuthMode,
 				APIKeyEnv:                   target.APIKeyEnv,
+				APIKeyMasked:                maskAIGatewayAPIKey(target.APIKey),
+				APIKeyPool:                  pool,
 				CookieEnv:                   target.CookieEnv,
 				CustomHeaderEnvs:            target.CustomHeaderEnvs,
 				Model:                       target.Model,
 				UpstreamAPI:                 target.UpstreamAPI,
 				ReasoningEffort:             target.ReasoningEffort,
-				OrganizationEnv:             target.OrganizationEnv,
-				ProjectEnv:                  target.ProjectEnv,
 				TimeoutSeconds:              target.TimeoutSeconds,
 				Weight:                      target.Weight,
 				Priority:                    target.Priority,

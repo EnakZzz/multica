@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS ai_gateway_route_target_api_key_pool;

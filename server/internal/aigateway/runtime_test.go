@@ -1,7 +1,9 @@
 package aigateway
 
 import (
+	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -83,6 +85,15 @@ func TestResolveDefaultModelPricingCanonicalizesModelIDs(t *testing.T) {
 	}
 }
 
+func mustJSONMarshal(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	return data
+}
+
 func TestEffectiveUsagePricingAllowsTargetOverrides(t *testing.T) {
 	got := effectiveUsagePricing(Target{
 		Model:                       "gpt-5-codex",
@@ -134,6 +145,272 @@ func TestResolveUpstreamAuthSupportsCustomHeadersCookie(t *testing.T) {
 	}
 	if got := auth.Headers.Get("Authorization"); got != "" {
 		t.Fatalf("Authorization should not be set, got %q", got)
+	}
+}
+
+func TestResolveUpstreamAuthUsesAPIKeyPoolWhenPresent(t *testing.T) {
+	auth, err := ResolveUpstreamAuth(Target{
+		AuthMode: AuthModeAPIKey,
+		Provider: "he-tokenapi",
+		APIKeyPool: []APIKeyPoolItem{
+			{Label: "team-a", APIKey: "pool-key-a", SharedByEmail: "a@example.com", Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveUpstreamAuth: %v", err)
+	}
+	if got := auth.Headers.Get("Authorization"); got != "Bearer pool-key-a" {
+		t.Fatalf("Authorization = %q", got)
+	}
+}
+
+func TestResolveUpstreamAuthUsesStoredAPIKeyBeforeEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "env-key")
+	auth, err := ResolveUpstreamAuth(Target{
+		AuthMode:  AuthModeAPIKey,
+		Provider:  "openai",
+		APIKey:    "stored-key",
+		APIKeyEnv: "OPENAI_API_KEY",
+	})
+	if err != nil {
+		t.Fatalf("ResolveUpstreamAuth: %v", err)
+	}
+	if got := auth.Headers.Get("Authorization"); got != "Bearer stored-key" {
+		t.Fatalf("Authorization = %q", got)
+	}
+}
+
+func TestNormalizeRoutesSupportsHEAPIKeyPool(t *testing.T) {
+	routes, err := NormalizeRoutes([]Route{{
+		Alias: "openai/gpt-5.5",
+		Targets: []Target{{
+			Provider: "he-tokenapi",
+			BaseURL:  "https://tokenapi.happyelements.net/v1",
+			AuthMode: AuthModeAPIKey,
+			Model:    "vp/gpt-5.5",
+			APIKeyPool: []APIKeyPoolItem{{
+				Label:         "team-a",
+				APIKey:        "he-key",
+				SharedByEmail: "team-a@example.com",
+				Enabled:       true,
+			}},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("NormalizeRoutes: %v", err)
+	}
+	if len(routes) != 1 || len(routes[0].Targets) != 1 || len(routes[0].Targets[0].APIKeyPool) != 1 {
+		t.Fatalf("unexpected normalized routes: %+v", routes)
+	}
+}
+
+func TestNormalizeRoutesRejectsAPIKeyPoolForNonHEProvider(t *testing.T) {
+	_, err := NormalizeRoutes([]Route{{
+		Alias: "gpt-5.5",
+		Targets: []Target{{
+			Provider: "openai",
+			BaseURL:  "https://api.openai.com/v1",
+			AuthMode: AuthModeAPIKey,
+			Model:    "gpt-5.5",
+			APIKeyPool: []APIKeyPoolItem{{
+				Label:         "bad",
+				APIKey:        "sk-test",
+				SharedByEmail: "owner@example.com",
+				Enabled:       true,
+			}},
+		}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "api_key_pool only supports provider he-tokenapi") {
+		t.Fatalf("expected he-only validation error, got %v", err)
+	}
+}
+
+func TestBuildAPIKeyPoolAttemptsPrefersOwnerKey(t *testing.T) {
+	target := Target{
+		Provider: "he-tokenapi",
+		AuthMode: AuthModeAPIKey,
+		APIKeyPool: []APIKeyPoolItem{
+			{ID: "key-a", Label: "A", APIKey: "a", SharedByEmail: "a@example.com", Enabled: true},
+			{ID: "key-b", Label: "B", APIKey: "b", SharedByEmail: "b@example.com", Enabled: true},
+			{ID: "key-c", Label: "C", APIKey: "c", SharedByEmail: "c@example.com", Enabled: true},
+		},
+	}
+	attempts := buildAPIKeyPoolAttempts(target, "b@example.com")
+	if len(attempts) != 3 {
+		t.Fatalf("attempt count = %d", len(attempts))
+	}
+	if attempts[0].Item.ID != "key-b" || !attempts[0].OwnerMatch {
+		t.Fatalf("owner key should be first: %+v", attempts)
+	}
+}
+
+func TestInheritWildcardHEAPIKeyPools(t *testing.T) {
+	routes := []Route{
+		{
+			Alias: "*",
+			Targets: []Target{
+				{
+					Provider:  "he-tokenapi",
+					BaseURL:   "https://tokenapi.happyelements.net/v1",
+					AuthMode:  AuthModeAPIKey,
+					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					Model:     "",
+					APIKeyPool: []APIKeyPoolItem{
+						{ID: "pool-1", Label: "shared", APIKey: "he-key", SharedByEmail: "owner@example.com", Enabled: true},
+					},
+				},
+			},
+		},
+		{
+			Alias: "gpt-5.5",
+			Targets: []Target{
+				{
+					Provider:  "he-tokenapi",
+					BaseURL:   "https://tokenapi.happyelements.net/v1",
+					AuthMode:  AuthModeAPIKey,
+					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					Model:     "vp/gpt-5.5",
+				},
+				{
+					Provider:  "openai",
+					BaseURL:   "https://api.openai.com/v1",
+					AuthMode:  AuthModeAPIKey,
+					APIKeyEnv: "OPENAI_API_KEY",
+					Model:     "gpt-5.5",
+				},
+			},
+		},
+	}
+
+	route, ok := FindRoute(routes, "gpt-5.5")
+	if !ok {
+		t.Fatal("expected exact gpt-5.5 route")
+	}
+	got := inheritWildcardHEAPIKeyPools(routes, route)
+	if len(got.Targets) != 2 {
+		t.Fatalf("target count = %d", len(got.Targets))
+	}
+	if len(got.Targets[0].APIKeyPool) != 1 {
+		t.Fatalf("expected he target to inherit wildcard pool, got %+v", got.Targets[0].APIKeyPool)
+	}
+	if got.Targets[0].APIKeyPool[0].ID != "pool-1" {
+		t.Fatalf("unexpected inherited pool item: %+v", got.Targets[0].APIKeyPool[0])
+	}
+	if len(got.Targets[1].APIKeyPool) != 0 {
+		t.Fatalf("openai target should not inherit HE pool, got %+v", got.Targets[1].APIKeyPool)
+	}
+}
+
+func TestMergeWildcardFallbackTargetsAppendsSharedFallbackWithoutDuplicatingHE(t *testing.T) {
+	routes := []Route{
+		{
+			Alias: "*",
+			Targets: []Target{
+				{
+					Provider:  "he-tokenapi",
+					BaseURL:   "https://tokenapi.happyelements.net/v1",
+					AuthMode:  AuthModeAPIKey,
+					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					APIKeyPool: []APIKeyPoolItem{
+						{ID: "pool-1", Label: "shared", APIKey: "he-key", SharedByEmail: "owner@example.com", Enabled: true},
+					},
+				},
+				{
+					Provider:    "openai",
+					BaseURL:     "https://api.openai.com/v1",
+					AuthMode:    AuthModeAPIKey,
+					APIKeyEnv:   "OPENAI_API_KEY",
+					Model:       "gpt-5.5",
+					UpstreamAPI: "responses",
+				},
+			},
+		},
+		{
+			Alias: "gpt-5.5",
+			Targets: []Target{
+				{
+					Provider:  "he-tokenapi",
+					BaseURL:   "https://tokenapi.happyelements.net/v1",
+					AuthMode:  AuthModeAPIKey,
+					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					Model:     "vp/gpt-5.5",
+				},
+			},
+		},
+	}
+
+	route, ok := FindRoute(routes, "gpt-5.5")
+	if !ok {
+		t.Fatal("expected exact gpt-5.5 route")
+	}
+	got := inheritWildcardHEAPIKeyPools(routes, route)
+	got = mergeWildcardFallbackTargets(routes, got, "gpt-5.5")
+
+	if len(got.Targets) != 2 {
+		t.Fatalf("target count = %d, want 2", len(got.Targets))
+	}
+	if got.Targets[0].Provider != "he-tokenapi" || got.Targets[0].Model != "vp/gpt-5.5" {
+		t.Fatalf("unexpected primary target: %+v", got.Targets[0])
+	}
+	if len(got.Targets[0].APIKeyPool) != 1 {
+		t.Fatalf("expected inherited HE pool on primary target, got %+v", got.Targets[0].APIKeyPool)
+	}
+	if got.Targets[1].Provider != "openai" {
+		t.Fatalf("expected shared wildcard openai fallback, got %+v", got.Targets[1])
+	}
+	if got.Targets[1].Model != "gpt-5.5" {
+		t.Fatalf("expected wildcard fallback model to stay gpt-5.5, got %q", got.Targets[1].Model)
+	}
+}
+
+func TestMergeWildcardFallbackTargetsSkipsWildcardFallbackForDifferentModel(t *testing.T) {
+	routes := []Route{
+		{
+			Alias: "*",
+			Targets: []Target{
+				{
+					Provider:    "openai",
+					BaseURL:     "https://api.openai.com/v1",
+					AuthMode:    AuthModeAPIKey,
+					APIKeyEnv:   "OPENAI_API_KEY",
+					Model:       "gpt-5.5",
+					UpstreamAPI: "responses",
+				},
+			},
+		},
+		{
+			Alias: "anthropic/claude-sonnet-4-6",
+			Targets: []Target{
+				{
+					Provider:  "he-tokenapi",
+					BaseURL:   "https://tokenapi.happyelements.net/v1",
+					AuthMode:  AuthModeAPIKey,
+					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					Model:     "anthropic/claude-sonnet-4-6",
+				},
+			},
+		},
+	}
+
+	route, ok := FindRoute(routes, "anthropic/claude-sonnet-4-6")
+	if !ok {
+		t.Fatal("expected exact claude route")
+	}
+	got := mergeWildcardFallbackTargets(routes, route, "anthropic/claude-sonnet-4-6")
+	if len(got.Targets) != 1 {
+		t.Fatalf("expected no inherited wildcard fallback for different model, got %d targets", len(got.Targets))
+	}
+}
+
+func TestShouldCooldownAPIKeyPoolItemUsesQuotaSignalsOnly(t *testing.T) {
+	if !shouldCooldownAPIKeyPoolItem(http.StatusForbidden, `{"error":{"message":"insufficient balance"}}`) {
+		t.Fatal("expected insufficient balance to trigger cooldown")
+	}
+	if shouldCooldownAPIKeyPoolItem(http.StatusForbidden, `{"error":{"message":"Image generation is not enabled for this group","type":"permission_error"}}`) {
+		t.Fatal("hard permission error should not trigger cooldown")
+	}
+	if shouldCooldownAPIKeyPoolItem(http.StatusTooManyRequests, `{"error":{"message":"too many requests"}}`) {
+		t.Fatal("rate limit should not trigger cooldown")
 	}
 }
 
@@ -275,6 +552,7 @@ func TestEstimateUsageCostBreakdownCanForceLongContextForSession(t *testing.T) {
 func TestShouldRetryAIGatewayFailureTreatsQuotaBodiesAsRetryable(t *testing.T) {
 	cases := []struct {
 		name   string
+		target Target
 		status int
 		body   string
 		want   bool
@@ -309,12 +587,33 @@ func TestShouldRetryAIGatewayFailureTreatsQuotaBodiesAsRetryable(t *testing.T) {
 			body:   `{"error":{"message":"forbidden"}}`,
 			want:   false,
 		},
+		{
+			name:   "403 image generation permission body retries for non he target",
+			status: 403,
+			body:   `{"error":{"message":"Image generation is not enabled for this group","type":"permission_error"}}`,
+			want:   true,
+			target: Target{Provider: "openai"},
+		},
+		{
+			name:   "403 model access denied retries",
+			status: 403,
+			body:   `{"error":{"message":"key not allowed to access model","code":"key_model_access_denied"}}`,
+			want:   true,
+			target: Target{Provider: "he-tokenapi"},
+		},
+		{
+			name:   "403 he image generation permission body does not retry",
+			status: 403,
+			body:   `{"error":{"message":"Image generation is not enabled for this group","type":"permission_error"}}`,
+			want:   false,
+			target: Target{Provider: "he-tokenapi"},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldRetryAIGatewayFailure(tc.status, tc.body); got != tc.want {
-				t.Fatalf("shouldRetryAIGatewayFailure(%d, %q) = %v, want %v", tc.status, tc.body, got, tc.want)
+			if got := shouldRetryAIGatewayFailure(tc.target, tc.status, tc.body); got != tc.want {
+				t.Fatalf("shouldRetryAIGatewayFailure(%+v, %d, %q) = %v, want %v", tc.target, tc.status, tc.body, got, tc.want)
 			}
 		})
 	}
@@ -398,5 +697,323 @@ func TestResolveTargetModelForEndpointDoesNotRewriteResponses(t *testing.T) {
 	})
 	if got != "vp/gpt-5.4" {
 		t.Fatalf("responses endpoint should keep target model, got %q", got)
+	}
+}
+
+func TestProxyDoesNotFallbackAfterHeImagePermission403(t *testing.T) {
+	attempts := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"message":"Image generation is not enabled for this group","type":"permission_error"}}`))
+	}))
+	defer upstream.Close()
+
+	rt := &Runtime{}
+	route := Route{
+		Alias:    "gpt-5.4",
+		Strategy: "fallback",
+		Targets: []Target{
+			{Provider: "he-tokenapi", BaseURL: upstream.URL, AuthMode: AuthModeAPIKey, APIKeyEnv: "TEST_KEY_ONE", Model: "vp/gpt-5.4", Enabled: true},
+			{Provider: "openai", BaseURL: upstream.URL, AuthMode: AuthModeAPIKey, APIKeyEnv: "TEST_KEY_TWO", Model: "gpt-5.4", Enabled: true},
+		},
+	}
+	t.Setenv("TEST_KEY_ONE", "token-one")
+	t.Setenv("TEST_KEY_TWO", "token-two")
+
+	requestID := "req_test"
+	key := VirtualKey{ID: "vk_test", WorkspaceID: "ws_test", CreatedByEmail: "user@example.com"}
+	rec := httptest.NewRecorder()
+	var lastErr string
+	var lastStatus int
+
+	for _, target := range selectTargets(route, "gpt-5.4", "/responses") {
+		auth, err := ResolveUpstreamAuth(target)
+		if err != nil {
+			t.Fatalf("ResolveUpstreamAuth: %v", err)
+		}
+		status, retry, errText := rt.forward(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", nil), ForwardRequest{
+			Key:              key,
+			RequestID:        requestID,
+			CallerID:         key.CallerID(),
+			Endpoint:         "/responses",
+			UpstreamEndpoint: "/responses",
+			ModelAlias:       "gpt-5.4",
+			Target:           target,
+			TargetModel:      target.Model,
+			AuthHeaders:      auth.Headers,
+			Body:             []byte(`{"model":"gpt-5.4","input":"hello"}`),
+		})
+		if !retry {
+			lastStatus = status
+			lastErr = errText
+			break
+		}
+		lastStatus = status
+		lastErr = errText
+		if !retry && status > 0 && status < http.StatusInternalServerError && status != http.StatusTooManyRequests {
+			break
+		}
+	}
+
+	if attempts != 1 {
+		t.Fatalf("expected he permission error to stop without fallback, got %d attempts", attempts)
+	}
+	if lastStatus != http.StatusForbidden {
+		t.Fatalf("expected forbidden status, got status=%d err=%q", lastStatus, lastErr)
+	}
+}
+
+func TestSummarizeAIGatewayRequestCapturesAuditShape(t *testing.T) {
+	summary := summarizeAIGatewayRequest([]byte(`{
+		"model":"gpt-5.5",
+		"input":[
+			{"type":"message","role":"user","content":[
+				{"type":"input_text","text":"hello"},
+				{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}
+			]}
+		],
+		"tools":[
+			{"type":"web_search_preview"},
+			{"type":"function","name":"memory_lookup"}
+		]
+	}`))
+	if !summary.HasImageURL {
+		t.Fatal("expected image_url to be detected")
+	}
+	if summary.TextOnly {
+		t.Fatal("expected request with image_url to not be text-only")
+	}
+	if summary.ToolCount != 2 {
+		t.Fatalf("tool_count = %d, want 2", summary.ToolCount)
+	}
+	if strings.Join(summary.ToolTypes, ",") != "web_search_preview,function" {
+		t.Fatalf("tool_types = %v", summary.ToolTypes)
+	}
+	if strings.Join(summary.ToolDescriptors, ",") != "web_search_preview,function:memory_lookup" {
+		t.Fatalf("tool_descriptors = %v", summary.ToolDescriptors)
+	}
+	if strings.Join(summary.InputItemTypes, ",") != "message,input_text,image_url" {
+		t.Fatalf("input_item_types = %v", summary.InputItemTypes)
+	}
+}
+
+func TestSummarizeAIGatewayRequestMarksTextOnlyRequests(t *testing.T) {
+	summary := summarizeAIGatewayRequest([]byte(`{
+		"model":"gpt-5.4",
+		"input":[
+			{"type":"message","role":"user","content":[
+				{"type":"input_text","text":"just text"}
+			]}
+		]
+	}`))
+	if summary.HasImageURL {
+		t.Fatal("expected no image_url")
+	}
+	if !summary.TextOnly {
+		t.Fatal("expected text-only request")
+	}
+	if summary.ToolCount != 0 {
+		t.Fatalf("tool_count = %d, want 0", summary.ToolCount)
+	}
+	if strings.Join(summary.InputItemTypes, ",") != "message,input_text" {
+		t.Fatalf("input_item_types = %v", summary.InputItemTypes)
+	}
+}
+
+func TestPreparePayloadForUpstreamRemovesImageGenerationToolForHeResponses(t *testing.T) {
+	rt := &Runtime{}
+	payload := map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{
+			map[string]any{"type": "web_search"},
+			map[string]any{"type": "image_generation"},
+			map[string]any{"type": "function", "name": "memory_lookup"},
+		},
+	}
+	got := rt.preparePayloadForUpstream(t.Context(), VirtualKey{}, "/responses", payload, Target{Provider: "he-tokenapi"})
+	tools, ok := got["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools missing after filtering: %#v", got["tools"])
+	}
+	summary := summarizeAIGatewayRequest(mustJSONMarshal(t, got))
+	if strings.Contains(strings.Join(summary.ToolTypes, ","), "image_generation") {
+		t.Fatalf("expected image_generation to be removed, got %v", summary.ToolTypes)
+	}
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools after filtering, got %d", len(tools))
+	}
+}
+
+func TestPreparePayloadForUpstreamKeepsImageGenerationToolForOpenAIResponses(t *testing.T) {
+	rt := &Runtime{}
+	payload := map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{
+			map[string]any{"type": "image_generation"},
+		},
+	}
+	got := rt.preparePayloadForUpstream(t.Context(), VirtualKey{}, "/responses", payload, Target{Provider: "openai"})
+	summary := summarizeAIGatewayRequest(mustJSONMarshal(t, got))
+	if strings.Join(summary.ToolTypes, ",") != "image_generation" {
+		t.Fatalf("expected image_generation to remain, got %v", summary.ToolTypes)
+	}
+}
+
+func TestPreparePayloadForUpstreamFiltersUnsupportedAnthropicHETools(t *testing.T) {
+	rt := &Runtime{}
+	payload := map[string]any{
+		"model":               "anthropic/claude-opus-4-8",
+		"client_metadata":     map[string]any{"session": "abc"},
+		"metadata":            map[string]any{"foo": "bar"},
+		"store":               true,
+		"parallel_tool_calls": true,
+		"text":                map[string]any{"format": "json"},
+		"tools": []any{
+			map[string]any{"type": "function", "name": "memory_lookup"},
+			map[string]any{"type": "namespace", "name": "mcp__codegraph"},
+			map[string]any{"type": "web_search"},
+		},
+	}
+	got := rt.preparePayloadForUpstream(t.Context(), VirtualKey{}, "/responses", payload, Target{
+		Provider: "he-tokenapi",
+		Model:    "anthropic/claude-opus-4-8",
+	})
+	tools, ok := got["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools missing after filtering: %#v", got["tools"])
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected only supported anthropic HE tool to remain, got %d", len(tools))
+	}
+	for _, removedKey := range []string{"client_metadata", "metadata", "store", "parallel_tool_calls", "text"} {
+		if _, exists := got[removedKey]; exists {
+			t.Fatalf("expected %q to be removed for anthropic HE responses payload", removedKey)
+		}
+	}
+	summary := summarizeAIGatewayRequest(mustJSONMarshal(t, got))
+	if strings.Join(summary.ToolTypes, ",") != "function" {
+		t.Fatalf("expected only function tool to remain, got %v", summary.ToolTypes)
+	}
+}
+
+func TestProxyHeAvailabilitySuccessDoesNotFallback(t *testing.T) {
+	attempts := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_ok","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer upstream.Close()
+
+	rt := &Runtime{}
+	route := Route{
+		Alias:    "gpt-5.5",
+		Strategy: "fallback",
+		Targets: []Target{
+			{Provider: "he-tokenapi", BaseURL: upstream.URL, AuthMode: AuthModeAPIKey, APIKeyEnv: "TEST_KEY_ONE", Model: "vp/gpt-5.5", Enabled: true},
+			{Provider: "openai", BaseURL: upstream.URL, AuthMode: AuthModeAPIKey, APIKeyEnv: "TEST_KEY_TWO", Model: "gpt-5.5", Enabled: true},
+		},
+	}
+	t.Setenv("TEST_KEY_ONE", "token-one")
+	t.Setenv("TEST_KEY_TWO", "token-two")
+
+	requestID := "req_he_ok"
+	key := VirtualKey{ID: "vk_test", WorkspaceID: "ws_test", CreatedByEmail: "user@example.com"}
+	rec := httptest.NewRecorder()
+	var lastErr string
+	var lastStatus int
+
+	for _, target := range selectTargets(route, "gpt-5.5", "/responses") {
+		auth, err := ResolveUpstreamAuth(target)
+		if err != nil {
+			t.Fatalf("ResolveUpstreamAuth: %v", err)
+		}
+		status, retry, errText := rt.forward(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", nil), ForwardRequest{
+			Key:              key,
+			RequestID:        requestID,
+			CallerID:         key.CallerID(),
+			Endpoint:         "/responses",
+			UpstreamEndpoint: "/responses",
+			ModelAlias:       "gpt-5.5",
+			Target:           target,
+			TargetModel:      target.Model,
+			AuthHeaders:      auth.Headers,
+			Body:             []byte(`{"model":"gpt-5.5","input":"hello"}`),
+		})
+		lastStatus = status
+		lastErr = errText
+		if !retry {
+			break
+		}
+	}
+
+	if attempts != 1 {
+		t.Fatalf("expected he target to serve request without fallback, got %d attempts", attempts)
+	}
+	if lastStatus >= 400 {
+		t.Fatalf("expected final success, got status=%d err=%q", lastStatus, lastErr)
+	}
+}
+
+func TestHEPoolQuotaOnSingleSubKeyFallsThroughWithinPoolBeforeOpenAIFallback(t *testing.T) {
+	var authHeaders []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		switch r.Header.Get("Authorization") {
+		case "Bearer he-key-1":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"message":"insufficient balance"}}`))
+		case "Bearer he-key-2":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"resp_ok","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+		case "Bearer openai-fallback":
+			t.Fatal("openai fallback should not be used while another HE sub-key is still available")
+		default:
+			t.Fatalf("unexpected auth header %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer upstream.Close()
+
+	rt := &Runtime{}
+	target := Target{
+		ID:       "target-he-pool",
+		Provider: "he-tokenapi",
+		BaseURL:  upstream.URL,
+		AuthMode: AuthModeAPIKey,
+		Model:    "vp/gpt-5.5",
+		APIKeyPool: []APIKeyPoolItem{
+			{ID: "key-1", Label: "key-1", APIKey: "he-key-1", SharedByEmail: "a@example.com", Enabled: true},
+			{ID: "key-2", Label: "key-2", APIKey: "he-key-2", SharedByEmail: "b@example.com", Enabled: true},
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	status, retry, errText, fatalErr := rt.forwardTargetWithHEAPIKeyPool(
+		rec,
+		httptest.NewRequest(http.MethodPost, "/v1/responses", nil),
+		VirtualKey{ID: "vk_test", WorkspaceID: "ws_test", CreatedByEmail: "c@example.com"},
+		"req_pool_retry",
+		"c@example.com",
+		"/responses",
+		"gpt-5.5",
+		map[string]any{"model": "gpt-5.5", "input": "hello"},
+		false,
+		target,
+	)
+	if fatalErr != nil {
+		t.Fatalf("forwardTargetWithHEAPIKeyPool fatalErr: %v", fatalErr)
+	}
+	if retry {
+		t.Fatalf("expected pool-internal retry to succeed without escalating to outer fallback, got retry=true status=%d err=%q", status, errText)
+	}
+	if status >= 400 {
+		t.Fatalf("expected final success from second HE sub-key, got status=%d err=%q", status, errText)
+	}
+	if len(authHeaders) != 2 {
+		t.Fatalf("expected two HE sub-key attempts, got %d (%v)", len(authHeaders), authHeaders)
+	}
+	if authHeaders[0] != "Bearer he-key-1" || authHeaders[1] != "Bearer he-key-2" {
+		t.Fatalf("unexpected attempt order: %v", authHeaders)
 	}
 }

@@ -214,19 +214,30 @@ export interface AIGatewayCustomHeaderEnv {
 
 export type AIGatewayAuthMode = "api_key" | "custom_headers_cookie";
 
+export interface AIGatewayAPIKeyPoolItem {
+  id?: string;
+  label: string;
+  api_key?: string;
+  key_masked?: string;
+  shared_by_email: string;
+  enabled: boolean;
+  reenable_at?: string;
+}
+
 export interface AIGatewayRouteTarget {
   id?: string;
   provider: string;
   base_url: string;
   auth_mode?: AIGatewayAuthMode;
   api_key_env: string;
+  api_key?: string;
+  api_key_masked?: string;
+  api_key_pool?: AIGatewayAPIKeyPoolItem[];
   cookie_env?: string;
   custom_header_envs?: AIGatewayCustomHeaderEnv[];
   model: string;
   upstream_api: string;
   reasoning_effort?: string;
-  organization_env?: string;
-  project_env?: string;
   timeout_seconds: number;
   weight: number;
   priority: number;
@@ -266,10 +277,13 @@ export interface AIGatewayProbeModel {
 }
 
 export interface ProbeAIGatewayProviderRequest {
+  target_id?: string;
   base_url: string;
   auth_mode?: AIGatewayAuthMode;
   api_key_env?: string;
   api_key?: string;
+  api_key_masked?: string;
+  api_key_pool?: AIGatewayAPIKeyPoolItem[];
   cookie_env?: string;
   custom_header_envs?: AIGatewayCustomHeaderEnv[];
   model?: string;
