@@ -79,13 +79,18 @@ type OpenAICompatibleEmbedder struct {
 }
 
 func NewOpenAICompatibleEmbedderFromEnv() *OpenAICompatibleEmbedder {
-	apiKey := strings.TrimSpace(os.Getenv("MULTICA_EMBEDDINGS_API_KEY"))
+	apiKey := strings.TrimSpace(os.Getenv("AI_GATEWAY_VIRTUAL_KEY"))
 	if apiKey == "" {
 		return nil
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_EMBEDDINGS_BASE_URL")), "/")
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("AI_GATEWAY_UPSTREAM_URL")), "/")
+	}
+	if baseURL == "" {
+		baseURL = "http://localhost:9111/v1"
+	} else if !strings.HasSuffix(baseURL, "/v1") {
+		baseURL += "/v1"
 	}
 	model := strings.TrimSpace(os.Getenv("MULTICA_EMBEDDINGS_MODEL"))
 	if model == "" {

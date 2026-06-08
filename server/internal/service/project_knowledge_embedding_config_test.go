@@ -16,7 +16,7 @@ func (projectKnowledgeTestEmbedder) Embed(context.Context, string) ([]float32, e
 }
 
 func TestNewProjectKnowledgeServiceLeavesEmbedderNilWhenEnvUnconfigured(t *testing.T) {
-	t.Setenv("MULTICA_EMBEDDINGS_API_KEY", "")
+	t.Setenv("AI_GATEWAY_VIRTUAL_KEY", "")
 
 	svc := NewProjectKnowledgeService(nil, nil, nil)
 	if svc.EmbeddingsConfigured() {
@@ -37,7 +37,7 @@ func TestProjectKnowledgeServiceEmbeddingsConfiguredRejectsTypedNilEmbedder(t *t
 }
 
 func TestProjectKnowledgeServiceUsesExplicitEmbedderWhenProvided(t *testing.T) {
-	t.Setenv("MULTICA_EMBEDDINGS_API_KEY", "")
+	t.Setenv("AI_GATEWAY_VIRTUAL_KEY", "")
 
 	svc := NewProjectKnowledgeService(nil, nil, projectKnowledgeTestEmbedder{})
 	if !svc.EmbeddingsConfigured() {
@@ -45,5 +45,24 @@ func TestProjectKnowledgeServiceUsesExplicitEmbedderWhenProvided(t *testing.T) {
 	}
 	if got := svc.Embedder.Model(); got != "test-model" {
 		t.Fatalf("Model() = %q, want test-model", got)
+	}
+}
+
+func TestNewOpenAICompatibleEmbedderFromEnvUsesAIGatewayDefaults(t *testing.T) {
+	t.Setenv("AI_GATEWAY_VIRTUAL_KEY", "mvk_test")
+	t.Setenv("AI_GATEWAY_UPSTREAM_URL", "http://ai-gateway:9111")
+	t.Setenv("MULTICA_EMBEDDINGS_BASE_URL", "")
+	t.Setenv("MULTICA_EMBEDDINGS_MODEL", "")
+	t.Setenv("MULTICA_EMBEDDINGS_DIMENSIONS", "")
+
+	embedder := NewOpenAICompatibleEmbedderFromEnv()
+	if embedder == nil {
+		t.Fatal("NewOpenAICompatibleEmbedderFromEnv() = nil, want embedder")
+	}
+	if got := embedder.APIKey; got != "mvk_test" {
+		t.Fatalf("APIKey = %q, want fixed AI gateway virtual key", got)
+	}
+	if got := embedder.BaseURL; got != "http://ai-gateway:9111/v1" {
+		t.Fatalf("BaseURL = %q, want AI gateway upstream URL", got)
 	}
 }
