@@ -2258,6 +2258,9 @@ func providerNeedsInlineSystemPrompt(provider string) bool {
 }
 
 func shouldReusePriorExecution(task Task) bool {
+	if task.PlanItemExecutionRouting.RequiresIsolatedWorktree {
+		return false
+	}
 	return !isReviewGateNodeType(task.PlanItemNodeType)
 }
 
@@ -2314,6 +2317,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		PlanItemExecutionKind:            task.PlanItemExecutionKind,
 		PlanItemRequiresGitCommit:        task.PlanItemRequiresGitCommit,
 		PlanItemBranchName:               task.PlanItemBranchName,
+		PlanItemRequiresIsolatedWorktree: task.PlanItemExecutionRouting.RequiresIsolatedWorktree,
+		PlanItemBranchPolicy:             task.PlanItemExecutionRouting.BranchPolicy,
+		PlanItemMergePolicy:              task.PlanItemExecutionRouting.MergePolicy,
 		TriggerCommentID:                 task.TriggerCommentID,
 		AgentID:                          agentID,
 		AgentName:                        agentName,
@@ -2406,20 +2412,23 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// per-agent. When one daemon hosts multiple agents, slots index shared
 	// daemon-level resources such as GPUs.
 	agentEnv := map[string]string{
-		"MULTICA_TOKEN":               d.client.Token(),
-		"MULTICA_SERVER_URL":          d.cfg.ServerBaseURL,
-		"MULTICA_DAEMON_PORT":         fmt.Sprintf("%d", d.cfg.HealthPort),
-		"MULTICA_WORKSPACE_ID":        task.WorkspaceID,
-		"MULTICA_AGENT_NAME":          agentName,
-		"MULTICA_AGENT_ID":            task.AgentID,
-		"MULTICA_PROJECT_ID":          task.ProjectID,
-		"MULTICA_ISSUE_IDENTIFIER":    task.IssueIdentifier,
-		"MULTICA_PLAN_ITEM_NODE_TYPE": task.PlanItemNodeType,
-		"MULTICA_PLAN_BRANCH_NAME":    task.PlanItemBranchName,
-		"MULTICA_REPO_CHECKOUT_REF":   task.RepoCheckoutRef,
-		"MULTICA_PUBLISH_BRANCH_NAME": task.PublishBranchName,
-		"MULTICA_TASK_ID":             task.ID,
-		"MULTICA_TASK_SLOT":           strconv.Itoa(slot),
+		"MULTICA_TOKEN":                           d.client.Token(),
+		"MULTICA_SERVER_URL":                      d.cfg.ServerBaseURL,
+		"MULTICA_DAEMON_PORT":                     fmt.Sprintf("%d", d.cfg.HealthPort),
+		"MULTICA_WORKSPACE_ID":                    task.WorkspaceID,
+		"MULTICA_AGENT_NAME":                      agentName,
+		"MULTICA_AGENT_ID":                        task.AgentID,
+		"MULTICA_PROJECT_ID":                      task.ProjectID,
+		"MULTICA_ISSUE_IDENTIFIER":                task.IssueIdentifier,
+		"MULTICA_PLAN_ITEM_NODE_TYPE":             task.PlanItemNodeType,
+		"MULTICA_PLAN_BRANCH_NAME":                task.PlanItemBranchName,
+		"MULTICA_PLAN_REQUIRES_ISOLATED_WORKTREE": strconv.FormatBool(task.PlanItemExecutionRouting.RequiresIsolatedWorktree),
+		"MULTICA_PLAN_BRANCH_POLICY":              task.PlanItemExecutionRouting.BranchPolicy,
+		"MULTICA_PLAN_MERGE_POLICY":               task.PlanItemExecutionRouting.MergePolicy,
+		"MULTICA_REPO_CHECKOUT_REF":               task.RepoCheckoutRef,
+		"MULTICA_PUBLISH_BRANCH_NAME":             task.PublishBranchName,
+		"MULTICA_TASK_ID":                         task.ID,
+		"MULTICA_TASK_SLOT":                       strconv.Itoa(slot),
 	}
 	if defaultBranch := defaultBranchHintFromProjectResources(task.ProjectResources); defaultBranch != "" {
 		agentEnv["MULTICA_DEFAULT_BRANCH_HINT"] = defaultBranch

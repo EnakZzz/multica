@@ -169,6 +169,7 @@ type AgentTaskResponse struct {
 	PlanItemExecutionKind     string                      `json:"plan_item_execution_kind,omitempty"`
 	PlanItemRequiresGitCommit bool                        `json:"plan_item_requires_git_commit,omitempty"`
 	PlanItemBranchName        string                      `json:"plan_item_branch_name,omitempty"`
+	PlanItemExecutionRouting  service.ExecutionRouting    `json:"plan_item_execution_routing,omitempty"`
 	UnitTestChecklist         []service.UnitTestCheck     `json:"unit_test_checklist,omitempty"`
 	RepoCheckoutRef           string                      `json:"repo_checkout_ref,omitempty"`
 	PublishBranchName         string                      `json:"publish_branch_name,omitempty"`

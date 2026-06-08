@@ -346,6 +346,16 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		if planAgentTask {
 			b.WriteString("This issue was created from a Plan item with `execution_kind=agent_task`. That kind is the execution contract: complete the task directly and do not put it into `in_review` unless the issue or a human comment explicitly asks for a separate review.\n")
 			writePlanNodeDelegationGuidance(&b, ctx)
+			if ctx.PlanItemRequiresIsolatedWorktree {
+				b.WriteString("Execution routing requires an isolated worktree for this Plan item. Do not reuse another task's dirty checkout for code changes; use the planned branch and repo checkout flow so this task remains isolated.\n")
+				if ctx.PlanItemBranchPolicy != "" {
+					fmt.Fprintf(&b, "Branch policy: `%s`.\n", ctx.PlanItemBranchPolicy)
+				}
+				if ctx.PlanItemMergePolicy != "" {
+					fmt.Fprintf(&b, "Merge policy: `%s`.\n", ctx.PlanItemMergePolicy)
+				}
+				b.WriteString("\n")
+			}
 			if ctx.PlanItemRequiresGitCommit && ctx.PlanItemBranchName != "" {
 				fmt.Fprintf(&b, "The Plan item has a planned branch name: `%s`. `multica repo checkout <url>` will use the planned branch when available, and `multica repo publish` will push HEAD back to that planned branch. Use exactly that name in the final Branch line after publishing; do not invent or substitute another branch name.\n\n", ctx.PlanItemBranchName)
 			} else {

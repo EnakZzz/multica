@@ -118,6 +118,9 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	issueIdentifier := os.Getenv("MULTICA_ISSUE_IDENTIFIER")
 	taskID := os.Getenv("MULTICA_TASK_ID")
 	branchName := os.Getenv("MULTICA_PLAN_BRANCH_NAME")
+	requiresIsolatedWorktree := os.Getenv("MULTICA_PLAN_REQUIRES_ISOLATED_WORKTREE")
+	branchPolicy := os.Getenv("MULTICA_PLAN_BRANCH_POLICY")
+	mergePolicy := os.Getenv("MULTICA_PLAN_MERGE_POLICY")
 	checkoutRef := repoCheckoutRef
 	if checkoutRef == "" {
 		checkoutRef = os.Getenv("MULTICA_REPO_CHECKOUT_REF")
@@ -130,14 +133,17 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	}
 
 	reqBody := map[string]string{
-		"url":              repoURL,
-		"workspace_id":     workspaceID,
-		"workdir":          workDir,
-		"ref":              checkoutRef,
-		"agent_name":       agentName,
-		"issue_identifier": issueIdentifier,
-		"branch_name":      branchName,
-		"task_id":          taskID,
+		"url":                        repoURL,
+		"workspace_id":               workspaceID,
+		"workdir":                    workDir,
+		"ref":                        checkoutRef,
+		"agent_name":                 agentName,
+		"issue_identifier":           issueIdentifier,
+		"branch_name":                branchName,
+		"requires_isolated_worktree": requiresIsolatedWorktree,
+		"branch_policy":              branchPolicy,
+		"merge_policy":               mergePolicy,
+		"task_id":                    taskID,
 	}
 
 	data, err := json.Marshal(reqBody)

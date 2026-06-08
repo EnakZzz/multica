@@ -45,14 +45,17 @@ func (d *Daemon) listenHealth() (net.Listener, error) {
 
 // repoCheckoutRequest is the body of a POST /repo/checkout request.
 type repoCheckoutRequest struct {
-	URL             string `json:"url"`
-	WorkspaceID     string `json:"workspace_id"`
-	WorkDir         string `json:"workdir"`
-	Ref             string `json:"ref,omitempty"`
-	AgentName       string `json:"agent_name"`
-	IssueIdentifier string `json:"issue_identifier,omitempty"`
-	BranchName      string `json:"branch_name,omitempty"`
-	TaskID          string `json:"task_id"`
+	URL                      string `json:"url"`
+	WorkspaceID              string `json:"workspace_id"`
+	WorkDir                  string `json:"workdir"`
+	Ref                      string `json:"ref,omitempty"`
+	AgentName                string `json:"agent_name"`
+	IssueIdentifier          string `json:"issue_identifier,omitempty"`
+	BranchName               string `json:"branch_name,omitempty"`
+	RequiresIsolatedWorktree string `json:"requires_isolated_worktree,omitempty"`
+	BranchPolicy             string `json:"branch_policy,omitempty"`
+	MergePolicy              string `json:"merge_policy,omitempty"`
+	TaskID                   string `json:"task_id"`
 }
 
 // healthHandler returns the /health HTTP handler. Extracted from serveHealth
@@ -161,15 +164,18 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 		}
 
 		result, err := d.repoCache.CreateWorktree(repocache.WorktreeParams{
-			WorkspaceID:         req.WorkspaceID,
-			RepoURL:             req.URL,
-			WorkDir:             req.WorkDir,
-			Ref:                 req.Ref,
-			AgentName:           req.AgentName,
-			IssueIdentifier:     req.IssueIdentifier,
-			BranchName:          req.BranchName,
-			TaskID:              req.TaskID,
-			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
+			WorkspaceID:              req.WorkspaceID,
+			RepoURL:                  req.URL,
+			WorkDir:                  req.WorkDir,
+			Ref:                      req.Ref,
+			AgentName:                req.AgentName,
+			IssueIdentifier:          req.IssueIdentifier,
+			BranchName:               req.BranchName,
+			RequiresIsolatedWorktree: req.RequiresIsolatedWorktree == "true",
+			BranchPolicy:             req.BranchPolicy,
+			MergePolicy:              req.MergePolicy,
+			TaskID:                   req.TaskID,
+			CoAuthoredByEnabled:      d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
 		})
 		if err != nil {
 			d.logger.Error("repo checkout failed", "url", req.URL, "error", err)

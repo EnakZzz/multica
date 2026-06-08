@@ -372,6 +372,14 @@ func buildIssuePlanPrompt(task Task) string {
   "pipeline_name": "pipeline name fallback",
   "title": "Short plan title",
   "parent_issue": { "title": "Parent issue title", "description": "Parent issue description" },
+  "harness_strategy": {
+    "mode": "none | classify_and_act | fan_out_synthesize | adversarial_verification | generate_and_filter | tournament | loop_until_done",
+    "summary": "Short human-readable orchestration summary, or empty for none",
+    "rationale": "Why this task benefits from the mode, or empty",
+    "stop_condition": "Evidence-based stop condition for loops/verification, or empty",
+    "parallelism": 1,
+    "requires_isolated_worktree": false
+  },
   "pipeline": {
     "id": "pipeline uuid",
     "name": "pipeline name",
@@ -396,6 +404,7 @@ func buildIssuePlanPrompt(task Task) string {
           "iteration_index": 1,
           "iteration_title": "Playable loop name",
           "iteration_branch_name": "feature/playable-loop-slug",
+          "execution_routing": { "requires_isolated_worktree": false, "branch_policy": "auto | shared | per_item | per_iteration | per_agent", "merge_policy": "none | manual | pr_required | auto_when_green" },
           "agent_id": "agent uuid or empty string",
           "depends_on_node_keys": ["earlier-node-key"],
           "selected": true
@@ -420,6 +429,7 @@ func buildIssuePlanPrompt(task Task) string {
       "iteration_index": 1,
       "iteration_title": "Playable loop name",
       "iteration_branch_name": "feature/playable-loop-slug",
+      "execution_routing": { "requires_isolated_worktree": false, "branch_policy": "auto | shared | per_item | per_iteration | per_agent", "merge_policy": "none | manual | pr_required | auto_when_green" },
       "recommended_agent_id": "agent uuid, null, or empty string",
       "match_score": 0,
       "match_reason": "Why this agent should handle the direct issue",
@@ -444,6 +454,7 @@ func buildIssuePlanPrompt(task Task) string {
         "iteration_index": 1,
         "iteration_title": "Playable loop name",
         "iteration_branch_name": "feature/playable-loop-slug",
+        "execution_routing": { "requires_isolated_worktree": false, "branch_policy": "auto | shared | per_item | per_iteration | per_agent", "merge_policy": "none | manual | pr_required | auto_when_green" },
         "recommended_agent_id": "agent uuid or empty string",
         "match_score": 0,
         "match_reason": "Why this agent matches, or why no agent matches",
@@ -460,6 +471,8 @@ func buildIssuePlanPrompt(task Task) string {
 	b.WriteString("- For direct_issue, use only agent IDs from Available agents. If no agent fits, set recommended_agent_id to null or empty string, match_score below 60, and put the missing role/tooling in missing_capability; the server will leave the plan item unassigned for a human to route before creating issues.\n")
 	b.WriteString("- When needs_plan=true and Available pipelines is non-empty, choose the best existing pipeline and fill pipeline.nodes using only existing node keys. The server will create issues from that pipeline.\n")
 	b.WriteString("- Built-in pipelines, agents, and skills are readonly visible assets. Choose the best existing asset from names, descriptions, skill lists, node types, and metadata; do not rely on hidden prompt-only methodology.\n")
+	b.WriteString("- Set harness_strategy to a non-none mode for high-risk, cross-module, research-heavy, review-heavy, migration, debugging, triage, or explicit multi-agent coordination work. Use none for ordinary single-agent implementation. This is a structured orchestration recommendation only; do not include executable workflow scripts or arbitrary JavaScript.\n")
+	b.WriteString("- Set execution_routing as an execution constraint, not just a prompt suggestion. Use requires_isolated_worktree=true with branch_policy=per_agent for subagent fan-out, per_item for independent risky slices, or per_iteration when a playable loop should share a branch. Use merge_policy=pr_required for work that must integrate through PR/review, manual for human-controlled synthesis, and none for non-code tasks.\n")
 	b.WriteString("- Fill each selected pipeline node with a concrete title, description, optional agent_id override, and dependency keys. Dependency keys should point to prerequisite nodes in the chosen pipeline.\n")
 	b.WriteString("- If no available pipeline fits, fall back to items and split into 2-8 child issues.\n")
 	b.WriteString("- For every direct_issue, item, or selected pipeline node, include a lightweight execution contract: 2-5 acceptance_criteria when possible, suggested_test_commands as exact runnable commands or [], unit_test_checklist as exact runnable unit-test commands or [], context_resources as known files/repos/docs/issues/APIs/URLs, and risk_notes as concrete edge cases or blockers.\n")
@@ -556,7 +569,15 @@ func buildIssuePlanSpecPrompt(task Task) string {
   "verification_commands": ["Exact command or manual verification evidence expected to prove the spec"],
   "assumptions": ["Assumption to confirm or carry into execution"],
   "open_questions": ["Blocking question that materially changes scope or execution, or []"],
-  "clarifications": [{"question": "Question answered by the user", "answer": "User answer"}]
+  "clarifications": [{"question": "Question answered by the user", "answer": "User answer"}],
+  "harness_strategy": {
+    "mode": "none | classify_and_act | fan_out_synthesize | adversarial_verification | generate_and_filter | tournament | loop_until_done",
+    "summary": "Short human-readable orchestration summary, or empty for none",
+    "rationale": "Why this task benefits from the mode, or empty",
+    "stop_condition": "Evidence-based stop condition for loops/verification, or empty",
+    "parallelism": 1,
+    "requires_isolated_worktree": false
+  }
 }`)
 	b.WriteString("\n\nRules:\n")
 	b.WriteString("- Return JSON only. No markdown fences, prose, comments, or trailing text.\n")
@@ -567,6 +588,7 @@ func buildIssuePlanSpecPrompt(task Task) string {
 	b.WriteString("- Include design_decisions for meaningful tradeoffs, architecture choices, data model choices, or boundaries the reviewer should preserve.\n")
 	b.WriteString("- When Project Wiki canonical context is present, treat it as the only long-term project understanding source. Use current user input for immediate requirements, but do not treat memory items or old task logs as canonical; reference relevant Wiki slugs in approach or design_decisions when they materially shape the plan.\n")
 	b.WriteString("- Use visible built-in pipelines, agents, and skills as planning references when relevant; derive methodology choices from the available asset metadata instead of hardcoded pipeline names.\n")
+	b.WriteString("- Set harness_strategy to a non-none mode for high-risk, cross-module, research-heavy, review-heavy, migration, debugging, triage, or explicit multi-agent coordination work. Use none for ordinary single-agent implementation. This is a structured orchestration recommendation only; do not include executable workflow scripts or arbitrary JavaScript.\n")
 	b.WriteString("- Put non-blocking uncertainty in assumptions. Use open_questions only for decisions that would materially change scope, data access, destructive behavior, or execution safety.\n")
 	b.WriteString("- If you can proceed with a reasonable default, write the default as an assumption instead of asking.\n")
 	b.WriteString("- Preserve existing clarifications exactly unless a new answer supersedes the same question.\n")

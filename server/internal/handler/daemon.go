@@ -1595,6 +1595,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.PlanItemExecutionKind = normalizePlanItemExecutionKind(item.ExecutionKind)
 			resp.PlanItemRequiresGitCommit = item.RequiresGitCommit
 			resp.PlanItemBranchName = strings.TrimSpace(item.BranchName)
+			resp.PlanItemExecutionRouting = service.ExecutionRoutingFromJSON(item.ExecutionRouting)
 			if resp.PlanItemBranchName == "" && (resp.PlanItemNodeType == service.PipelineNodeTypeMerge || resp.PlanItemExecutionKind == service.PlanItemExecutionKindHumanConfirmation) {
 				resp.PlanItemBranchName = strings.TrimSpace(item.IterationBranchName)
 			}

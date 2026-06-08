@@ -363,15 +363,18 @@ func setFetchRefspec(barePath, refspec string) error {
 
 // WorktreeParams holds inputs for creating a worktree from a cached bare clone.
 type WorktreeParams struct {
-	WorkspaceID         string // workspace that owns the repo
-	RepoURL             string // remote URL to look up in the cache
-	WorkDir             string // parent directory for the worktree (e.g. task workdir)
-	Ref                 string // optional branch, tag, or commit to base the worktree on
-	BranchName          string // optional plan-specified branch name
-	AgentName           string // for branch naming
-	IssueIdentifier     string // human-readable issue key for branch naming (e.g. LOC-18)
-	TaskID              string // for branch naming uniqueness
-	CoAuthoredByEnabled bool   // install prepare-commit-msg hook for Co-authored-by trailer
+	WorkspaceID              string // workspace that owns the repo
+	RepoURL                  string // remote URL to look up in the cache
+	WorkDir                  string // parent directory for the worktree (e.g. task workdir)
+	Ref                      string // optional branch, tag, or commit to base the worktree on
+	BranchName               string // optional plan-specified branch name
+	RequiresIsolatedWorktree bool   // execution routing requires task-level worktree isolation
+	BranchPolicy             string // execution routing branch policy selected by pipeline/plan
+	MergePolicy              string // execution routing merge policy selected by pipeline/plan
+	AgentName                string // for branch naming
+	IssueIdentifier          string // human-readable issue key for branch naming (e.g. LOC-18)
+	TaskID                   string // for branch naming uniqueness
+	CoAuthoredByEnabled      bool   // install prepare-commit-msg hook for Co-authored-by trailer
 }
 
 // WorktreeResult describes a successfully created worktree.
@@ -476,6 +479,9 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 			"path", worktreePath,
 			"branch", actualBranch,
 			"base", baseRef,
+			"requires_isolated_worktree", params.RequiresIsolatedWorktree,
+			"branch_policy", params.BranchPolicy,
+			"merge_policy", params.MergePolicy,
 		)
 
 		return &WorktreeResult{
@@ -512,6 +518,9 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		"path", worktreePath,
 		"branch", actualBranch,
 		"base", baseRef,
+		"requires_isolated_worktree", params.RequiresIsolatedWorktree,
+		"branch_policy", params.BranchPolicy,
+		"merge_policy", params.MergePolicy,
 	)
 
 	return &WorktreeResult{

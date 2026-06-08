@@ -43,6 +43,7 @@ type Task struct {
 	PlanItemExecutionKind     string                  `json:"plan_item_execution_kind,omitempty"`
 	PlanItemRequiresGitCommit bool                    `json:"plan_item_requires_git_commit,omitempty"`
 	PlanItemBranchName        string                  `json:"plan_item_branch_name,omitempty"`
+	PlanItemExecutionRouting  ExecutionRoutingData    `json:"plan_item_execution_routing,omitempty"`
 	UnitTestChecklist         []UnitTestCheckData     `json:"unit_test_checklist,omitempty"`
 	RepoCheckoutRef           string                  `json:"repo_checkout_ref,omitempty"`
 	PublishBranchName         string                  `json:"publish_branch_name,omitempty"`
@@ -97,6 +98,12 @@ type Task struct {
 	VisualReferenceAttachmentIDs     []string             `json:"visual_reference_attachment_ids,omitempty"`
 	VisualBoardID                    string               `json:"visual_board_id,omitempty"`
 	VisualWikiPages                  []VisualWikiPageData `json:"visual_wiki_pages,omitempty"`
+}
+
+type ExecutionRoutingData struct {
+	RequiresIsolatedWorktree bool   `json:"requires_isolated_worktree,omitempty"`
+	BranchPolicy             string `json:"branch_policy,omitempty"`
+	MergePolicy              string `json:"merge_policy,omitempty"`
 }
 
 type VisualWikiPageData struct {

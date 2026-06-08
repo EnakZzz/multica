@@ -272,6 +272,27 @@ func TestProviderNeedsInlineSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestShouldReusePriorExecutionHonorsIsolatedWorktreeRouting(t *testing.T) {
+	t.Parallel()
+
+	if !shouldReusePriorExecution(Task{PlanItemNodeType: "implementation"}) {
+		t.Fatal("regular implementation task should reuse prior execution")
+	}
+	if shouldReusePriorExecution(Task{PlanItemNodeType: "code_review"}) {
+		t.Fatal("review gate task should not reuse prior execution")
+	}
+	if shouldReusePriorExecution(Task{
+		PlanItemNodeType: "implementation",
+		PlanItemExecutionRouting: ExecutionRoutingData{
+			RequiresIsolatedWorktree: true,
+			BranchPolicy:             "per_agent",
+			MergePolicy:              "manual",
+		},
+	}) {
+		t.Fatal("isolated worktree routing must disable prior execution reuse")
+	}
+}
+
 // TestComposeOpenclawIncludeRoots — the Elon must-fix regression: the
 // daemon must grant OpenClaw permission to follow the wrapper's $include
 // link from envRoot into the user's active config dir, while preserving

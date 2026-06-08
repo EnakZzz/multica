@@ -647,10 +647,48 @@ type PlanClarification struct {
 	Answer   string `json:"answer"`
 }
 
+const (
+	HarnessStrategyModeNone                    = "none"
+	HarnessStrategyModeClassifyAndAct          = "classify_and_act"
+	HarnessStrategyModeFanOutSynthesize        = "fan_out_synthesize"
+	HarnessStrategyModeAdversarialVerification = "adversarial_verification"
+	HarnessStrategyModeGenerateAndFilter       = "generate_and_filter"
+	HarnessStrategyModeTournament              = "tournament"
+	HarnessStrategyModeLoopUntilDone           = "loop_until_done"
+)
+
+type HarnessStrategy struct {
+	Mode                     string `json:"mode"`
+	Summary                  string `json:"summary"`
+	Rationale                string `json:"rationale"`
+	StopCondition            string `json:"stop_condition"`
+	Parallelism              int32  `json:"parallelism"`
+	RequiresIsolatedWorktree bool   `json:"requires_isolated_worktree"`
+}
+
+const (
+	ExecutionBranchPolicyAuto         = "auto"
+	ExecutionBranchPolicyShared       = "shared"
+	ExecutionBranchPolicyPerItem      = "per_item"
+	ExecutionBranchPolicyPerIteration = "per_iteration"
+	ExecutionBranchPolicyPerAgent     = "per_agent"
+	ExecutionMergePolicyNone          = "none"
+	ExecutionMergePolicyManual        = "manual"
+	ExecutionMergePolicyPRRequired    = "pr_required"
+	ExecutionMergePolicyAutoWhenGreen = "auto_when_green"
+)
+
+type ExecutionRouting struct {
+	RequiresIsolatedWorktree bool   `json:"requires_isolated_worktree"`
+	BranchPolicy             string `json:"branch_policy"`
+	MergePolicy              string `json:"merge_policy"`
+}
+
 type issuePlanResult struct {
 	NeedsPlan    *bool                 `json:"needs_plan"`
 	Reason       string                `json:"reason"`
 	Spec         PlanSpec              `json:"spec"`
+	Harness      HarnessStrategy       `json:"harness_strategy"`
 	DirectIssue  issuePlanResultItem   `json:"direct_issue"`
 	Title        string                `json:"title"`
 	ParentIssue  issuePlanParent       `json:"parent_issue"`
@@ -666,29 +704,30 @@ type issuePlanParent struct {
 }
 
 type issuePlanResultItem struct {
-	Title                 string          `json:"title"`
-	Description           string          `json:"description"`
-	AcceptanceCriteria    []string        `json:"acceptance_criteria"`
-	SuggestedTestCommands []string        `json:"suggested_test_commands"`
-	UnitTestChecklist     []UnitTestCheck `json:"unit_test_checklist"`
-	ContextResources      []string        `json:"context_resources"`
-	RiskNotes             []string        `json:"risk_notes"`
-	NodeType              string          `json:"node_type"`
-	ExecutionKind         string          `json:"execution_kind"`
-	ConfirmationQuestion  string          `json:"confirmation_question"`
-	ConfirmationReason    string          `json:"confirmation_reason"`
-	RequiredEvidence      []string        `json:"required_evidence"`
-	RequiresGitCommit     *bool           `json:"requires_git_commit"`
-	BranchName            string          `json:"branch_name"`
-	IterationIndex        int32           `json:"iteration_index"`
-	IterationTitle        string          `json:"iteration_title"`
-	IterationBranchName   string          `json:"iteration_branch_name"`
-	RecommendedAgentID    string          `json:"recommended_agent_id"`
-	MatchScore            int32           `json:"match_score"`
-	MatchReason           string          `json:"match_reason"`
-	MissingCapability     string          `json:"missing_capability"`
-	DependsOnPositions    []int32         `json:"depends_on_positions"`
-	Selected              *bool           `json:"selected"`
+	Title                 string           `json:"title"`
+	Description           string           `json:"description"`
+	AcceptanceCriteria    []string         `json:"acceptance_criteria"`
+	SuggestedTestCommands []string         `json:"suggested_test_commands"`
+	UnitTestChecklist     []UnitTestCheck  `json:"unit_test_checklist"`
+	ContextResources      []string         `json:"context_resources"`
+	RiskNotes             []string         `json:"risk_notes"`
+	NodeType              string           `json:"node_type"`
+	ExecutionKind         string           `json:"execution_kind"`
+	ConfirmationQuestion  string           `json:"confirmation_question"`
+	ConfirmationReason    string           `json:"confirmation_reason"`
+	RequiredEvidence      []string         `json:"required_evidence"`
+	RequiresGitCommit     *bool            `json:"requires_git_commit"`
+	BranchName            string           `json:"branch_name"`
+	IterationIndex        int32            `json:"iteration_index"`
+	IterationTitle        string           `json:"iteration_title"`
+	IterationBranchName   string           `json:"iteration_branch_name"`
+	ExecutionRouting      ExecutionRouting `json:"execution_routing"`
+	RecommendedAgentID    string           `json:"recommended_agent_id"`
+	MatchScore            int32            `json:"match_score"`
+	MatchReason           string           `json:"match_reason"`
+	MissingCapability     string           `json:"missing_capability"`
+	DependsOnPositions    []int32          `json:"depends_on_positions"`
+	Selected              *bool            `json:"selected"`
 }
 
 type issuePlanPipeline struct {
@@ -699,29 +738,30 @@ type issuePlanPipeline struct {
 }
 
 type issuePlanPipelineNode struct {
-	Key                   string          `json:"key"`
-	Type                  string          `json:"type"`
-	NodeType              string          `json:"node_type"`
-	Title                 string          `json:"title"`
-	Description           string          `json:"description"`
-	AcceptanceCriteria    []string        `json:"acceptance_criteria"`
-	SuggestedTestCommands []string        `json:"suggested_test_commands"`
-	UnitTestChecklist     []UnitTestCheck `json:"unit_test_checklist"`
-	ContextResources      []string        `json:"context_resources"`
-	RiskNotes             []string        `json:"risk_notes"`
-	ExecutionKind         string          `json:"execution_kind"`
-	ConfirmationQuestion  string          `json:"confirmation_question"`
-	ConfirmationReason    string          `json:"confirmation_reason"`
-	RequiredEvidence      []string        `json:"required_evidence"`
-	RequiresGitCommit     *bool           `json:"requires_git_commit"`
-	BranchName            string          `json:"branch_name"`
-	IterationIndex        int32           `json:"iteration_index"`
-	IterationTitle        string          `json:"iteration_title"`
-	IterationBranchName   string          `json:"iteration_branch_name"`
-	AgentID               string          `json:"agent_id"`
-	RepoKeys              []string        `json:"repo_keys"`
-	DependsOnNodeKeys     []string        `json:"depends_on_node_keys"`
-	Selected              *bool           `json:"selected"`
+	Key                   string           `json:"key"`
+	Type                  string           `json:"type"`
+	NodeType              string           `json:"node_type"`
+	Title                 string           `json:"title"`
+	Description           string           `json:"description"`
+	AcceptanceCriteria    []string         `json:"acceptance_criteria"`
+	SuggestedTestCommands []string         `json:"suggested_test_commands"`
+	UnitTestChecklist     []UnitTestCheck  `json:"unit_test_checklist"`
+	ContextResources      []string         `json:"context_resources"`
+	RiskNotes             []string         `json:"risk_notes"`
+	ExecutionKind         string           `json:"execution_kind"`
+	ConfirmationQuestion  string           `json:"confirmation_question"`
+	ConfirmationReason    string           `json:"confirmation_reason"`
+	RequiredEvidence      []string         `json:"required_evidence"`
+	RequiresGitCommit     *bool            `json:"requires_git_commit"`
+	BranchName            string           `json:"branch_name"`
+	IterationIndex        int32            `json:"iteration_index"`
+	IterationTitle        string           `json:"iteration_title"`
+	IterationBranchName   string           `json:"iteration_branch_name"`
+	ExecutionRouting      ExecutionRouting `json:"execution_routing"`
+	AgentID               string           `json:"agent_id"`
+	RepoKeys              []string         `json:"repo_keys"`
+	DependsOnNodeKeys     []string         `json:"depends_on_node_keys"`
+	Selected              *bool            `json:"selected"`
 }
 
 func (r issuePlanResult) shouldCreatePlan() bool {
@@ -774,6 +814,156 @@ func normalizePlanSpec(spec PlanSpec) PlanSpec {
 	spec.OpenQuestions = normalizeSpecStringList(spec.OpenQuestions)
 	spec.Clarifications = normalizePlanClarifications(spec.Clarifications)
 	return spec
+}
+
+func NormalizeHarnessStrategy(strategy HarnessStrategy) HarnessStrategy {
+	mode := strings.TrimSpace(strategy.Mode)
+	switch mode {
+	case HarnessStrategyModeClassifyAndAct,
+		HarnessStrategyModeFanOutSynthesize,
+		HarnessStrategyModeAdversarialVerification,
+		HarnessStrategyModeGenerateAndFilter,
+		HarnessStrategyModeTournament,
+		HarnessStrategyModeLoopUntilDone:
+	case "", HarnessStrategyModeNone:
+		mode = HarnessStrategyModeNone
+	default:
+		mode = HarnessStrategyModeNone
+	}
+	parallelism := strategy.Parallelism
+	if parallelism < 1 {
+		parallelism = 1
+	}
+	if parallelism > 20 {
+		parallelism = 20
+	}
+	return HarnessStrategy{
+		Mode:                     mode,
+		Summary:                  strings.TrimSpace(strategy.Summary),
+		Rationale:                strings.TrimSpace(strategy.Rationale),
+		StopCondition:            strings.TrimSpace(strategy.StopCondition),
+		Parallelism:              parallelism,
+		RequiresIsolatedWorktree: strategy.RequiresIsolatedWorktree,
+	}
+}
+
+func MarshalHarnessStrategy(strategy HarnessStrategy) []byte {
+	normalized := NormalizeHarnessStrategy(strategy)
+	if normalized.Mode == HarnessStrategyModeNone &&
+		normalized.Summary == "" &&
+		normalized.Rationale == "" &&
+		normalized.StopCondition == "" &&
+		normalized.Parallelism == 1 &&
+		!normalized.RequiresIsolatedWorktree {
+		return []byte("{}")
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return []byte("{}")
+	}
+	return data
+}
+
+func HarnessStrategyFromJSON(data []byte) HarnessStrategy {
+	var strategy HarnessStrategy
+	if len(data) == 0 {
+		return NormalizeHarnessStrategy(strategy)
+	}
+	if err := json.Unmarshal(data, &strategy); err != nil {
+		return NormalizeHarnessStrategy(HarnessStrategy{})
+	}
+	return NormalizeHarnessStrategy(strategy)
+}
+
+func NormalizeExecutionRouting(routing ExecutionRouting) ExecutionRouting {
+	branchPolicy := strings.TrimSpace(routing.BranchPolicy)
+	switch branchPolicy {
+	case ExecutionBranchPolicyShared,
+		ExecutionBranchPolicyPerItem,
+		ExecutionBranchPolicyPerIteration,
+		ExecutionBranchPolicyPerAgent:
+	case "", ExecutionBranchPolicyAuto:
+		branchPolicy = ExecutionBranchPolicyAuto
+	default:
+		branchPolicy = ExecutionBranchPolicyAuto
+	}
+	mergePolicy := strings.TrimSpace(routing.MergePolicy)
+	switch mergePolicy {
+	case ExecutionMergePolicyManual,
+		ExecutionMergePolicyPRRequired,
+		ExecutionMergePolicyAutoWhenGreen:
+	case "", ExecutionMergePolicyNone:
+		mergePolicy = ExecutionMergePolicyNone
+	default:
+		mergePolicy = ExecutionMergePolicyNone
+	}
+	return ExecutionRouting{
+		RequiresIsolatedWorktree: routing.RequiresIsolatedWorktree,
+		BranchPolicy:             branchPolicy,
+		MergePolicy:              mergePolicy,
+	}
+}
+
+func MergeHarnessIntoExecutionRouting(routing ExecutionRouting, harness HarnessStrategy) ExecutionRouting {
+	routing = NormalizeExecutionRouting(routing)
+	harness = NormalizeHarnessStrategy(harness)
+	if harness.RequiresIsolatedWorktree {
+		routing.RequiresIsolatedWorktree = true
+		if routing.BranchPolicy == ExecutionBranchPolicyAuto {
+			routing.BranchPolicy = ExecutionBranchPolicyPerItem
+		}
+		if routing.MergePolicy == ExecutionMergePolicyNone {
+			routing.MergePolicy = ExecutionMergePolicyManual
+		}
+	}
+	return NormalizeExecutionRouting(routing)
+}
+
+func MarshalExecutionRouting(routing ExecutionRouting) []byte {
+	normalized := NormalizeExecutionRouting(routing)
+	if normalized.BranchPolicy == ExecutionBranchPolicyAuto &&
+		normalized.MergePolicy == ExecutionMergePolicyNone &&
+		!normalized.RequiresIsolatedWorktree {
+		return []byte("{}")
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return []byte("{}")
+	}
+	return data
+}
+
+func ExecutionRoutingFromJSON(data []byte) ExecutionRouting {
+	var routing ExecutionRouting
+	if len(data) == 0 {
+		return NormalizeExecutionRouting(routing)
+	}
+	if err := json.Unmarshal(data, &routing); err != nil {
+		return NormalizeExecutionRouting(ExecutionRouting{})
+	}
+	return NormalizeExecutionRouting(routing)
+}
+
+func ExecutionRoutingSection(routing ExecutionRouting) string {
+	routing = NormalizeExecutionRouting(routing)
+	if routing.BranchPolicy == ExecutionBranchPolicyAuto &&
+		routing.MergePolicy == ExecutionMergePolicyNone &&
+		!routing.RequiresIsolatedWorktree {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Execution routing:\n")
+	if routing.RequiresIsolatedWorktree {
+		b.WriteString("- Worktree isolation: required\n")
+	} else {
+		b.WriteString("- Worktree isolation: not required\n")
+	}
+	b.WriteString("- Branch policy: ")
+	b.WriteString(routing.BranchPolicy)
+	b.WriteString("\n")
+	b.WriteString("- Merge policy: ")
+	b.WriteString(routing.MergePolicy)
+	return b.String()
 }
 
 func normalizePlanAcceptanceScenarios(in []PlanAcceptanceScenario) []PlanAcceptanceScenario {
@@ -2617,12 +2807,12 @@ func (s *TaskService) applyIssuePlanCompleted(ctx context.Context, task db.Agent
 	}
 	output := strings.TrimSpace(payload.Output)
 	if normalizeIssuePlanPhase(ip.Phase) == IssuePlanPhaseSpec {
-		spec, err := parseIssuePlanSpecOutput(output)
+		spec, harness, err := parseIssuePlanSpecOutput(output)
 		if err != nil {
 			s.markIssuePlanFailed(ctx, planID, err.Error())
 			return
 		}
-		if err := s.writeIssuePlanSpec(ctx, planID, spec); err != nil {
+		if err := s.writeIssuePlanSpec(ctx, planID, spec, harness); err != nil {
 			slog.Warn("issue-plan completion: failed to write spec", "task_id", util.UUIDToString(task.ID), "plan_id", ip.PlanID, "error", err)
 			s.markIssuePlanFailed(ctx, planID, "failed to save planner spec")
 		}
@@ -2667,12 +2857,12 @@ func (s *TaskService) applyPlannerIssueCompleted(ctx context.Context, task db.Ag
 	}
 	output := strings.TrimSpace(payload.Output)
 	if normalizeIssuePlanPhase(ip.Phase) == IssuePlanPhaseSpec {
-		spec, err := parseIssuePlanSpecOutput(output)
+		spec, harness, err := parseIssuePlanSpecOutput(output)
 		if err != nil {
 			s.markIssuePlanFailed(ctx, planID, err.Error())
 			return
 		}
-		if err := s.writeIssuePlanSpec(ctx, planID, spec); err != nil {
+		if err := s.writeIssuePlanSpec(ctx, planID, spec, harness); err != nil {
 			slog.Warn("planner issue completion: failed to save plan spec", "task_id", util.UUIDToString(task.ID), "source_issue_id", ip.SourceIssueID, "error", err)
 			s.markIssuePlanFailed(ctx, planID, "failed to save planner spec")
 		}
@@ -2767,6 +2957,7 @@ func parseIssuePlanOutput(output string) (issuePlanResult, error) {
 	if err := decodeFirstJSONObject(output, &out); err != nil {
 		return out, fmt.Errorf("planner output JSON is invalid: %v", err)
 	}
+	out.Harness = NormalizeHarnessStrategy(out.Harness)
 	if !out.shouldCreatePlan() {
 		return out, nil
 	}
@@ -2831,6 +3022,7 @@ func parseIssuePlanOutput(output string) (issuePlanResult, error) {
 					IterationIndex:        node.IterationIndex,
 					IterationTitle:        strings.TrimSpace(node.IterationTitle),
 					IterationBranchName:   strings.TrimSpace(node.IterationBranchName),
+					ExecutionRouting:      node.ExecutionRouting,
 					RecommendedAgentID:    strings.TrimSpace(node.AgentID),
 					MatchScore:            100,
 					MatchReason:           "Selected by pipeline node assignment.",
@@ -2875,35 +3067,39 @@ func parseIssuePlanOutput(output string) (issuePlanResult, error) {
 		out.Items[i].ContextResources = normalizeStringSlice(item.ContextResources)
 		out.Items[i].RiskNotes = normalizeStringSlice(item.RiskNotes)
 		out.Items[i] = normalizeIssuePlanResultItemContract(out.Items[i])
+		out.Items[i].ExecutionRouting = MergeHarnessIntoExecutionRouting(out.Items[i].ExecutionRouting, out.Harness)
 	}
 	return out, nil
 }
 
-func parseIssuePlanSpecOutput(output string) (PlanSpec, error) {
+func parseIssuePlanSpecOutput(output string) (PlanSpec, HarnessStrategy, error) {
 	var wrapper struct {
-		Spec PlanSpec `json:"spec"`
+		Spec    PlanSpec        `json:"spec"`
+		Harness HarnessStrategy `json:"harness_strategy"`
 	}
 	var spec PlanSpec
+	var harness HarnessStrategy
 	if output == "" {
-		return spec, fmt.Errorf("planner returned empty output")
+		return spec, harness, fmt.Errorf("planner returned empty output")
 	}
 	if err := decodeFirstJSONObject(output, &wrapper); err != nil {
-		return spec, fmt.Errorf("planner output JSON is invalid: %v", err)
+		return spec, harness, fmt.Errorf("planner output JSON is invalid: %v", err)
 	}
 	spec = normalizePlanSpec(wrapper.Spec)
+	harness = NormalizeHarnessStrategy(wrapper.Harness)
 	if spec.Summary == "" && spec.Goal == "" {
 		if err := decodeFirstJSONObject(output, &spec); err != nil {
-			return spec, fmt.Errorf("planner output JSON is invalid: %v", err)
+			return spec, harness, fmt.Errorf("planner output JSON is invalid: %v", err)
 		}
 		spec = normalizePlanSpec(spec)
 	}
 	if spec.Summary == "" {
-		return spec, fmt.Errorf("planner spec missing summary")
+		return spec, harness, fmt.Errorf("planner spec missing summary")
 	}
 	if spec.Goal == "" {
-		return spec, fmt.Errorf("planner spec missing goal")
+		return spec, harness, fmt.Errorf("planner spec missing goal")
 	}
-	return spec, nil
+	return spec, harness, nil
 }
 
 func decodeFirstJSONObject(output string, v any) error {
@@ -3893,8 +4089,9 @@ func isInternalPlannerAgent(agent db.Agent) bool {
 	return strings.EqualFold(strings.TrimSpace(agent.Name), internalPlannerAgentName)
 }
 
-func (s *TaskService) writeIssuePlanSpec(ctx context.Context, planID pgtype.UUID, spec PlanSpec) error {
+func (s *TaskService) writeIssuePlanSpec(ctx context.Context, planID pgtype.UUID, spec PlanSpec, harness HarnessStrategy) error {
 	spec = normalizePlanSpec(spec)
+	harness = NormalizeHarnessStrategy(harness)
 	return s.runInTx(ctx, func(qtx *db.Queries) error {
 		existing, err := qtx.GetPlan(ctx, planID)
 		if err != nil {
@@ -3913,9 +4110,10 @@ func (s *TaskService) writeIssuePlanSpec(ctx context.Context, planID pgtype.UUID
 			title = firstNonEmptyLine(spec.Goal)
 		}
 		if _, err := qtx.MarkPlanSpecReview(ctx, db.MarkPlanSpecReviewParams{
-			ID:    planID,
-			Title: title,
-			Spec:  specJSON,
+			ID:              planID,
+			Title:           title,
+			Spec:            specJSON,
+			HarnessStrategy: MarshalHarnessStrategy(harness),
 		}); err != nil {
 			return fmt.Errorf("mark plan spec review: %w", err)
 		}
@@ -4006,6 +4204,7 @@ func (s *TaskService) writeIssuePlanResult(ctx context.Context, planID pgtype.UU
 			Title:             title,
 			ParentTitle:       pgtype.Text{String: parentTitle, Valid: true},
 			ParentDescription: pgtype.Text{String: parentDescription, Valid: parentDescription != ""},
+			HarnessStrategy:   MarshalHarnessStrategy(result.Harness),
 		})
 		if err != nil {
 			return fmt.Errorf("mark plan ready: %w", err)
@@ -4073,6 +4272,7 @@ func (s *TaskService) createPlanItemsFromResult(ctx context.Context, qtx *db.Que
 			IterationIndex:        item.IterationIndex,
 			IterationTitle:        strings.TrimSpace(item.IterationTitle),
 			IterationBranchName:   item.IterationBranchName,
+			ExecutionRouting:      MarshalExecutionRouting(item.ExecutionRouting),
 			RecommendedAgentID:    recommended,
 			MatchScore:            score,
 			MatchReason:           strings.TrimSpace(item.MatchReason),
@@ -4406,6 +4606,7 @@ func (s *TaskService) writePipelinePlanDraftFromPlannerIssue(ctx context.Context
 			Title:             title,
 			ParentTitle:       pgtype.Text{String: parentTitle, Valid: true},
 			ParentDescription: pgtype.Text{String: parentDescription, Valid: parentDescription != ""},
+			HarnessStrategy:   MarshalHarnessStrategy(result.Harness),
 		})
 		if err != nil {
 			return fmt.Errorf("mark plan ready: %w", err)
@@ -4468,6 +4669,7 @@ func (s *TaskService) writePipelinePlanDraft(ctx context.Context, task db.AgentT
 			Title:             title,
 			ParentTitle:       pgtype.Text{String: parentTitle, Valid: parentTitle != ""},
 			ParentDescription: pgtype.Text{String: parentDescription, Valid: parentDescription != ""},
+			HarnessStrategy:   MarshalHarnessStrategy(result.Harness),
 		})
 		if err != nil {
 			return fmt.Errorf("mark plan ready: %w", err)
@@ -4493,7 +4695,7 @@ func pipelinePlanItemsFromStages(stages []db.PipelineStage, overrides map[string
 			description = stage.Description
 		}
 		nodeType := NormalizePlanItemNodeType(stage.NodeType)
-		description = plannerPipelineIssueDescription(description, nodeType, repoTargetsByStage[stage.Key])
+		description = plannerPipelineIssueDescription(description, nodeType, repoTargetsByStage[stage.Key], plannerStageExecutionRouting(stage, override))
 		agentID := stage.AgentID
 		if override.agentID.Valid {
 			agentID = override.agentID
@@ -4524,6 +4726,7 @@ func pipelinePlanItemsFromStages(stages []db.PipelineStage, overrides map[string
 			RequiredEvidence:      override.requiredEvidence,
 			RequiresGitCommit:     override.requiresGitCommit,
 			BranchName:            override.branchName,
+			ExecutionRouting:      plannerStageExecutionRouting(stage, override),
 			RecommendedAgentID:    agentIDString,
 			MatchScore:            plannerMatchScore(agentID),
 			MatchReason:           "Selected by pipeline node assignment.",
@@ -4619,7 +4822,7 @@ func (s *TaskService) createPipelinePlanFromPlannerIssue(ctx context.Context, ta
 				description = stage.Description
 			}
 			nodeType := NormalizePlanItemNodeType(stage.NodeType)
-			description = plannerPipelineIssueDescription(description, nodeType, repoTargetsByStage[stage.Key])
+			description = plannerPipelineIssueDescription(description, nodeType, repoTargetsByStage[stage.Key], plannerStageExecutionRouting(stage, override))
 			agentID := stage.AgentID
 			if override.agentID.Valid {
 				agentID = override.agentID
@@ -4640,6 +4843,7 @@ func (s *TaskService) createPipelinePlanFromPlannerIssue(ctx context.Context, ta
 				RequiredEvidence:     override.requiredEvidence,
 				RequiresGitCommit:    override.requiresGitCommit,
 				BranchName:           override.branchName,
+				ExecutionRouting:     plannerStageExecutionRouting(stage, override),
 				RecommendedAgentID:   util.UUIDToString(agentID),
 				MatchScore:           plannerMatchScore(agentID),
 				MatchReason:          "Selected by pipeline node assignment.",
@@ -4669,6 +4873,7 @@ func (s *TaskService) createPipelinePlanFromPlannerIssue(ctx context.Context, ta
 				IterationIndex:        1,
 				IterationTitle:        "",
 				IterationBranchName:   branchName,
+				ExecutionRouting:      MarshalExecutionRouting(itemContract.ExecutionRouting),
 				RecommendedAgentID:    agentID,
 				MatchScore:            itemContract.MatchScore,
 				MatchReason:           itemContract.MatchReason,
@@ -4776,6 +4981,7 @@ type plannerPipelineOverride struct {
 	requiredEvidence      []string
 	requiresGitCommit     *bool
 	branchName            string
+	executionRouting      ExecutionRouting
 	agentID               pgtype.UUID
 	dependsOnKeys         []string
 	skip                  bool
@@ -4858,6 +5064,7 @@ func (s *TaskService) normalizePlannerPipelineOverrides(ctx context.Context, qtx
 			requiredEvidence:      normalizeStringSlice(node.RequiredEvidence),
 			requiresGitCommit:     node.RequiresGitCommit,
 			branchName:            normalizeIssuePlanBranchName(node.BranchName, node.Title),
+			executionRouting:      NormalizeExecutionRouting(node.ExecutionRouting),
 			dependsOnKeys:         normalizeStringSlice(node.DependsOnNodeKeys),
 		}
 		if node.Selected != nil && !*node.Selected {
@@ -4900,6 +5107,17 @@ func validatePlannerPipelineOverrides(stages []db.PipelineStage, overrides map[s
 		}
 	}
 	return nil
+}
+
+func plannerStageExecutionRouting(stage db.PipelineStage, override plannerPipelineOverride) ExecutionRouting {
+	routing := ExecutionRoutingFromJSON(stage.ExecutionRouting)
+	overrideRouting := NormalizeExecutionRouting(override.executionRouting)
+	if overrideRouting.RequiresIsolatedWorktree ||
+		overrideRouting.BranchPolicy != ExecutionBranchPolicyAuto ||
+		overrideRouting.MergePolicy != ExecutionMergePolicyNone {
+		routing = overrideRouting
+	}
+	return MergeHarnessIntoExecutionRouting(routing, HarnessStrategyFromJSON(stage.HarnessStrategy))
 }
 
 func plannerDependencyPositions(stages []db.PipelineStage, index int, overrides map[string]plannerPipelineOverride) []int32 {
@@ -5246,13 +5464,14 @@ func (s *TaskService) plannerPipelineRepoTargets(ctx context.Context, qtx *db.Qu
 	return targets, nil
 }
 
-func plannerPipelineIssueDescription(description, nodeType string, repos []plannerPipelineRepoTarget) string {
+func plannerPipelineIssueDescription(description, nodeType string, repos []plannerPipelineRepoTarget, routing ExecutionRouting) string {
 	description = strings.TrimSpace(description)
 	reviewContract := ReviewGateContract(nodeType)
 	if strings.Contains(strings.ToLower(description), "review_gate") {
 		reviewContract = ""
 	}
-	if len(repos) == 0 && reviewContract == "" {
+	routingText := ExecutionRoutingSection(routing)
+	if len(repos) == 0 && reviewContract == "" && routingText == "" {
 		return description
 	}
 	var b strings.Builder
@@ -5271,6 +5490,12 @@ func plannerPipelineIssueDescription(description, nodeType string, repos []plann
 			b.WriteString("\n")
 		}
 		b.WriteString(reviewContract)
+	}
+	if routingText != "" {
+		if len(repos) > 0 || reviewContract != "" {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(routingText)
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -5416,17 +5641,18 @@ func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.Ag
 		"original_prompt": qc.Prompt,
 	})
 	item, err := s.Queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
-		WorkspaceID:   workspaceID,
-		RecipientType: "member",
-		RecipientID:   requesterID,
-		Type:          "quick_create_done",
-		Severity:      "info",
-		IssueID:       issue.ID,
-		Title:         issue.Title,
-		Body:          pgtype.Text{},
-		ActorType:     pgtype.Text{String: "agent", Valid: true},
-		ActorID:       task.AgentID,
-		Details:       details,
+		WorkspaceID:          workspaceID,
+		RecipientType:        "member",
+		RecipientID:          requesterID,
+		Type:                 "quick_create_done",
+		Severity:             "info",
+		IssueID:              issue.ID,
+		Title:                issue.Title,
+		Body:                 pgtype.Text{},
+		ActorType:            pgtype.Text{String: "agent", Valid: true},
+		ActorID:              task.AgentID,
+		Details:              details,
+		FeishuDeliveryStatus: "not_applicable",
 	})
 	if err != nil {
 		slog.Error("quick-create completion: inbox write failed", "task_id", util.UUIDToString(task.ID), "error", err)
@@ -5458,17 +5684,18 @@ func (s *TaskService) notifyQuickCreateFailed(ctx context.Context, task db.Agent
 		"error":           redact.Text(errMsg),
 	})
 	item, err := s.Queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
-		WorkspaceID:   workspaceID,
-		RecipientType: "member",
-		RecipientID:   requesterID,
-		Type:          "quick_create_failed",
-		Severity:      "action_required",
-		IssueID:       pgtype.UUID{},
-		Title:         "Quick create failed",
-		Body:          pgtype.Text{String: redact.Text(errMsg), Valid: true},
-		ActorType:     pgtype.Text{String: "agent", Valid: true},
-		ActorID:       task.AgentID,
-		Details:       details,
+		WorkspaceID:          workspaceID,
+		RecipientType:        "member",
+		RecipientID:          requesterID,
+		Type:                 "quick_create_failed",
+		Severity:             "action_required",
+		IssueID:              pgtype.UUID{},
+		Title:                "Quick create failed",
+		Body:                 pgtype.Text{String: redact.Text(errMsg), Valid: true},
+		ActorType:            pgtype.Text{String: "agent", Valid: true},
+		ActorID:              task.AgentID,
+		Details:              details,
+		FeishuDeliveryStatus: "not_applicable",
 	})
 	if err != nil {
 		slog.Error("quick-create failure: inbox write failed", "task_id", util.UUIDToString(task.ID), "error", err)
@@ -5482,22 +5709,26 @@ func (s *TaskService) notifyQuickCreateFailed(ctx context.Context, task db.Agent
 // listeners (notification_listeners.go).
 func (s *TaskService) publishQuickCreateInbox(item db.InboxItem, workspaceID, agentID, issueStatus string) {
 	resp := map[string]any{
-		"id":             util.UUIDToString(item.ID),
-		"workspace_id":   util.UUIDToString(item.WorkspaceID),
-		"recipient_type": item.RecipientType,
-		"recipient_id":   util.UUIDToString(item.RecipientID),
-		"type":           item.Type,
-		"severity":       item.Severity,
-		"issue_id":       util.UUIDToPtr(item.IssueID),
-		"title":          item.Title,
-		"body":           util.TextToPtr(item.Body),
-		"read":           item.Read,
-		"archived":       item.Archived,
-		"created_at":     util.TimestampToString(item.CreatedAt),
-		"actor_type":     util.TextToPtr(item.ActorType),
-		"actor_id":       util.UUIDToPtr(item.ActorID),
-		"details":        json.RawMessage(item.Details),
-		"issue_status":   issueStatus,
+		"id":                         util.UUIDToString(item.ID),
+		"workspace_id":               util.UUIDToString(item.WorkspaceID),
+		"recipient_type":             item.RecipientType,
+		"recipient_id":               util.UUIDToString(item.RecipientID),
+		"type":                       item.Type,
+		"severity":                   item.Severity,
+		"issue_id":                   util.UUIDToPtr(item.IssueID),
+		"title":                      item.Title,
+		"body":                       util.TextToPtr(item.Body),
+		"read":                       item.Read,
+		"archived":                   item.Archived,
+		"created_at":                 util.TimestampToString(item.CreatedAt),
+		"actor_type":                 util.TextToPtr(item.ActorType),
+		"actor_id":                   util.UUIDToPtr(item.ActorID),
+		"details":                    json.RawMessage(item.Details),
+		"issue_status":               issueStatus,
+		"feishu_delivery_status":     item.FeishuDeliveryStatus,
+		"feishu_delivered_at":        util.TimestampToPtr(item.FeishuDeliveredAt),
+		"feishu_delivery_attempts":   item.FeishuDeliveryAttempts,
+		"feishu_delivery_last_error": util.TextToPtr(item.FeishuDeliveryLastError),
 	}
 	s.Bus.Publish(events.Event{
 		Type:        protocol.EventInboxNew,

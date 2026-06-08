@@ -340,6 +340,19 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	if ctx.PlanItemBranchName != "" {
 		fmt.Fprintf(&b, "**Planned branch:** `%s`\n\n", ctx.PlanItemBranchName)
 	}
+	if ctx.PlanItemRequiresIsolatedWorktree || ctx.PlanItemBranchPolicy != "" || ctx.PlanItemMergePolicy != "" {
+		b.WriteString("**Execution routing:**\n")
+		if ctx.PlanItemRequiresIsolatedWorktree {
+			b.WriteString("- Worktree isolation: required\n")
+		}
+		if ctx.PlanItemBranchPolicy != "" {
+			fmt.Fprintf(&b, "- Branch policy: `%s`\n", ctx.PlanItemBranchPolicy)
+		}
+		if ctx.PlanItemMergePolicy != "" {
+			fmt.Fprintf(&b, "- Merge policy: `%s`\n", ctx.PlanItemMergePolicy)
+		}
+		b.WriteString("\n")
+	}
 	if ctx.PlanItemID != "" && !ctx.PlanItemRequiresGitCommit {
 		b.WriteString("**Git commit expected:** no\n\n")
 	}
