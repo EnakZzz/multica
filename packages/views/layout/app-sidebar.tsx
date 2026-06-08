@@ -34,7 +34,7 @@ import {
   BarChart3,
   X,
   Zap,
-  GitBranch,
+  Workflow,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -140,7 +140,7 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "plans", labelKey: "plans", icon: ClipboardList },
-  { key: "pipelines", labelKey: "pipelines", icon: GitBranch },
+  { key: "pipelines", labelKey: "pipelines", icon: Workflow },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },

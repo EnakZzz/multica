@@ -88,7 +88,7 @@ vi.mock("@multica/core/paths", () => ({
     myIssues: () => "/acme/my-issues",
     issues: () => "/acme/issues",
     plans: () => "/acme/plans",
-    pipelines: () => "/acme/pipelines",
+    pipelines: () => "/acme/workflows",
     projects: () => "/acme/projects",
     autopilots: () => "/acme/autopilots",
     agents: () => "/acme/agents",
@@ -158,8 +158,8 @@ describe("PinRow", () => {
     expect(container.querySelector(".lucide-clipboard-list")).toBeInTheDocument();
   });
 
-  it("renders the Pipelines navigation item", () => {
+  it("renders the Workflows navigation item", () => {
     const { container } = render(<AppSidebar />);
-    expect(container.querySelector(".lucide-git-branch")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-workflow")).toBeInTheDocument();
   });
 });

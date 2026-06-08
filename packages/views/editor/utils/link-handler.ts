@@ -22,6 +22,7 @@ const WORKSPACE_ROUTE_SEGMENTS = new Set([
   "usage",
   "issues",
   "plans",
+  "workflows",
   "pipelines",
   "projects",
   "autopilots",
