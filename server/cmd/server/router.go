@@ -254,6 +254,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// Public API
 	r.Get("/api/config", h.GetConfig)
 	r.Get("/api/public/ai-gateway/usage/summary", h.ListPublicAIGatewayUsageSummary)
+	r.Route("/v1", func(r chi.Router) {
+		r.Get("/models", h.AIGatewayModels)
+		r.Post("/responses", h.AIGatewayResponses)
+		r.Post("/images/generations", h.AIGatewayImagesGenerations)
+		r.Post("/chat/completions", h.AIGatewayChatCompletions)
+		r.Post("/embeddings", h.AIGatewayEmbeddings)
+	})
 
 	// Webhook ingress for autopilots. Outside the authenticated group on
 	// purpose: the bearer token in the URL path IS the credential. Workspace

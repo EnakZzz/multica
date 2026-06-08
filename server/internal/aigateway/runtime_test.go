@@ -204,6 +204,42 @@ func TestNormalizeRoutesSupportsHEAPIKeyPool(t *testing.T) {
 	}
 }
 
+func TestNormalizeRoutesSupportsEmbeddingsUpstream(t *testing.T) {
+	routes, err := NormalizeRoutes([]Route{{
+		Alias: "text-embedding-3-small",
+		Targets: []Target{{
+			Provider:    "openai",
+			BaseURL:     "https://api.openai.com/v1",
+			AuthMode:    AuthModeAPIKey,
+			APIKey:      "stored-key",
+			Model:       "text-embedding-3-small",
+			UpstreamAPI: "embeddings",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("NormalizeRoutes: %v", err)
+	}
+	if got := routes[0].Targets[0].UpstreamAPI; got != "embeddings" {
+		t.Fatalf("UpstreamAPI = %q, want embeddings", got)
+	}
+}
+
+func TestBuildUpstreamRequestKeepsEmbeddingsEndpoint(t *testing.T) {
+	endpoint, body, err := BuildUpstreamRequest("/embeddings", map[string]any{
+		"model": "text-embedding-3-small",
+		"input": "hello",
+	}, Target{UpstreamAPI: "embeddings"}, "text-embedding-3-small")
+	if err != nil {
+		t.Fatalf("BuildUpstreamRequest: %v", err)
+	}
+	if endpoint != "/embeddings" {
+		t.Fatalf("endpoint = %q, want /embeddings", endpoint)
+	}
+	if !strings.Contains(string(body), `"input":"hello"`) {
+		t.Fatalf("body = %s, want embedding payload", body)
+	}
+}
+
 func TestNormalizeRoutesRejectsAPIKeyPoolForNonHEProvider(t *testing.T) {
 	_, err := NormalizeRoutes([]Route{{
 		Alias: "gpt-5.5",

@@ -142,6 +142,7 @@ type aiGatewayProbeResponse struct {
 	ModelsEndpoint    aiGatewayProbeEndpoint    `json:"models_endpoint"`
 	Responses         aiGatewayProbeEndpoint    `json:"responses"`
 	ChatCompletions   aiGatewayProbeEndpoint    `json:"chat_completions"`
+	Embeddings        aiGatewayProbeEndpoint    `json:"embeddings"`
 	AnthropicMessages aiGatewayProbeEndpoint    `json:"anthropic_messages"`
 	Models            []aiGatewayProbeModelInfo `json:"models"`
 }
@@ -630,6 +631,7 @@ func (h *Handler) ProbeAIGatewayProvider(w http.ResponseWriter, r *http.Request)
 	resp.Authenticated = resp.ModelsEndpoint.OK
 	resp.Responses = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/responses", authHeaders, req.Model, "responses")
 	resp.ChatCompletions = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/chat/completions", authHeaders, req.Model, "chat_completions")
+	resp.Embeddings = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/embeddings", authHeaders, req.Model, "embeddings")
 	resp.AnthropicMessages = probeAIGatewayJSONEndpoint(r.Context(), client, req.BaseURL+"/messages", authHeaders, req.Model, "anthropic_messages")
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -692,6 +694,12 @@ func probeAIGatewayJSONEndpoint(ctx context.Context, client *http.Client, url st
 			body = `{"model":"probe","messages":[{"role":"user","content":"ping"}],"max_tokens":1}`
 		} else {
 			body = fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"Reply OK"}],"max_tokens":1}`, model)
+		}
+	case "embeddings":
+		if model == "" {
+			body = `{"model":"probe","input":"ping"}`
+		} else {
+			body = fmt.Sprintf(`{"model":%q,"input":"ping"}`, model)
 		}
 	default:
 		if model == "" {
@@ -1458,8 +1466,14 @@ func (h *Handler) AIGatewayModels(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AIGatewayResponses(w http.ResponseWriter, r *http.Request) {
 	h.aiGatewayRuntime().Responses(w, r)
 }
+func (h *Handler) AIGatewayImagesGenerations(w http.ResponseWriter, r *http.Request) {
+	h.aiGatewayRuntime().ImagesGenerations(w, r)
+}
 func (h *Handler) AIGatewayChatCompletions(w http.ResponseWriter, r *http.Request) {
 	h.aiGatewayRuntime().ChatCompletions(w, r)
+}
+func (h *Handler) AIGatewayEmbeddings(w http.ResponseWriter, r *http.Request) {
+	h.aiGatewayRuntime().Embeddings(w, r)
 }
 func (h *Handler) recordAIGatewayUsage(ctx context.Context, record aiGatewayUsageRecord) {
 	h.aiGatewayRuntime().RecordUsage(ctx, record)

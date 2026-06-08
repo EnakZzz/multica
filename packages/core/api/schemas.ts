@@ -339,6 +339,7 @@ export const AIGatewayProbeResultSchema = z.object({
   models_endpoint: AIGatewayProbeEndpointSchema,
   responses: AIGatewayProbeEndpointSchema,
   chat_completions: AIGatewayProbeEndpointSchema,
+  embeddings: AIGatewayProbeEndpointSchema,
   anthropic_messages: AIGatewayProbeEndpointSchema,
   models: z.array(z.object({
     id: z.string(),

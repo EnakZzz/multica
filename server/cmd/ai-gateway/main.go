@@ -87,6 +87,7 @@ func main() {
 		r.Post("/responses", runtime.Responses)
 		r.Post("/images/generations", runtime.ImagesGenerations)
 		r.Post("/chat/completions", runtime.ChatCompletions)
+		r.Post("/embeddings", runtime.Embeddings)
 	})
 
 	srv := &http.Server{

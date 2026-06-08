@@ -295,6 +295,7 @@ export interface AIGatewayProbeResult {
   models_endpoint: AIGatewayProbeEndpoint;
   responses: AIGatewayProbeEndpoint;
   chat_completions: AIGatewayProbeEndpoint;
+  embeddings: AIGatewayProbeEndpoint;
   anthropic_messages: AIGatewayProbeEndpoint;
   models: AIGatewayProbeModel[];
 }

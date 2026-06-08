@@ -242,7 +242,7 @@ func NormalizeRoutes(routes []Route) ([]Route, error) {
 			if t.UpstreamAPI == "" {
 				t.UpstreamAPI = "responses"
 			}
-			if t.UpstreamAPI != "responses" && t.UpstreamAPI != "chat_completions" {
+			if t.UpstreamAPI != "responses" && t.UpstreamAPI != "chat_completions" && t.UpstreamAPI != "embeddings" {
 				return nil, fmt.Errorf("AI gateway route %q target %d has unsupported upstream_api %q", routes[i].Alias, j, t.UpstreamAPI)
 			}
 			t.APIKeyEnv = strings.TrimSpace(t.APIKeyEnv)
@@ -992,6 +992,10 @@ func (rt *Runtime) ImagesGenerations(w http.ResponseWriter, r *http.Request) {
 
 func (rt *Runtime) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	rt.proxy(w, r, "/chat/completions")
+}
+
+func (rt *Runtime) Embeddings(w http.ResponseWriter, r *http.Request) {
+	rt.proxy(w, r, "/embeddings")
 }
 
 func (rt *Runtime) requireKey(w http.ResponseWriter, r *http.Request) (VirtualKey, bool) {
@@ -1877,6 +1881,10 @@ func BuildUpstreamRequest(endpoint string, payload map[string]any, target Target
 	if target.UpstreamAPI == "chat_completions" && endpoint == "/responses" {
 		body, err := ResponsesPayloadToChatCompletions(payload, targetModel, target)
 		return "/chat/completions", body, err
+	}
+	if target.UpstreamAPI == "embeddings" && endpoint == "/embeddings" {
+		body, err := PatchedBody(payload, targetModel, endpoint, target)
+		return "/embeddings", body, err
 	}
 	body, err := PatchedBody(payload, targetModel, endpoint, target)
 	return endpoint, body, err
