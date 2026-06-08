@@ -264,7 +264,7 @@
     "base_url_label": "Base URL",
     "base_url_placeholder": "https://provider.example.com/v1",
     "api_key_env_label": "API key 环境变量名",
-    "api_key_env_placeholder": "OPENAI_API_KEY",
+    "api_key_env_placeholder": "PROVIDER_API_KEY",
     "api_key_label": "API key",
     "api_key_placeholder": "输入完整 API key；留空则保留原值",
     "api_key_masked": "已保存：{{masked}}",

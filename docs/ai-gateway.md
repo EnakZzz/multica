@@ -80,7 +80,7 @@ curl http://localhost:8080/api/ai-gateway/probe \
   -H "Authorization: Bearer mul_or_jwt_token" \
   -H "X-Workspace-Slug: local-agents" \
   -H "Content-Type: application/json" \
-  -d '{"base_url":"http://claude-proxy.example.com/v1","api_key_env":"ANTHROPIC_AUTH_TOKEN","model":"claude-sonnet-4-6"}'
+  -d '{"base_url":"http://claude-proxy.example.com/v1","api_key":"sk-...","model":"claude-sonnet-4-6"}'
 ```
 
 Example managed route with OpenAI first and a Claude local fallback that exposes
@@ -99,7 +99,7 @@ curl http://localhost:8080/api/ai-gateway/routes \
       {
         "provider": "openai",
         "base_url": "https://api.openai.com/v1",
-        "api_key_env": "OPENAI_API_KEY",
+        "api_key": "sk-...",
         "model": "gpt-5-codex",
         "upstream_api": "responses",
         "timeout_seconds": 300,
@@ -110,7 +110,7 @@ curl http://localhost:8080/api/ai-gateway/routes \
       {
         "provider": "claude-local",
         "base_url": "http://claude-proxy.example.com/v1",
-        "api_key_env": "ANTHROPIC_AUTH_TOKEN",
+        "api_key": "sk-...",
         "model": "claude-sonnet-4-6",
         "upstream_api": "chat_completions",
         "timeout_seconds": 3000,
@@ -146,17 +146,17 @@ for the workspace:
 Minimal single-upstream config:
 
 ```env
-OPENAI_API_KEY=sk-...
 AI_GATEWAY_DEFAULT_ALIAS=team-agent
 AI_GATEWAY_DEFAULT_MODEL=gpt-5
+AI_GATEWAY_DEFAULT_API_KEY=sk-...
 ```
 
 Fallback route across multiple OpenAI-compatible upstreams:
 
 ```env
-OPENAI_API_KEY=sk-...
+PROVIDER_PRIMARY_API_KEY=sk-...
 OPENROUTER_API_KEY=sk-or-...
-AI_GATEWAY_ROUTES=[{"alias":"team-agent","targets":[{"provider":"openai","base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","model":"gpt-5"},{"provider":"openrouter","base_url":"https://openrouter.ai/api/v1","api_key_env":"OPENROUTER_API_KEY","model":"anthropic/claude-sonnet"}]}]
+AI_GATEWAY_ROUTES=[{"alias":"team-agent","targets":[{"provider":"openai","base_url":"https://api.openai.com/v1","api_key_env":"PROVIDER_PRIMARY_API_KEY","model":"gpt-5"},{"provider":"openrouter","base_url":"https://openrouter.ai/api/v1","api_key_env":"OPENROUTER_API_KEY","model":"anthropic/claude-sonnet"}]}]
 ```
 
 `/v1/models` returns configured aliases. For wildcard (`"alias":"*"`) routes,
@@ -213,8 +213,8 @@ Exact aliases are the most explicit option:
 
 ```env
 AI_GATEWAY_ROUTES=[
-  {"alias":"gpt-5-codex","targets":[{"provider":"openai","base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","model":"gpt-5-codex","upstream_api":"responses"}]},
-  {"alias":"claude-sonnet-4-6","targets":[{"provider":"claude-local","base_url":"http://claude-proxy.example.com/v1","api_key_env":"ANTHROPIC_AUTH_TOKEN","model":"claude-sonnet-4-6","upstream_api":"chat_completions","timeout_seconds":3000}]}
+  {"alias":"gpt-5-codex","targets":[{"provider":"openai","base_url":"https://api.openai.com/v1","api_key":"sk-...","model":"gpt-5-codex","upstream_api":"responses"}]},
+  {"alias":"claude-sonnet-4-6","targets":[{"provider":"claude-local","base_url":"http://claude-proxy.example.com/v1","api_key":"sk-...","model":"claude-sonnet-4-6","upstream_api":"chat_completions","timeout_seconds":3000}]}
 ]
 ```
 
@@ -226,8 +226,8 @@ A wildcard route can aggregate several switchable models under one route:
 
 ```env
 AI_GATEWAY_ROUTES=[{"alias":"*","targets":[
-  {"provider":"openai","base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","model":"gpt-5-codex","upstream_api":"responses"},
-  {"provider":"claude-local","base_url":"http://claude-proxy.example.com/v1","api_key_env":"ANTHROPIC_AUTH_TOKEN","model":"claude-sonnet-4-6","upstream_api":"chat_completions","timeout_seconds":3000}
+  {"provider":"openai","base_url":"https://api.openai.com/v1","api_key":"sk-...","model":"gpt-5-codex","upstream_api":"responses"},
+  {"provider":"claude-local","base_url":"http://claude-proxy.example.com/v1","api_key_env":"PROVIDER_CLAUDE_API_KEY","model":"claude-sonnet-4-6","upstream_api":"chat_completions","timeout_seconds":3000}
 ]}]
 ```
 
@@ -238,7 +238,7 @@ passes any requested model through to that upstream.
 Wildcard route for direct model pass-through to one OpenAI-compatible upstream:
 
 ```env
-AI_GATEWAY_ROUTES=[{"alias":"*","targets":[{"provider":"openai","base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY"}]}]
+AI_GATEWAY_ROUTES=[{"alias":"*","targets":[{"provider":"openai","base_url":"https://api.openai.com/v1","api_key":"sk-..."}]}]
 ```
 
 Use the wildcard only when the virtual key should be allowed to call arbitrary

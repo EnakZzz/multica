@@ -172,7 +172,9 @@ func LoadRoutesFromEnv() ([]Route, error) {
 	raw := strings.TrimSpace(os.Getenv("AI_GATEWAY_ROUTES"))
 	if raw == "" {
 		defaultModel := strings.TrimSpace(os.Getenv("AI_GATEWAY_DEFAULT_MODEL"))
-		if defaultModel == "" || os.Getenv("OPENAI_API_KEY") == "" {
+		defaultKey := strings.TrimSpace(os.Getenv("AI_GATEWAY_DEFAULT_API_KEY"))
+		defaultKeyEnv := strings.TrimSpace(os.Getenv("AI_GATEWAY_DEFAULT_API_KEY_ENV"))
+		if defaultModel == "" || (defaultKey == "" && defaultKeyEnv == "") {
 			return nil, nil
 		}
 		alias := strings.TrimSpace(os.Getenv("AI_GATEWAY_DEFAULT_ALIAS"))
@@ -185,7 +187,8 @@ func LoadRoutesFromEnv() ([]Route, error) {
 			Targets: []Target{{
 				Provider:       "openai",
 				BaseURL:        DefaultURL,
-				APIKeyEnv:      "OPENAI_API_KEY",
+				APIKey:         defaultKey,
+				APIKeyEnv:      defaultKeyEnv,
 				Model:          defaultModel,
 				UpstreamAPI:    "responses",
 				TimeoutSeconds: 300,
@@ -351,7 +354,7 @@ func validateEnvName(name string) error {
 		return errors.New("must be an environment variable name, not a raw secret")
 	}
 	if !envNamePattern.MatchString(name) {
-		return errors.New("must look like OPENAI_API_KEY")
+		return errors.New("must look like PROVIDER_API_KEY")
 	}
 	return nil
 }

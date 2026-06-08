@@ -49,7 +49,7 @@ func TestRedactGitHubToken(t *testing.T) {
 
 func TestRedactOpenAIKey(t *testing.T) {
 	t.Parallel()
-	input := "OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012mno345"
+	input := "TEST_OPENAI_KEY=sk-proj-abc123def456ghi789jkl012mno345"
 	got := Text(input)
 	if strings.Contains(got, "sk-proj-abc123") {
 		t.Fatalf("OpenAI key not redacted: %s", got)

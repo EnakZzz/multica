@@ -81,7 +81,7 @@ function blankTarget(priority = 0): RouteTargetForm {
     provider: "openai",
     base_url: "https://api.openai.com/v1",
     auth_mode: "api_key",
-    api_key_env: "OPENAI_API_KEY",
+    api_key_env: "",
     api_key_pool: [],
     cookie_env: "",
     custom_header_envs: [],
@@ -213,7 +213,7 @@ function validateEnvRef(label: string, value: string) {
     throw new Error(`${label} must be an environment variable name, not a raw secret`);
   }
   if (!ENV_NAME_RE.test(trimmed)) {
-    throw new Error(`${label} must look like OPENAI_API_KEY`);
+    throw new Error(`${label} must look like PROVIDER_API_KEY`);
   }
 }
 
@@ -484,7 +484,7 @@ function parseRouteJson(raw: string): RouteFormPayload {
     parsed = JSON.parse(raw) as unknown;
   } catch (e) {
     if (e instanceof SyntaxError && e.message.includes("control character")) {
-      throw new Error("invalid JSON: strings cannot contain raw line breaks; use an environment variable name like OPENAI_API_KEY");
+      throw new Error("invalid JSON: strings cannot contain raw line breaks; use an environment variable name like PROVIDER_API_KEY");
     }
     throw e;
   }
@@ -515,7 +515,7 @@ function parseRouteJson(raw: string): RouteFormPayload {
         provider: typeof target.provider === "string" ? target.provider : "openai",
         base_url: typeof target.base_url === "string" ? target.base_url : "https://api.openai.com/v1",
         auth_mode: target.auth_mode === "custom_headers_cookie" ? "custom_headers_cookie" : "api_key",
-        api_key_env: typeof target.api_key_env === "string" ? target.api_key_env : "OPENAI_API_KEY",
+        api_key_env: typeof target.api_key_env === "string" ? target.api_key_env : "",
         api_key_pool: Array.isArray(target.api_key_pool)
           ? target.api_key_pool.map((item) => {
             const pool = item as Partial<AIGatewayAPIKeyPoolItem>;
@@ -1107,7 +1107,7 @@ export function AIGatewayTab() {
                               api_key_pool: [],
                             } : {
                               auth_mode: "api_key",
-                              api_key_env: target.api_key_env || "OPENAI_API_KEY",
+                              api_key_env: target.api_key_env || "",
                               cookie_env: "",
                               custom_header_envs: [],
                             })}

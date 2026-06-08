@@ -42,7 +42,7 @@ func TestLoadAIGatewayRoutesFromEnvParsesFallbackTargets(t *testing.T) {
 		{
 			"alias": "team-agent",
 			"targets": [
-				{"provider": "openai", "api_key_env": "OPENAI_API_KEY", "model": "gpt-primary"},
+				{"provider": "openai", "api_key_env": "TEST_OPENAI_KEY", "model": "gpt-primary"},
 				{"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1/", "api_key_env": "OPENROUTER_API_KEY", "model": "anthropic/claude-sonnet"}
 			]
 		}
@@ -144,14 +144,14 @@ func TestPrepareAIGatewayTargetsForSavePreservesExistingSingleAPIKey(t *testing.
 		ID:        "target-1",
 		Provider:  "openai",
 		AuthMode:  aigateway.AuthModeAPIKey,
-		APIKeyEnv: "OPENAI_API_KEY",
+		APIKeyEnv: "TEST_OPENAI_KEY",
 		APIKey:    aiGatewayKeepStoredAPIKeySentinel,
 	}}, map[string]aiGatewayTarget{
 		"target-1": {
 			ID:        "target-1",
 			Provider:  "openai",
 			AuthMode:  aigateway.AuthModeAPIKey,
-			APIKeyEnv: "OPENAI_API_KEY",
+			APIKeyEnv: "TEST_OPENAI_KEY",
 			APIKey:    "sk-stored-value",
 		},
 	})
@@ -188,7 +188,7 @@ func TestAIGatewayRoutesToResponseMasksPoolKeys(t *testing.T) {
 			ID:        "target-1",
 			Provider:  "he-tokenapi",
 			AuthMode:  aigateway.AuthModeAPIKey,
-			APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+			APIKeyEnv: "TEST_HE_TOKENAPI_KEY",
 			APIKeyPool: []aigateway.APIKeyPoolItem{{
 				ID:            "pool-1",
 				Label:         "team-a",
@@ -219,7 +219,7 @@ func TestAIGatewayRoutesToResponseMasksSingleAPIKey(t *testing.T) {
 			ID:        "target-1",
 			Provider:  "openai",
 			AuthMode:  aigateway.AuthModeAPIKey,
-			APIKeyEnv: "OPENAI_API_KEY",
+			APIKeyEnv: "TEST_OPENAI_KEY",
 			APIKey:    "sk-stored-value",
 		}},
 	}})
@@ -242,7 +242,7 @@ func TestAIGatewayProviderPresetsIncludeHETokenAPI(t *testing.T) {
 		if preset.BaseURL != "https://tokenapi.happyelements.net/v1" {
 			t.Fatalf("base url: got %q", preset.BaseURL)
 		}
-		if preset.APIKeyEnv != "HAPPYELEMENTS_TOKENAPI_API_KEY" {
+		if preset.APIKeyEnv != "" {
 			t.Fatalf("api key env: got %q", preset.APIKeyEnv)
 		}
 		if preset.UpstreamAPI != "responses" {
@@ -259,7 +259,7 @@ func TestAIGatewayProviderPresetsIncludeHETokenAPI(t *testing.T) {
 
 func TestFindAIGatewayRouteSupportsWildcard(t *testing.T) {
 	routes := []aiGatewayRoute{
-		{Alias: "*", Targets: []aiGatewayTarget{{APIKeyEnv: "OPENAI_API_KEY"}}},
+		{Alias: "*", Targets: []aiGatewayTarget{{APIKeyEnv: "TEST_OPENAI_KEY"}}},
 	}
 	route, ok := findAIGatewayRoute(routes, "gpt-5")
 	if !ok {
@@ -272,11 +272,11 @@ func TestFindAIGatewayRouteSupportsWildcard(t *testing.T) {
 
 func TestAIGatewayModelsIncludesWildcardTargetModels(t *testing.T) {
 	t.Setenv("AI_GATEWAY_ROUTES", `[
-		{"alias":"team-agent","targets":[{"provider":"openai","api_key_env":"OPENAI_API_KEY","model":"gpt-5-codex"}]},
+		{"alias":"team-agent","targets":[{"provider":"openai","api_key_env":"TEST_OPENAI_KEY","model":"gpt-5-codex"}]},
 		{"alias":"*","targets":[
-			{"provider":"openai","api_key_env":"OPENAI_API_KEY","model":"gpt-5-codex"},
-			{"provider":"claude-local","api_key_env":"ANTHROPIC_AUTH_TOKEN","model":"claude-sonnet-4-6","upstream_api":"chat_completions"},
-			{"provider":"openai","api_key_env":"OPENAI_API_KEY"}
+			{"provider":"openai","api_key_env":"TEST_OPENAI_KEY","model":"gpt-5-codex"},
+			{"provider":"claude-local","api_key_env":"TEST_CLAUDE_TOKEN","model":"claude-sonnet-4-6","upstream_api":"chat_completions"},
+			{"provider":"openai","api_key_env":"TEST_OPENAI_KEY"}
 		]}
 	]`)
 

@@ -165,12 +165,12 @@ func TestResolveUpstreamAuthUsesAPIKeyPoolWhenPresent(t *testing.T) {
 }
 
 func TestResolveUpstreamAuthUsesStoredAPIKeyBeforeEnv(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "env-key")
+	t.Setenv("TEST_OPENAI_KEY", "env-key")
 	auth, err := ResolveUpstreamAuth(Target{
 		AuthMode:  AuthModeAPIKey,
 		Provider:  "openai",
 		APIKey:    "stored-key",
-		APIKeyEnv: "OPENAI_API_KEY",
+		APIKeyEnv: "TEST_OPENAI_KEY",
 	})
 	if err != nil {
 		t.Fatalf("ResolveUpstreamAuth: %v", err)
@@ -253,7 +253,7 @@ func TestInheritWildcardHEAPIKeyPools(t *testing.T) {
 					Provider:  "he-tokenapi",
 					BaseURL:   "https://tokenapi.happyelements.net/v1",
 					AuthMode:  AuthModeAPIKey,
-					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					APIKeyEnv: "TEST_HE_TOKENAPI_KEY",
 					Model:     "",
 					APIKeyPool: []APIKeyPoolItem{
 						{ID: "pool-1", Label: "shared", APIKey: "he-key", SharedByEmail: "owner@example.com", Enabled: true},
@@ -268,14 +268,14 @@ func TestInheritWildcardHEAPIKeyPools(t *testing.T) {
 					Provider:  "he-tokenapi",
 					BaseURL:   "https://tokenapi.happyelements.net/v1",
 					AuthMode:  AuthModeAPIKey,
-					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					APIKeyEnv: "TEST_HE_TOKENAPI_KEY",
 					Model:     "vp/gpt-5.5",
 				},
 				{
 					Provider:  "openai",
 					BaseURL:   "https://api.openai.com/v1",
 					AuthMode:  AuthModeAPIKey,
-					APIKeyEnv: "OPENAI_API_KEY",
+					APIKeyEnv: "TEST_OPENAI_KEY",
 					Model:     "gpt-5.5",
 				},
 			},
@@ -310,7 +310,7 @@ func TestMergeWildcardFallbackTargetsAppendsSharedFallbackWithoutDuplicatingHE(t
 					Provider:  "he-tokenapi",
 					BaseURL:   "https://tokenapi.happyelements.net/v1",
 					AuthMode:  AuthModeAPIKey,
-					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					APIKeyEnv: "TEST_HE_TOKENAPI_KEY",
 					APIKeyPool: []APIKeyPoolItem{
 						{ID: "pool-1", Label: "shared", APIKey: "he-key", SharedByEmail: "owner@example.com", Enabled: true},
 					},
@@ -319,7 +319,7 @@ func TestMergeWildcardFallbackTargetsAppendsSharedFallbackWithoutDuplicatingHE(t
 					Provider:    "openai",
 					BaseURL:     "https://api.openai.com/v1",
 					AuthMode:    AuthModeAPIKey,
-					APIKeyEnv:   "OPENAI_API_KEY",
+					APIKeyEnv:   "TEST_OPENAI_KEY",
 					Model:       "gpt-5.5",
 					UpstreamAPI: "responses",
 				},
@@ -332,7 +332,7 @@ func TestMergeWildcardFallbackTargetsAppendsSharedFallbackWithoutDuplicatingHE(t
 					Provider:  "he-tokenapi",
 					BaseURL:   "https://tokenapi.happyelements.net/v1",
 					AuthMode:  AuthModeAPIKey,
-					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					APIKeyEnv: "TEST_HE_TOKENAPI_KEY",
 					Model:     "vp/gpt-5.5",
 				},
 			},
@@ -372,7 +372,7 @@ func TestMergeWildcardFallbackTargetsSkipsWildcardFallbackForDifferentModel(t *t
 					Provider:    "openai",
 					BaseURL:     "https://api.openai.com/v1",
 					AuthMode:    AuthModeAPIKey,
-					APIKeyEnv:   "OPENAI_API_KEY",
+					APIKeyEnv:   "TEST_OPENAI_KEY",
 					Model:       "gpt-5.5",
 					UpstreamAPI: "responses",
 				},
@@ -385,7 +385,7 @@ func TestMergeWildcardFallbackTargetsSkipsWildcardFallbackForDifferentModel(t *t
 					Provider:  "he-tokenapi",
 					BaseURL:   "https://tokenapi.happyelements.net/v1",
 					AuthMode:  AuthModeAPIKey,
-					APIKeyEnv: "HAPPYELEMENTS_TOKENAPI_API_KEY",
+					APIKeyEnv: "TEST_HE_TOKENAPI_KEY",
 					Model:     "anthropic/claude-sonnet-4-6",
 				},
 			},
@@ -421,7 +421,7 @@ func TestNormalizeRoutesRejectsMixedAuthModeFields(t *testing.T) {
 			Provider:  "test",
 			BaseURL:   "https://example.com/v1",
 			AuthMode:  AuthModeCustomHeadersCookie,
-			APIKeyEnv: "OPENAI_API_KEY",
+			APIKeyEnv: "TEST_OPENAI_KEY",
 			Model:     "gpt-5.5",
 		}},
 	}})
