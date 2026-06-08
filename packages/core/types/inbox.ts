@@ -38,4 +38,8 @@ export interface InboxItem {
   archived: boolean;
   created_at: string;
   details: Record<string, string> | null;
+  feishu_delivery_status: "not_applicable" | "pending" | "sent" | "failed";
+  feishu_delivered_at: string | null;
+  feishu_delivery_attempts: number;
+  feishu_delivery_last_error: string | null;
 }

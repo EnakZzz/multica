@@ -59,16 +59,52 @@ var emptyDetails = []byte("{}")
 
 var feishuIssueNotifications *service.FeishuIssueService
 
-func deliverFeishuIssueCard(item db.InboxItem, issueStatus string) {
+func feishuDeliveryStatusForInbox(recipientType string, issueID pgtype.UUID) string {
+	if feishuIssueNotifications == nil || recipientType != "member" || !issueID.Valid {
+		return "not_applicable"
+	}
+	return "pending"
+}
+
+func publishInboxFallback(bus *events.Bus, item db.InboxItem, issueStatus string, workspaceID, actorType, actorID string) {
+	resp := inboxItemToResponse(item)
+	resp["issue_status"] = issueStatus
+	bus.Publish(events.Event{
+		Type:        protocol.EventInboxNew,
+		WorkspaceID: workspaceID,
+		ActorType:   actorType,
+		ActorID:     actorID,
+		Payload:     map[string]any{"item": resp},
+	})
+}
+
+func deliverFeishuIssueCard(queries *db.Queries, bus *events.Bus, item db.InboxItem, issueStatus string, workspaceID, actorType, actorID string) {
 	svc := feishuIssueNotifications
 	if svc == nil {
+		publishInboxFallback(bus, item, issueStatus, workspaceID, actorType, actorID)
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		if err := queries.MarkInboxFeishuPending(ctx, item.ID); err != nil {
+			slog.Warn("feishu issue card pending mark failed",
+				"inbox_item_id", util.UUIDToString(item.ID), "error", err)
+		}
 		err := svc.SendInboxCard(ctx, item, issueStatus)
+		if err == nil {
+			if markErr := queries.MarkInboxFeishuSent(ctx, item.ID); markErr != nil {
+				slog.Warn("feishu issue card sent mark failed",
+					"inbox_item_id", util.UUIDToString(item.ID), "error", markErr)
+			}
+			return
+		}
+		_ = queries.MarkInboxFeishuFailed(ctx, db.MarkInboxFeishuFailedParams{
+			ID:                      item.ID,
+			FeishuDeliveryLastError: util.StrToText(err.Error()),
+		})
 		svc.LogSendFailure(err, item)
+		publishInboxFallback(bus, item, issueStatus, workspaceID, actorType, actorID)
 	}()
 }
 
@@ -346,17 +382,18 @@ func notifyIssueSubscribers(
 		}
 
 		item, err := queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
-			WorkspaceID:   parseUUID(workspaceID),
-			RecipientType: "member",
-			RecipientID:   sub.UserID,
-			Type:          notifType,
-			Severity:      severity,
-			IssueID:       parseUUID(targetIssueID),
-			Title:         title,
-			Body:          util.StrToText(body),
-			ActorType:     util.StrToText(e.ActorType),
-			ActorID:       optionalUUID(e.ActorID),
-			Details:       details,
+			WorkspaceID:          parseUUID(workspaceID),
+			RecipientType:        "member",
+			RecipientID:          sub.UserID,
+			Type:                 notifType,
+			Severity:             severity,
+			IssueID:              parseUUID(targetIssueID),
+			Title:                title,
+			Body:                 util.StrToText(body),
+			ActorType:            util.StrToText(e.ActorType),
+			ActorID:              optionalUUID(e.ActorID),
+			Details:              details,
+			FeishuDeliveryStatus: feishuDeliveryStatusForInbox("member", parseUUID(targetIssueID)),
 		})
 		if err != nil {
 			slog.Error("subscriber notification creation failed",
@@ -365,16 +402,7 @@ func notifyIssueSubscribers(
 		}
 
 		notified[subID] = true
-		resp := inboxItemToResponse(item)
-		resp["issue_status"] = issueStatus
-		deliverFeishuIssueCard(item, issueStatus)
-		bus.Publish(events.Event{
-			Type:        protocol.EventInboxNew,
-			WorkspaceID: workspaceID,
-			ActorType:   e.ActorType,
-			ActorID:     e.ActorID,
-			Payload:     map[string]any{"item": resp},
-		})
+		deliverFeishuIssueCard(queries, bus, item, issueStatus, workspaceID, e.ActorType, e.ActorID)
 	}
 
 	return notified
@@ -412,17 +440,18 @@ func notifyDirect(
 	}
 
 	item, err := queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
-		WorkspaceID:   parseUUID(workspaceID),
-		RecipientType: recipientType,
-		RecipientID:   parseUUID(recipientID),
-		Type:          notifType,
-		Severity:      severity,
-		IssueID:       parseUUID(issueID),
-		Title:         title,
-		Body:          util.StrToText(body),
-		ActorType:     util.StrToText(e.ActorType),
-		ActorID:       optionalUUID(e.ActorID),
-		Details:       details,
+		WorkspaceID:          parseUUID(workspaceID),
+		RecipientType:        recipientType,
+		RecipientID:          parseUUID(recipientID),
+		Type:                 notifType,
+		Severity:             severity,
+		IssueID:              parseUUID(issueID),
+		Title:                title,
+		Body:                 util.StrToText(body),
+		ActorType:            util.StrToText(e.ActorType),
+		ActorID:              optionalUUID(e.ActorID),
+		Details:              details,
+		FeishuDeliveryStatus: feishuDeliveryStatusForInbox(recipientType, parseUUID(issueID)),
 	})
 	if err != nil {
 		slog.Error("direct notification creation failed",
@@ -430,16 +459,7 @@ func notifyDirect(
 		return
 	}
 
-	resp := inboxItemToResponse(item)
-	resp["issue_status"] = issueStatus
-	deliverFeishuIssueCard(item, issueStatus)
-	bus.Publish(events.Event{
-		Type:        protocol.EventInboxNew,
-		WorkspaceID: workspaceID,
-		ActorType:   e.ActorType,
-		ActorID:     e.ActorID,
-		Payload:     map[string]any{"item": resp},
-	})
+	deliverFeishuIssueCard(queries, bus, item, issueStatus, workspaceID, e.ActorType, e.ActorID)
 }
 
 // notifyMentionedMembers creates inbox items for each @mentioned member,
@@ -501,31 +521,23 @@ func notifyMentionedMembers(
 			continue
 		}
 		item, err := queries.CreateInboxItem(context.Background(), db.CreateInboxItemParams{
-			WorkspaceID:   parseUUID(e.WorkspaceID),
-			RecipientType: "member",
-			RecipientID:   parseUUID(id),
-			Type:          "mentioned",
-			Severity:      "info",
-			IssueID:       parseUUID(issueID),
-			Title:         title,
-			ActorType:     util.StrToText(e.ActorType),
-			ActorID:       optionalUUID(e.ActorID),
-			Details:       details,
+			WorkspaceID:          parseUUID(e.WorkspaceID),
+			RecipientType:        "member",
+			RecipientID:          parseUUID(id),
+			Type:                 "mentioned",
+			Severity:             "info",
+			IssueID:              parseUUID(issueID),
+			Title:                title,
+			ActorType:            util.StrToText(e.ActorType),
+			ActorID:              optionalUUID(e.ActorID),
+			Details:              details,
+			FeishuDeliveryStatus: feishuDeliveryStatusForInbox("member", parseUUID(issueID)),
 		})
 		if err != nil {
 			slog.Error("mention inbox creation failed", "mentioned_id", id, "error", err)
 			continue
 		}
-		resp := inboxItemToResponse(item)
-		resp["issue_status"] = issueStatus
-		deliverFeishuIssueCard(item, issueStatus)
-		bus.Publish(events.Event{
-			Type:        protocol.EventInboxNew,
-			WorkspaceID: e.WorkspaceID,
-			ActorType:   e.ActorType,
-			ActorID:     e.ActorID,
-			Payload:     map[string]any{"item": resp},
-		})
+		deliverFeishuIssueCard(queries, bus, item, issueStatus, e.WorkspaceID, e.ActorType, e.ActorID)
 	}
 }
 

@@ -125,7 +125,7 @@ func (h *Handler) handleFeishuCardAction(w http.ResponseWriter, r *http.Request,
 	}
 
 	switch actionName {
-	case "set_status":
+	case "set_status", "reject_review":
 		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
 			ID:          parseUUID(issueID),
 			WorkspaceID: parseUUID(workspaceID),
@@ -134,7 +134,11 @@ func (h *Handler) handleFeishuCardAction(w http.ResponseWriter, r *http.Request,
 			writeJSON(w, http.StatusOK, feishuToast("error", "Issue 不存在"))
 			return
 		}
-		if _, err := h.updateIssueStatusForMember(r.Context(), issue, userID, mapString(value, "status")); err != nil {
+		nextStatus := mapString(value, "status")
+		if actionName == "reject_review" && nextStatus == "" {
+			nextStatus = "cancelled"
+		}
+		if _, err := h.updateIssueStatusForMember(r.Context(), issue, userID, nextStatus); err != nil {
 			var statusErr handlerStatusError
 			if errors.As(err, &statusErr) {
 				writeJSON(w, http.StatusOK, feishuToast("error", statusErr.Message))
@@ -146,6 +150,10 @@ func (h *Handler) handleFeishuCardAction(w http.ResponseWriter, r *http.Request,
 		}
 		if inboxID != "" {
 			_ = h.applyFeishuInboxAction(r, workspaceID, userID, inboxID, "read")
+		}
+		if actionName == "reject_review" {
+			writeJSON(w, http.StatusOK, feishuToast("success", "已拒绝；请直接回复这条飞书消息补充原因"))
+			return
 		}
 		writeJSON(w, http.StatusOK, feishuToast("success", "Issue 状态已更新"))
 	case "mark_read":

@@ -14,62 +14,74 @@ import (
 )
 
 type InboxItemResponse struct {
-	ID            string          `json:"id"`
-	WorkspaceID   string          `json:"workspace_id"`
-	RecipientType string          `json:"recipient_type"`
-	RecipientID   string          `json:"recipient_id"`
-	Type          string          `json:"type"`
-	Severity      string          `json:"severity"`
-	IssueID       *string         `json:"issue_id"`
-	Title         string          `json:"title"`
-	Body          *string         `json:"body"`
-	Read          bool            `json:"read"`
-	Archived      bool            `json:"archived"`
-	CreatedAt     string          `json:"created_at"`
-	IssueStatus   *string         `json:"issue_status"`
-	ActorType     *string         `json:"actor_type"`
-	ActorID       *string         `json:"actor_id"`
-	Details       json.RawMessage `json:"details"`
+	ID                      string          `json:"id"`
+	WorkspaceID             string          `json:"workspace_id"`
+	RecipientType           string          `json:"recipient_type"`
+	RecipientID             string          `json:"recipient_id"`
+	Type                    string          `json:"type"`
+	Severity                string          `json:"severity"`
+	IssueID                 *string         `json:"issue_id"`
+	Title                   string          `json:"title"`
+	Body                    *string         `json:"body"`
+	Read                    bool            `json:"read"`
+	Archived                bool            `json:"archived"`
+	CreatedAt               string          `json:"created_at"`
+	IssueStatus             *string         `json:"issue_status"`
+	ActorType               *string         `json:"actor_type"`
+	ActorID                 *string         `json:"actor_id"`
+	Details                 json.RawMessage `json:"details"`
+	FeishuDeliveryStatus    string          `json:"feishu_delivery_status"`
+	FeishuDeliveredAt       *string         `json:"feishu_delivered_at"`
+	FeishuDeliveryAttempts  int32           `json:"feishu_delivery_attempts"`
+	FeishuDeliveryLastError *string         `json:"feishu_delivery_last_error"`
 }
 
 func inboxToResponse(i db.InboxItem) InboxItemResponse {
 	return InboxItemResponse{
-		ID:            uuidToString(i.ID),
-		WorkspaceID:   uuidToString(i.WorkspaceID),
-		RecipientType: i.RecipientType,
-		RecipientID:   uuidToString(i.RecipientID),
-		Type:          i.Type,
-		Severity:      i.Severity,
-		IssueID:       uuidToPtr(i.IssueID),
-		Title:         i.Title,
-		Body:          textToPtr(i.Body),
-		Read:          i.Read,
-		Archived:      i.Archived,
-		CreatedAt:     timestampToString(i.CreatedAt),
-		ActorType:     textToPtr(i.ActorType),
-		ActorID:       uuidToPtr(i.ActorID),
-		Details:       json.RawMessage(i.Details),
+		ID:                      uuidToString(i.ID),
+		WorkspaceID:             uuidToString(i.WorkspaceID),
+		RecipientType:           i.RecipientType,
+		RecipientID:             uuidToString(i.RecipientID),
+		Type:                    i.Type,
+		Severity:                i.Severity,
+		IssueID:                 uuidToPtr(i.IssueID),
+		Title:                   i.Title,
+		Body:                    textToPtr(i.Body),
+		Read:                    i.Read,
+		Archived:                i.Archived,
+		CreatedAt:               timestampToString(i.CreatedAt),
+		ActorType:               textToPtr(i.ActorType),
+		ActorID:                 uuidToPtr(i.ActorID),
+		Details:                 json.RawMessage(i.Details),
+		FeishuDeliveryStatus:    i.FeishuDeliveryStatus,
+		FeishuDeliveredAt:       timestampToPtr(i.FeishuDeliveredAt),
+		FeishuDeliveryAttempts:  i.FeishuDeliveryAttempts,
+		FeishuDeliveryLastError: textToPtr(i.FeishuDeliveryLastError),
 	}
 }
 
 func inboxRowToResponse(r db.ListInboxItemsRow) InboxItemResponse {
 	return InboxItemResponse{
-		ID:            uuidToString(r.ID),
-		WorkspaceID:   uuidToString(r.WorkspaceID),
-		RecipientType: r.RecipientType,
-		RecipientID:   uuidToString(r.RecipientID),
-		Type:          r.Type,
-		Severity:      r.Severity,
-		IssueID:       uuidToPtr(r.IssueID),
-		Title:         r.Title,
-		Body:          textToPtr(r.Body),
-		Read:          r.Read,
-		Archived:      r.Archived,
-		CreatedAt:     timestampToString(r.CreatedAt),
-		IssueStatus:   textToPtr(r.IssueStatus),
-		ActorType:     textToPtr(r.ActorType),
-		ActorID:       uuidToPtr(r.ActorID),
-		Details:       json.RawMessage(r.Details),
+		ID:                      uuidToString(r.ID),
+		WorkspaceID:             uuidToString(r.WorkspaceID),
+		RecipientType:           r.RecipientType,
+		RecipientID:             uuidToString(r.RecipientID),
+		Type:                    r.Type,
+		Severity:                r.Severity,
+		IssueID:                 uuidToPtr(r.IssueID),
+		Title:                   r.Title,
+		Body:                    textToPtr(r.Body),
+		Read:                    r.Read,
+		Archived:                r.Archived,
+		CreatedAt:               timestampToString(r.CreatedAt),
+		IssueStatus:             textToPtr(r.IssueStatus),
+		ActorType:               textToPtr(r.ActorType),
+		ActorID:                 uuidToPtr(r.ActorID),
+		Details:                 json.RawMessage(r.Details),
+		FeishuDeliveryStatus:    r.FeishuDeliveryStatus,
+		FeishuDeliveredAt:       timestampToPtr(r.FeishuDeliveredAt),
+		FeishuDeliveryAttempts:  r.FeishuDeliveryAttempts,
+		FeishuDeliveryLastError: textToPtr(r.FeishuDeliveryLastError),
 	}
 }
 

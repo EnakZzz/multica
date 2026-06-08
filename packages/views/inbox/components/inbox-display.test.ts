@@ -24,6 +24,10 @@ function item(overrides: Partial<InboxItem>): InboxItem {
     archived: false,
     created_at: "2026-04-29T12:00:00Z",
     details: null,
+    feishu_delivery_status: "not_applicable",
+    feishu_delivered_at: null,
+    feishu_delivery_attempts: 0,
+    feishu_delivery_last_error: null,
     ...overrides,
   };
 }

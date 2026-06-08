@@ -57,7 +57,8 @@
     "removed_due_date": "Removed due date",
     "reacted_to_comment": "Reacted {{emoji}} to your comment",
     "created_with_agent": "Created with agent: {{identifier}}",
-    "failed_with_detail": "Failed: {{detail}}"
+    "failed_with_detail": "Failed: {{detail}}",
+    "feishu_fallback": "Feishu delivery failed; shown here as fallback"
   },
   "errors": {
     "mark_read_failed": "Failed to mark as read",

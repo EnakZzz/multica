@@ -57,7 +57,8 @@
     "removed_due_date": "移除了截止日期",
     "reacted_to_comment": "用 {{emoji}} 回应了你的评论",
     "created_with_agent": "通过智能体创建：{{identifier}}",
-    "failed_with_detail": "失败：{{detail}}"
+    "failed_with_detail": "失败：{{detail}}",
+    "feishu_fallback": "飞书发送失败，已在这里兜底显示"
   },
   "errors": {
     "mark_read_failed": "标为已读失败",

@@ -76,6 +76,57 @@ func newNotificationBus(t *testing.T, queries *db.Queries) *events.Bus {
 	return bus
 }
 
+func TestInboxListShowsOnlyFeishuFallbackIssueItems(t *testing.T) {
+	queries := db.New(testPool)
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	for _, row := range []struct {
+		title  string
+		status string
+	}{
+		{title: "sent issue notification", status: "sent"},
+		{title: "pending issue notification", status: "pending"},
+		{title: "failed issue notification", status: "failed"},
+		{title: "legacy issue notification", status: "not_applicable"},
+	} {
+		_, err := testPool.Exec(context.Background(), `
+			INSERT INTO inbox_item (
+				workspace_id, recipient_type, recipient_id, type, severity,
+				issue_id, title, details, feishu_delivery_status
+			)
+			VALUES ($1, 'member', $2, 'status_changed', 'info', $3, $4, '{}', $5)
+		`, testWorkspaceID, testUserID, issueID, row.title, row.status)
+		if err != nil {
+			t.Fatalf("seed inbox row %s: %v", row.status, err)
+		}
+	}
+
+	items := inboxItemsForRecipient(t, queries, testUserID)
+	var titles []string
+	for _, item := range items {
+		titles = append(titles, item.Title)
+	}
+	if containsString(titles, "sent issue notification") || containsString(titles, "pending issue notification") {
+		t.Fatalf("sent/pending feishu issue notifications should be hidden, got %v", titles)
+	}
+	if !containsString(titles, "failed issue notification") || !containsString(titles, "legacy issue notification") {
+		t.Fatalf("fallback issue notifications should be visible, got %v", titles)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestNotification_IssueCreated_AssigneeNotified verifies that when an issue is
 // created with an assignee different from the creator, the assignee receives an
 // "issue_assigned" inbox notification and the creator receives nothing.
@@ -439,8 +490,8 @@ func TestNotification_AssigneeChanged(t *testing.T) {
 				AssigneeType: &newAssigneeType,
 				AssigneeID:   &newAssigneeID,
 			},
-			"assignee_changed":  true,
-			"status_changed":    false,
+			"assignee_changed":   true,
+			"status_changed":     false,
 			"prev_assignee_type": &oldAssigneeType,
 			"prev_assignee_id":   &oldAssigneeID,
 		},

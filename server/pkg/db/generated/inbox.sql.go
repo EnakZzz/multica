@@ -131,7 +131,7 @@ func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInb
 const archiveInboxItem = `-- name: ArchiveInboxItem :one
 UPDATE inbox_item SET archived = true
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, feishu_delivery_status, feishu_delivered_at, feishu_delivery_attempts, feishu_delivery_last_error, actor_type, actor_id, details
 `
 
 func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -150,6 +150,10 @@ func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxIt
 		&i.Read,
 		&i.Archived,
 		&i.CreatedAt,
+		&i.FeishuDeliveryStatus,
+		&i.FeishuDeliveredAt,
+		&i.FeishuDeliveryAttempts,
+		&i.FeishuDeliveryLastError,
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
@@ -179,23 +183,24 @@ const createInboxItem = `-- name: CreateInboxItem :one
 INSERT INTO inbox_item (
     workspace_id, recipient_type, recipient_id,
     type, severity, issue_id, title, body,
-    actor_type, actor_id, details
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
+    actor_type, actor_id, details, feishu_delivery_status
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, feishu_delivery_status, feishu_delivered_at, feishu_delivery_attempts, feishu_delivery_last_error, actor_type, actor_id, details
 `
 
 type CreateInboxItemParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
-	Type          string      `json:"type"`
-	Severity      string      `json:"severity"`
-	IssueID       pgtype.UUID `json:"issue_id"`
-	Title         string      `json:"title"`
-	Body          pgtype.Text `json:"body"`
-	ActorType     pgtype.Text `json:"actor_type"`
-	ActorID       pgtype.UUID `json:"actor_id"`
-	Details       []byte      `json:"details"`
+	WorkspaceID          pgtype.UUID `json:"workspace_id"`
+	RecipientType        string      `json:"recipient_type"`
+	RecipientID          pgtype.UUID `json:"recipient_id"`
+	Type                 string      `json:"type"`
+	Severity             string      `json:"severity"`
+	IssueID              pgtype.UUID `json:"issue_id"`
+	Title                string      `json:"title"`
+	Body                 pgtype.Text `json:"body"`
+	ActorType            pgtype.Text `json:"actor_type"`
+	ActorID              pgtype.UUID `json:"actor_id"`
+	Details              []byte      `json:"details"`
+	FeishuDeliveryStatus string      `json:"feishu_delivery_status"`
 }
 
 func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams) (InboxItem, error) {
@@ -211,6 +216,7 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		arg.ActorType,
 		arg.ActorID,
 		arg.Details,
+		arg.FeishuDeliveryStatus,
 	)
 	var i InboxItem
 	err := row.Scan(
@@ -226,6 +232,10 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		&i.Read,
 		&i.Archived,
 		&i.CreatedAt,
+		&i.FeishuDeliveryStatus,
+		&i.FeishuDeliveredAt,
+		&i.FeishuDeliveryAttempts,
+		&i.FeishuDeliveryLastError,
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
@@ -234,7 +244,7 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 }
 
 const getInboxItem = `-- name: GetInboxItem :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details FROM inbox_item
+SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, feishu_delivery_status, feishu_delivered_at, feishu_delivery_attempts, feishu_delivery_last_error, actor_type, actor_id, details FROM inbox_item
 WHERE id = $1
 `
 
@@ -254,6 +264,10 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 		&i.Read,
 		&i.Archived,
 		&i.CreatedAt,
+		&i.FeishuDeliveryStatus,
+		&i.FeishuDeliveredAt,
+		&i.FeishuDeliveryAttempts,
+		&i.FeishuDeliveryLastError,
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
@@ -262,7 +276,7 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 }
 
 const getInboxItemInWorkspace = `-- name: GetInboxItemInWorkspace :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details FROM inbox_item
+SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, feishu_delivery_status, feishu_delivered_at, feishu_delivery_attempts, feishu_delivery_last_error, actor_type, actor_id, details FROM inbox_item
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -287,6 +301,10 @@ func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemI
 		&i.Read,
 		&i.Archived,
 		&i.CreatedAt,
+		&i.FeishuDeliveryStatus,
+		&i.FeishuDeliveredAt,
+		&i.FeishuDeliveryAttempts,
+		&i.FeishuDeliveryLastError,
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,
@@ -295,11 +313,15 @@ func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemI
 }
 
 const listInboxItems = `-- name: ListInboxItems :many
-SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details,
+SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.feishu_delivery_status, i.feishu_delivered_at, i.feishu_delivery_attempts, i.feishu_delivery_last_error, i.actor_type, i.actor_id, i.details,
        iss.status as issue_status
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
 WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false
+  AND (
+    i.issue_id IS NULL
+    OR i.feishu_delivery_status IN ('not_applicable', 'failed')
+  )
 ORDER BY i.created_at DESC
 `
 
@@ -310,22 +332,26 @@ type ListInboxItemsParams struct {
 }
 
 type ListInboxItemsRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	RecipientType string             `json:"recipient_type"`
-	RecipientID   pgtype.UUID        `json:"recipient_id"`
-	Type          string             `json:"type"`
-	Severity      string             `json:"severity"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	Title         string             `json:"title"`
-	Body          pgtype.Text        `json:"body"`
-	Read          bool               `json:"read"`
-	Archived      bool               `json:"archived"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ActorType     pgtype.Text        `json:"actor_type"`
-	ActorID       pgtype.UUID        `json:"actor_id"`
-	Details       []byte             `json:"details"`
-	IssueStatus   pgtype.Text        `json:"issue_status"`
+	ID                      pgtype.UUID        `json:"id"`
+	WorkspaceID             pgtype.UUID        `json:"workspace_id"`
+	RecipientType           string             `json:"recipient_type"`
+	RecipientID             pgtype.UUID        `json:"recipient_id"`
+	Type                    string             `json:"type"`
+	Severity                string             `json:"severity"`
+	IssueID                 pgtype.UUID        `json:"issue_id"`
+	Title                   string             `json:"title"`
+	Body                    pgtype.Text        `json:"body"`
+	Read                    bool               `json:"read"`
+	Archived                bool               `json:"archived"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	FeishuDeliveryStatus    string             `json:"feishu_delivery_status"`
+	FeishuDeliveredAt       pgtype.Timestamptz `json:"feishu_delivered_at"`
+	FeishuDeliveryAttempts  int32              `json:"feishu_delivery_attempts"`
+	FeishuDeliveryLastError pgtype.Text        `json:"feishu_delivery_last_error"`
+	ActorType               pgtype.Text        `json:"actor_type"`
+	ActorID                 pgtype.UUID        `json:"actor_id"`
+	Details                 []byte             `json:"details"`
+	IssueStatus             pgtype.Text        `json:"issue_status"`
 }
 
 func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]ListInboxItemsRow, error) {
@@ -350,6 +376,10 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 			&i.Read,
 			&i.Archived,
 			&i.CreatedAt,
+			&i.FeishuDeliveryStatus,
+			&i.FeishuDeliveredAt,
+			&i.FeishuDeliveryAttempts,
+			&i.FeishuDeliveryLastError,
 			&i.ActorType,
 			&i.ActorID,
 			&i.Details,
@@ -383,10 +413,53 @@ func (q *Queries) MarkAllInboxRead(ctx context.Context, arg MarkAllInboxReadPara
 	return result.RowsAffected(), nil
 }
 
+const markInboxFeishuFailed = `-- name: MarkInboxFeishuFailed :exec
+UPDATE inbox_item
+SET feishu_delivery_status = 'failed',
+    feishu_delivery_last_error = $2
+WHERE id = $1
+`
+
+type MarkInboxFeishuFailedParams struct {
+	ID                      pgtype.UUID `json:"id"`
+	FeishuDeliveryLastError pgtype.Text `json:"feishu_delivery_last_error"`
+}
+
+func (q *Queries) MarkInboxFeishuFailed(ctx context.Context, arg MarkInboxFeishuFailedParams) error {
+	_, err := q.db.Exec(ctx, markInboxFeishuFailed, arg.ID, arg.FeishuDeliveryLastError)
+	return err
+}
+
+const markInboxFeishuPending = `-- name: MarkInboxFeishuPending :exec
+UPDATE inbox_item
+SET feishu_delivery_status = 'pending',
+    feishu_delivery_attempts = feishu_delivery_attempts + 1,
+    feishu_delivery_last_error = NULL
+WHERE id = $1
+`
+
+func (q *Queries) MarkInboxFeishuPending(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markInboxFeishuPending, id)
+	return err
+}
+
+const markInboxFeishuSent = `-- name: MarkInboxFeishuSent :exec
+UPDATE inbox_item
+SET feishu_delivery_status = 'sent',
+    feishu_delivered_at = now(),
+    feishu_delivery_last_error = NULL
+WHERE id = $1
+`
+
+func (q *Queries) MarkInboxFeishuSent(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markInboxFeishuSent, id)
+	return err
+}
+
 const markInboxRead = `-- name: MarkInboxRead :one
 UPDATE inbox_item SET read = true
 WHERE id = $1
-RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
+RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, feishu_delivery_status, feishu_delivered_at, feishu_delivery_attempts, feishu_delivery_last_error, actor_type, actor_id, details
 `
 
 func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -405,6 +478,10 @@ func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem,
 		&i.Read,
 		&i.Archived,
 		&i.CreatedAt,
+		&i.FeishuDeliveryStatus,
+		&i.FeishuDeliveredAt,
+		&i.FeishuDeliveryAttempts,
+		&i.FeishuDeliveryLastError,
 		&i.ActorType,
 		&i.ActorID,
 		&i.Details,

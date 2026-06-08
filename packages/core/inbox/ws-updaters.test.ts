@@ -28,6 +28,10 @@ function makeItem(
     archived: false,
     created_at: "2025-01-01T00:00:00Z",
     details: null,
+    feishu_delivery_status: "not_applicable",
+    feishu_delivered_at: null,
+    feishu_delivery_attempts: 0,
+    feishu_delivery_last_error: null,
     ...overrides,
   };
 }

@@ -47,6 +47,10 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
   const { getActorName } = useActorName();
   const details = item.details ?? {};
 
+  if (item.feishu_delivery_status === "failed") {
+    return <span>{t(($) => $.labels.feishu_fallback)}</span>;
+  }
+
   switch (item.type) {
     case "status_changed": {
       if (!details.to) return <span>{typeLabels[item.type]}</span>;

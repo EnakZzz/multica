@@ -296,6 +296,17 @@ func (s *FeishuIssueService) buildIssueCard(ctx context.Context, item db.InboxIt
 	if status == "" {
 		status = "unknown"
 	}
+	issueTitle := item.Title
+	issuePriority := ""
+	if issue, err := s.queries.GetIssue(ctx, item.IssueID); err == nil {
+		if issue.Title != "" {
+			issueTitle = issue.Title
+		}
+		if issue.Status != "" {
+			status = issue.Status
+		}
+		issuePriority = issue.Priority
+	}
 	issueID := util.UUIDToString(item.IssueID)
 	workspaceID := util.UUIDToString(item.WorkspaceID)
 	inboxID := util.UUIDToString(item.ID)
@@ -308,7 +319,14 @@ func (s *FeishuIssueService) buildIssueCard(ctx context.Context, item db.InboxIt
 	}
 	body = truncateRunes(body, 600)
 
-	actions := []any{
+	actions := []any{}
+	if item.Type == "review_requested" {
+		actions = append(actions,
+			feishuButton("允许", "primary", map[string]string{"multica_action": "set_status", "status": "in_review", "issue_id": issueID, "workspace_id": workspaceID, "inbox_item_id": inboxID}),
+			feishuButton("拒绝", "danger", map[string]string{"multica_action": "reject_review", "status": "cancelled", "issue_id": issueID, "workspace_id": workspaceID, "inbox_item_id": inboxID}),
+		)
+	}
+	actions = append(actions,
 		feishuButton("开始", "primary", map[string]string{"multica_action": "set_status", "status": "in_progress", "issue_id": issueID, "workspace_id": workspaceID, "inbox_item_id": inboxID}),
 		feishuButton("送审", "default", map[string]string{"multica_action": "set_status", "status": "in_review", "issue_id": issueID, "workspace_id": workspaceID, "inbox_item_id": inboxID}),
 		feishuButton("完成", "primary", map[string]string{"multica_action": "set_status", "status": "done", "issue_id": issueID, "workspace_id": workspaceID, "inbox_item_id": inboxID}),
@@ -316,7 +334,7 @@ func (s *FeishuIssueService) buildIssueCard(ctx context.Context, item db.InboxIt
 		feishuButton("拒绝/取消", "danger", map[string]string{"multica_action": "set_status", "status": "cancelled", "issue_id": issueID, "workspace_id": workspaceID, "inbox_item_id": inboxID}),
 		feishuButton("已读", "default", map[string]string{"multica_action": "mark_read", "issue_id": issueID, "workspace_id": workspaceID, "inbox_item_id": inboxID}),
 		feishuButton("归档", "default", map[string]string{"multica_action": "archive_inbox", "issue_id": issueID, "workspace_id": workspaceID, "inbox_item_id": inboxID}),
-	}
+	)
 	if link := s.issueLink(ctx, item.WorkspaceID, issueID); link != "" {
 		actions = append([]any{map[string]any{
 			"tag": "button",
@@ -333,16 +351,46 @@ func (s *FeishuIssueService) buildIssueCard(ctx context.Context, item db.InboxIt
 		"config": map[string]any{"wide_screen_mode": true},
 		"header": map[string]any{
 			"template": cardTemplate(item.Severity),
-			"title":    map[string]string{"tag": "plain_text", "content": truncateRunes(item.Title, 80)},
+			"title":    map[string]string{"tag": "plain_text", "content": truncateRunes(cardTitle(item.Type, item.Title), 80)},
 		},
 		"elements": []any{
+			map[string]string{"tag": "markdown", "content": "**Issue**: " + truncateRunes(issueTitle, 120)},
 			map[string]string{"tag": "markdown", "content": body},
-			map[string]string{"tag": "markdown", "content": "**通知**: " + item.Type + "\n**状态**: " + status},
+			map[string]string{"tag": "markdown", "content": cardMeta(item.Type, status, issuePriority)},
 			map[string]any{"tag": "action", "actions": actions},
 			map[string]string{"tag": "hr"},
 			map[string]string{"tag": "markdown", "content": "直接回复这条飞书消息，会同步为 Multica issue 评论。"},
 		},
 	}
+}
+
+func cardTitle(notifType, fallback string) string {
+	switch notifType {
+	case "issue_assigned":
+		return "Issue 分配给你"
+	case "new_comment":
+		return "Issue 有新评论"
+	case "mentioned":
+		return "Issue 提及了你"
+	case "review_requested":
+		return "Issue 请求审阅"
+	case "status_changed":
+		return "Issue 状态变更"
+	case "task_failed", "agent_blocked":
+		return "Agent 需要处理"
+	case "task_completed", "agent_completed":
+		return "Agent 已完成"
+	default:
+		return fallback
+	}
+}
+
+func cardMeta(notifType, status, priority string) string {
+	lines := []string{"**通知**: " + notifType, "**状态**: " + status}
+	if strings.TrimSpace(priority) != "" {
+		lines = append(lines, "**优先级**: "+priority)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (s *FeishuIssueService) issueLink(ctx context.Context, workspaceID pgtype.UUID, issueID string) string {

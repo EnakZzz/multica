@@ -48,6 +48,10 @@ func setupFeishuWebhookTest(t *testing.T) {
 			event_id TEXT PRIMARY KEY,
 			handled_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE inbox_item ADD COLUMN IF NOT EXISTS feishu_delivery_status TEXT NOT NULL DEFAULT 'not_applicable'`,
+		`ALTER TABLE inbox_item ADD COLUMN IF NOT EXISTS feishu_delivered_at TIMESTAMPTZ`,
+		`ALTER TABLE inbox_item ADD COLUMN IF NOT EXISTS feishu_delivery_attempts INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE inbox_item ADD COLUMN IF NOT EXISTS feishu_delivery_last_error TEXT`,
 	} {
 		if _, err := testPool.Exec(ctx, stmt); err != nil {
 			t.Fatalf("setup feishu table: %v", err)
