@@ -233,17 +233,18 @@ func emitAutopilotPausedNotifications(
 		emitted[key] = true
 
 		item, err := queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
-			WorkspaceID:   autopilot.WorkspaceID,
-			RecipientType: r.Type,
-			RecipientID:   r.ID,
-			Type:          "autopilot_paused",
-			Severity:      "attention",
-			IssueID:       pgtype.UUID{},
-			Title:         title,
-			Body:          util.StrToText(body),
-			ActorType:     util.StrToText("system"),
-			ActorID:       pgtype.UUID{},
-			Details:       details,
+			WorkspaceID:          autopilot.WorkspaceID,
+			RecipientType:        r.Type,
+			RecipientID:          r.ID,
+			Type:                 "autopilot_paused",
+			Severity:             "attention",
+			IssueID:              pgtype.UUID{},
+			Title:                title,
+			Body:                 util.StrToText(body),
+			ActorType:            util.StrToText("system"),
+			ActorID:              pgtype.UUID{},
+			Details:              details,
+			FeishuDeliveryStatus: "not_applicable",
 		})
 		if err != nil {
 			slog.Warn("autopilot failure monitor: inbox write failed",
