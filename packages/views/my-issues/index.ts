@@ -1,1 +1,1 @@
-export { MyIssuesPage } from "./components/my-issues-page";
+export { DecisionDeskPage as MyIssuesPage } from "../decision-desk";
