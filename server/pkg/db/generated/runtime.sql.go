@@ -411,6 +411,44 @@ func (q *Queries) GetAgentRuntimeForWorkspace(ctx context.Context, arg GetAgentR
 	return i, err
 }
 
+const getPreferredFeishuChatRuntime = `-- name: GetPreferredFeishuChatRuntime :one
+SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.owner_id, ar.legacy_daemon_id, ar.timezone, ar.visibility
+FROM agent_runtime ar
+LEFT JOIN agent a ON a.runtime_id = ar.id
+WHERE ar.workspace_id = $1
+  AND ar.status = 'online'
+ORDER BY
+  CASE WHEN a.archived_at IS NULL AND a.visibility = 'workspace' THEN 0 ELSE 1 END,
+  CASE WHEN ar.visibility = 'public' THEN 0 ELSE 1 END,
+  ar.last_seen_at DESC NULLS LAST,
+  ar.created_at ASC
+LIMIT 1
+`
+
+func (q *Queries) GetPreferredFeishuChatRuntime(ctx context.Context, workspaceID pgtype.UUID) (AgentRuntime, error) {
+	row := q.db.QueryRow(ctx, getPreferredFeishuChatRuntime, workspaceID)
+	var i AgentRuntime
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.Name,
+		&i.RuntimeMode,
+		&i.Provider,
+		&i.Status,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerID,
+		&i.LegacyDaemonID,
+		&i.Timezone,
+		&i.Visibility,
+	)
+	return i, err
+}
+
 const insertTaskUsageDailyForRuntime = `-- name: InsertTaskUsageDailyForRuntime :execrows
 INSERT INTO task_usage_daily AS d (
     bucket_date, workspace_id, runtime_id, provider, model,

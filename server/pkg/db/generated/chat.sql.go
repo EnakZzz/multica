@@ -11,6 +11,45 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeFeishuChatPendingSelection = `-- name: ConsumeFeishuChatPendingSelection :one
+UPDATE feishu_chat_pending_selection
+SET status = 'consumed',
+    selected_project_id = $2,
+    consumed_at = now(),
+    updated_at = now()
+WHERE id = $1
+  AND status = 'pending'
+  AND expires_at > now()
+RETURNING id, user_id, open_id, feishu_chat_id, feishu_root_id, feishu_message_id, original_content, candidate_project_ids, status, selected_project_id, created_at, updated_at, expires_at, consumed_at
+`
+
+type ConsumeFeishuChatPendingSelectionParams struct {
+	ID                pgtype.UUID `json:"id"`
+	SelectedProjectID pgtype.UUID `json:"selected_project_id"`
+}
+
+func (q *Queries) ConsumeFeishuChatPendingSelection(ctx context.Context, arg ConsumeFeishuChatPendingSelectionParams) (FeishuChatPendingSelection, error) {
+	row := q.db.QueryRow(ctx, consumeFeishuChatPendingSelection, arg.ID, arg.SelectedProjectID)
+	var i FeishuChatPendingSelection
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.OpenID,
+		&i.FeishuChatID,
+		&i.FeishuRootID,
+		&i.FeishuMessageID,
+		&i.OriginalContent,
+		&i.CandidateProjectIds,
+		&i.Status,
+		&i.SelectedProjectID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+	)
+	return i, err
+}
+
 const createChatMessage = `-- name: CreateChatMessage :one
 INSERT INTO chat_message (chat_session_id, role, content, task_id, failure_reason, elapsed_ms)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -137,6 +176,109 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 	return i, err
 }
 
+const createFeishuChatPendingSelection = `-- name: CreateFeishuChatPendingSelection :one
+INSERT INTO feishu_chat_pending_selection (
+    user_id, open_id, feishu_chat_id, feishu_root_id, feishu_message_id,
+    original_content, candidate_project_ids, expires_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, now() + $8::interval)
+RETURNING id, user_id, open_id, feishu_chat_id, feishu_root_id, feishu_message_id, original_content, candidate_project_ids, status, selected_project_id, created_at, updated_at, expires_at, consumed_at
+`
+
+type CreateFeishuChatPendingSelectionParams struct {
+	UserID              pgtype.UUID     `json:"user_id"`
+	OpenID              string          `json:"open_id"`
+	FeishuChatID        string          `json:"feishu_chat_id"`
+	FeishuRootID        string          `json:"feishu_root_id"`
+	FeishuMessageID     string          `json:"feishu_message_id"`
+	OriginalContent     string          `json:"original_content"`
+	CandidateProjectIds []pgtype.UUID   `json:"candidate_project_ids"`
+	Ttl                 pgtype.Interval `json:"ttl"`
+}
+
+func (q *Queries) CreateFeishuChatPendingSelection(ctx context.Context, arg CreateFeishuChatPendingSelectionParams) (FeishuChatPendingSelection, error) {
+	row := q.db.QueryRow(ctx, createFeishuChatPendingSelection,
+		arg.UserID,
+		arg.OpenID,
+		arg.FeishuChatID,
+		arg.FeishuRootID,
+		arg.FeishuMessageID,
+		arg.OriginalContent,
+		arg.CandidateProjectIds,
+		arg.Ttl,
+	)
+	var i FeishuChatPendingSelection
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.OpenID,
+		&i.FeishuChatID,
+		&i.FeishuRootID,
+		&i.FeishuMessageID,
+		&i.OriginalContent,
+		&i.CandidateProjectIds,
+		&i.Status,
+		&i.SelectedProjectID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+	)
+	return i, err
+}
+
+const createFeishuChatSessionBinding = `-- name: CreateFeishuChatSessionBinding :one
+INSERT INTO feishu_chat_session_binding (
+    workspace_id, user_id, agent_id, chat_session_id,
+    feishu_chat_id, feishu_root_id, last_message_id, project_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (workspace_id, user_id, feishu_chat_id, feishu_root_id) DO UPDATE
+SET agent_id = EXCLUDED.agent_id,
+    chat_session_id = EXCLUDED.chat_session_id,
+    project_id = COALESCE(EXCLUDED.project_id, feishu_chat_session_binding.project_id),
+    last_message_id = EXCLUDED.last_message_id,
+    updated_at = now()
+RETURNING id, workspace_id, user_id, agent_id, chat_session_id, feishu_chat_id, feishu_root_id, last_message_id, created_at, updated_at, project_id
+`
+
+type CreateFeishuChatSessionBindingParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	UserID        pgtype.UUID `json:"user_id"`
+	AgentID       pgtype.UUID `json:"agent_id"`
+	ChatSessionID pgtype.UUID `json:"chat_session_id"`
+	FeishuChatID  string      `json:"feishu_chat_id"`
+	FeishuRootID  string      `json:"feishu_root_id"`
+	LastMessageID string      `json:"last_message_id"`
+	ProjectID     pgtype.UUID `json:"project_id"`
+}
+
+func (q *Queries) CreateFeishuChatSessionBinding(ctx context.Context, arg CreateFeishuChatSessionBindingParams) (FeishuChatSessionBinding, error) {
+	row := q.db.QueryRow(ctx, createFeishuChatSessionBinding,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.AgentID,
+		arg.ChatSessionID,
+		arg.FeishuChatID,
+		arg.FeishuRootID,
+		arg.LastMessageID,
+		arg.ProjectID,
+	)
+	var i FeishuChatSessionBinding
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.AgentID,
+		&i.ChatSessionID,
+		&i.FeishuChatID,
+		&i.FeishuRootID,
+		&i.LastMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProjectID,
+	)
+	return i, err
+}
+
 const deleteChatSession = `-- name: DeleteChatSession :exec
 DELETE FROM chat_session WHERE id = $1
 `
@@ -229,6 +371,102 @@ func (q *Queries) GetChatSessionInWorkspace(ctx context.Context, arg GetChatSess
 	return i, err
 }
 
+const getFeishuChatPendingSelection = `-- name: GetFeishuChatPendingSelection :one
+SELECT id, user_id, open_id, feishu_chat_id, feishu_root_id, feishu_message_id, original_content, candidate_project_ids, status, selected_project_id, created_at, updated_at, expires_at, consumed_at
+FROM feishu_chat_pending_selection
+WHERE id = $1
+LIMIT 1
+`
+
+func (q *Queries) GetFeishuChatPendingSelection(ctx context.Context, id pgtype.UUID) (FeishuChatPendingSelection, error) {
+	row := q.db.QueryRow(ctx, getFeishuChatPendingSelection, id)
+	var i FeishuChatPendingSelection
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.OpenID,
+		&i.FeishuChatID,
+		&i.FeishuRootID,
+		&i.FeishuMessageID,
+		&i.OriginalContent,
+		&i.CandidateProjectIds,
+		&i.Status,
+		&i.SelectedProjectID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+	)
+	return i, err
+}
+
+const getFeishuChatSessionBinding = `-- name: GetFeishuChatSessionBinding :one
+SELECT id, workspace_id, user_id, agent_id, chat_session_id, feishu_chat_id, feishu_root_id, last_message_id, created_at, updated_at, project_id
+FROM feishu_chat_session_binding
+WHERE workspace_id = $1
+  AND user_id = $2
+  AND feishu_chat_id = $3
+  AND feishu_root_id = $4
+LIMIT 1
+`
+
+type GetFeishuChatSessionBindingParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	UserID       pgtype.UUID `json:"user_id"`
+	FeishuChatID string      `json:"feishu_chat_id"`
+	FeishuRootID string      `json:"feishu_root_id"`
+}
+
+func (q *Queries) GetFeishuChatSessionBinding(ctx context.Context, arg GetFeishuChatSessionBindingParams) (FeishuChatSessionBinding, error) {
+	row := q.db.QueryRow(ctx, getFeishuChatSessionBinding,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.FeishuChatID,
+		arg.FeishuRootID,
+	)
+	var i FeishuChatSessionBinding
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.AgentID,
+		&i.ChatSessionID,
+		&i.FeishuChatID,
+		&i.FeishuRootID,
+		&i.LastMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProjectID,
+	)
+	return i, err
+}
+
+const getFeishuChatSessionBindingBySession = `-- name: GetFeishuChatSessionBindingBySession :one
+SELECT id, workspace_id, user_id, agent_id, chat_session_id, feishu_chat_id, feishu_root_id, last_message_id, created_at, updated_at, project_id
+FROM feishu_chat_session_binding
+WHERE chat_session_id = $1
+LIMIT 1
+`
+
+func (q *Queries) GetFeishuChatSessionBindingBySession(ctx context.Context, chatSessionID pgtype.UUID) (FeishuChatSessionBinding, error) {
+	row := q.db.QueryRow(ctx, getFeishuChatSessionBindingBySession, chatSessionID)
+	var i FeishuChatSessionBinding
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.AgentID,
+		&i.ChatSessionID,
+		&i.FeishuChatID,
+		&i.FeishuRootID,
+		&i.LastMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProjectID,
+	)
+	return i, err
+}
+
 const getLastChatTaskSession = `-- name: GetLastChatTaskSession :one
 SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE chat_session_id = $1
@@ -287,6 +525,41 @@ func (q *Queries) GetPendingChatTask(ctx context.Context, chatSessionID pgtype.U
 	row := q.db.QueryRow(ctx, getPendingChatTask, chatSessionID)
 	var i GetPendingChatTaskRow
 	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
+	return i, err
+}
+
+const getRecentFeishuChatSessionBindingForUserChat = `-- name: GetRecentFeishuChatSessionBindingForUserChat :one
+SELECT id, workspace_id, user_id, agent_id, chat_session_id, feishu_chat_id, feishu_root_id, last_message_id, created_at, updated_at, project_id
+FROM feishu_chat_session_binding
+WHERE user_id = $1
+  AND feishu_chat_id = $2
+  AND feishu_root_id = $3
+ORDER BY updated_at DESC
+LIMIT 1
+`
+
+type GetRecentFeishuChatSessionBindingForUserChatParams struct {
+	UserID       pgtype.UUID `json:"user_id"`
+	FeishuChatID string      `json:"feishu_chat_id"`
+	FeishuRootID string      `json:"feishu_root_id"`
+}
+
+func (q *Queries) GetRecentFeishuChatSessionBindingForUserChat(ctx context.Context, arg GetRecentFeishuChatSessionBindingForUserChatParams) (FeishuChatSessionBinding, error) {
+	row := q.db.QueryRow(ctx, getRecentFeishuChatSessionBindingForUserChat, arg.UserID, arg.FeishuChatID, arg.FeishuRootID)
+	var i FeishuChatSessionBinding
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.AgentID,
+		&i.ChatSessionID,
+		&i.FeishuChatID,
+		&i.FeishuRootID,
+		&i.LastMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProjectID,
+	)
 	return i, err
 }
 
@@ -612,4 +885,36 @@ func (q *Queries) UpdateChatSessionTitle(ctx context.Context, arg UpdateChatSess
 		&i.RuntimeID,
 	)
 	return i, err
+}
+
+const updateFeishuChatBindingLastMessage = `-- name: UpdateFeishuChatBindingLastMessage :exec
+UPDATE feishu_chat_session_binding
+SET last_message_id = $2, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateFeishuChatBindingLastMessageParams struct {
+	ID            pgtype.UUID `json:"id"`
+	LastMessageID string      `json:"last_message_id"`
+}
+
+func (q *Queries) UpdateFeishuChatBindingLastMessage(ctx context.Context, arg UpdateFeishuChatBindingLastMessageParams) error {
+	_, err := q.db.Exec(ctx, updateFeishuChatBindingLastMessage, arg.ID, arg.LastMessageID)
+	return err
+}
+
+const updateFeishuChatBindingProject = `-- name: UpdateFeishuChatBindingProject :exec
+UPDATE feishu_chat_session_binding
+SET project_id = $2, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateFeishuChatBindingProjectParams struct {
+	ID        pgtype.UUID `json:"id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+func (q *Queries) UpdateFeishuChatBindingProject(ctx context.Context, arg UpdateFeishuChatBindingProjectParams) error {
+	_, err := q.db.Exec(ctx, updateFeishuChatBindingProject, arg.ID, arg.ProjectID)
+	return err
 }

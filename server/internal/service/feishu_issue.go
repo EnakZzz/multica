@@ -291,6 +291,97 @@ SET inbox_item_id = EXCLUDED.inbox_item_id,
 	return err
 }
 
+func (s *FeishuIssueService) SendTextToChat(ctx context.Context, chatID, text string) error {
+	if s == nil {
+		return nil
+	}
+	chatID = strings.TrimSpace(chatID)
+	text = strings.TrimSpace(text)
+	if chatID == "" || text == "" {
+		return nil
+	}
+	content, err := json.Marshal(map[string]string{"text": text})
+	if err != nil {
+		return err
+	}
+	return s.request(ctx, http.MethodPost, "im/v1/messages",
+		url.Values{"receive_id_type": []string{"chat_id"}},
+		map[string]string{
+			"receive_id": chatID,
+			"msg_type":   "text",
+			"content":    string(content),
+		},
+		nil,
+	)
+}
+
+func (s *FeishuIssueService) SendInteractiveToChat(ctx context.Context, chatID string, card map[string]any) error {
+	if s == nil {
+		return nil
+	}
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" || len(card) == 0 {
+		return nil
+	}
+	content, err := json.Marshal(card)
+	if err != nil {
+		return err
+	}
+	return s.request(ctx, http.MethodPost, "im/v1/messages",
+		url.Values{"receive_id_type": []string{"chat_id"}},
+		map[string]string{
+			"receive_id": chatID,
+			"msg_type":   "interactive",
+			"content":    string(content),
+		},
+		nil,
+	)
+}
+
+func (s *FeishuIssueService) SendPostToChat(ctx context.Context, chatID, markdown string) error {
+	if s == nil {
+		return nil
+	}
+	chatID = strings.TrimSpace(chatID)
+	markdown = strings.TrimSpace(markdown)
+	if chatID == "" || markdown == "" {
+		return nil
+	}
+	content, err := json.Marshal(map[string]any{
+		"zh_cn": map[string]any{
+			"title": "",
+			"content": [][]map[string]string{
+				{
+					{"tag": "md", "text": markdown},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return s.request(ctx, http.MethodPost, "im/v1/messages",
+		url.Values{"receive_id_type": []string{"chat_id"}},
+		map[string]string{
+			"receive_id": chatID,
+			"msg_type":   "post",
+			"content":    string(content),
+		},
+		nil,
+	)
+}
+
+func (s *FeishuIssueService) ChatEnabled() bool {
+	if s == nil {
+		return false
+	}
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("FEISHU_CHAT_ENABLED")))
+	if raw == "" {
+		return true
+	}
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
 func (s *FeishuIssueService) buildIssueCard(ctx context.Context, item db.InboxItem, issueStatus string) map[string]any {
 	status := issueStatus
 	if status == "" {

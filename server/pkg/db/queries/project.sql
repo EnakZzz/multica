@@ -13,6 +13,13 @@ WHERE (p.workspace_id = sqlc.arg('workspace_id') OR pwl.workspace_id = sqlc.arg(
   AND (sqlc.narg('priority')::text IS NULL OR p.priority = sqlc.narg('priority'))
 ORDER BY p.created_at DESC;
 
+-- name: ListProjectsForUserWorkspaces :many
+SELECT DISTINCT p.* FROM project p
+JOIN member m ON m.workspace_id = p.workspace_id
+WHERE m.user_id = $1
+  AND (sqlc.narg('status')::text IS NULL OR p.status = sqlc.narg('status'))
+ORDER BY p.updated_at DESC, p.created_at DESC;
+
 -- name: GetProject :one
 SELECT * FROM project
 WHERE id = $1;

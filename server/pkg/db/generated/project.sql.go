@@ -361,6 +361,51 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 	return items, nil
 }
 
+const listProjectsForUserWorkspaces = `-- name: ListProjectsForUserWorkspaces :many
+SELECT DISTINCT p.id, p.workspace_id, p.title, p.description, p.icon, p.status, p.lead_type, p.lead_id, p.created_at, p.updated_at, p.priority FROM project p
+JOIN member m ON m.workspace_id = p.workspace_id
+WHERE m.user_id = $1
+  AND ($2::text IS NULL OR p.status = $2)
+ORDER BY p.updated_at DESC, p.created_at DESC
+`
+
+type ListProjectsForUserWorkspacesParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	Status pgtype.Text `json:"status"`
+}
+
+func (q *Queries) ListProjectsForUserWorkspaces(ctx context.Context, arg ListProjectsForUserWorkspacesParams) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjectsForUserWorkspaces, arg.UserID, arg.Status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Project{}
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Icon,
+			&i.Status,
+			&i.LeadType,
+			&i.LeadID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Priority,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateProject = `-- name: UpdateProject :one
 UPDATE project SET
     title = COALESCE($2, title),

@@ -31,3 +31,10 @@ FROM member m
 JOIN "user" u ON u.id = m.user_id
 WHERE m.workspace_id = $1
 ORDER BY m.created_at ASC;
+
+-- name: ListWorkspacesForUser :many
+SELECT w.*
+FROM workspace w
+JOIN member m ON m.workspace_id = w.id
+WHERE m.user_id = $1
+ORDER BY w.created_at ASC;

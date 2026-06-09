@@ -145,6 +145,7 @@ type AiGatewayRouteTarget struct {
 	AuthMode                    string             `json:"auth_mode"`
 	CookieEnv                   pgtype.Text        `json:"cookie_env"`
 	CustomHeaderEnvs            []byte             `json:"custom_header_envs"`
+	ApiKey                      pgtype.Text        `json:"api_key"`
 }
 
 type AiGatewayRouteTargetApiKeyPool struct {
@@ -352,6 +353,37 @@ type Feedback struct {
 	Message     string             `json:"message"`
 	Metadata    []byte             `json:"metadata"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type FeishuChatPendingSelection struct {
+	ID                  pgtype.UUID        `json:"id"`
+	UserID              pgtype.UUID        `json:"user_id"`
+	OpenID              string             `json:"open_id"`
+	FeishuChatID        string             `json:"feishu_chat_id"`
+	FeishuRootID        string             `json:"feishu_root_id"`
+	FeishuMessageID     string             `json:"feishu_message_id"`
+	OriginalContent     string             `json:"original_content"`
+	CandidateProjectIds []pgtype.UUID      `json:"candidate_project_ids"`
+	Status              string             `json:"status"`
+	SelectedProjectID   pgtype.UUID        `json:"selected_project_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ExpiresAt           pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt          pgtype.Timestamptz `json:"consumed_at"`
+}
+
+type FeishuChatSessionBinding struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
+	FeishuChatID  string             `json:"feishu_chat_id"`
+	FeishuRootID  string             `json:"feishu_root_id"`
+	LastMessageID string             `json:"last_message_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
 }
 
 type FeishuEventDelivery struct {

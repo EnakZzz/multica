@@ -302,3 +302,16 @@ WHERE status = 'offline'
   AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
   AND id NOT IN (SELECT DISTINCT runtime_id FROM agent)
 RETURNING id, workspace_id;
+
+-- name: GetPreferredFeishuChatRuntime :one
+SELECT ar.*
+FROM agent_runtime ar
+LEFT JOIN agent a ON a.runtime_id = ar.id
+WHERE ar.workspace_id = $1
+  AND ar.status = 'online'
+ORDER BY
+  CASE WHEN a.archived_at IS NULL AND a.visibility = 'workspace' THEN 0 ELSE 1 END,
+  CASE WHEN ar.visibility = 'public' THEN 0 ELSE 1 END,
+  ar.last_seen_at DESC NULLS LAST,
+  ar.created_at ASC
+LIMIT 1;

@@ -300,6 +300,16 @@ func main() {
 		DaemonWakeup:       daemonWakeup,
 		HeartbeatScheduler: heartbeatScheduler,
 	})
+	feishuEventHandler := handler.New(queries, pool, hub, bus, service.NewEmailService(), nil, nil, analyticsClient, handler.Config{}, daemonHub)
+	if stopFeishuEvents := feishuEventHandler.StartFeishuEventLongConnection(context.Background()); stopFeishuEvents != nil {
+		defer func() {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := stopFeishuEvents(stopCtx); err != nil {
+				slog.Warn("Feishu event long connection stop failed", "error", err)
+			}
+		}()
+	}
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -314,6 +324,12 @@ func main() {
 	autopilotSvc := service.NewAutopilotService(queries, pool, bus, taskSvc)
 	projectKnowledgeSvc := service.NewProjectKnowledgeService(queries, pool, nil)
 	registerAutopilotListeners(bus, autopilotSvc)
+	registerFeishuChatListeners(bus, &service.FeishuChatService{
+		Queries:     queries,
+		TxStarter:   pool,
+		TaskService: taskSvc,
+		Feishu:      feishuIssueSvc,
+	})
 
 	// Construct a LivenessStore that mirrors the one wired into the HTTP
 	// handler. Both the heartbeat write path (handler) and the sweeper read

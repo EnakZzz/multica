@@ -2,10 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -76,6 +84,15 @@ func newNotificationBus(t *testing.T, queries *db.Queries) *events.Bus {
 	return bus
 }
 
+func newNotificationBusWithFeishu(t *testing.T, queries *db.Queries, feishu *service.FeishuIssueService) *events.Bus {
+	t.Helper()
+	bus := events.New()
+	registerSubscriberListeners(bus, queries)
+	registerNotificationListeners(bus, queries, feishu)
+	t.Cleanup(func() { feishuIssueNotifications = nil })
+	return bus
+}
+
 func TestInboxListShowsOnlyFeishuFallbackIssueItems(t *testing.T) {
 	queries := db.New(testPool)
 	issueID := createTestIssue(t, testWorkspaceID, testUserID)
@@ -125,6 +142,233 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestNotification_IssueAssignedSendsFeishuCard(t *testing.T) {
+	queries := db.New(testPool)
+
+	assigneeEmail := "notif-feishu-assignee@multica.ai"
+	assigneeID := createTestUser(t, assigneeEmail)
+	t.Cleanup(func() { cleanupTestUser(t, assigneeEmail) })
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	var messageCalls atomic.Int32
+	var sentContent string
+	feishuServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code":                0,
+				"msg":                 "ok",
+				"tenant_access_token": "tenant-token",
+				"expire":              7200,
+			})
+		case "/open-apis/contact/v3/users/batch_get_id":
+			if got := r.URL.Query().Get("user_id_type"); got != "open_id" {
+				t.Fatalf("user_id_type = %q, want open_id", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 0,
+				"msg":  "ok",
+				"data": map[string]any{
+					"user_list": []map[string]string{
+						{"user_id": "ou_issue_assignee", "email": assigneeEmail},
+					},
+				},
+			})
+		case "/open-apis/im/v1/messages":
+			messageCalls.Add(1)
+			if got := r.URL.Query().Get("receive_id_type"); got != "open_id" {
+				t.Fatalf("receive_id_type = %q, want open_id", got)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer tenant-token" {
+				t.Fatalf("message Authorization = %q", got)
+			}
+			var request map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("decode message request: %v", err)
+			}
+			if request["receive_id"] != "ou_issue_assignee" {
+				t.Fatalf("receive_id = %q, want ou_issue_assignee", request["receive_id"])
+			}
+			if request["msg_type"] != "interactive" {
+				t.Fatalf("msg_type = %q, want interactive", request["msg_type"])
+			}
+			sentContent = request["content"]
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 0,
+				"msg":  "ok",
+				"data": map[string]string{
+					"message_id": "om_issue_assigned",
+					"root_id":    "om_issue_assigned",
+					"chat_id":    "oc_issue_chat",
+				},
+			})
+		default:
+			t.Fatalf("unexpected feishu path: %s", r.URL.Path)
+		}
+	}))
+	defer feishuServer.Close()
+
+	t.Setenv("FEISHU_APP_ID", "cli_test")
+	t.Setenv("FEISHU_APP_SECRET", "secret")
+	t.Setenv("FEISHU_BASE_URL", feishuServer.URL)
+	feishu := service.NewFeishuIssueServiceFromEnv(queries, testPool)
+	if feishu == nil {
+		t.Fatal("expected feishu issue service")
+	}
+
+	bus := newNotificationBusWithFeishu(t, queries, feishu)
+	var inboxEvents []events.Event
+	bus.Subscribe(protocol.EventInboxNew, func(e events.Event) {
+		inboxEvents = append(inboxEvents, e)
+	})
+
+	assigneeType := "member"
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:           issueID,
+				WorkspaceID:  testWorkspaceID,
+				Title:        "notif feishu issue",
+				Status:       "todo",
+				Priority:     "medium",
+				CreatorType:  "member",
+				CreatorID:    testUserID,
+				AssigneeType: &assigneeType,
+				AssigneeID:   &assigneeID,
+			},
+		},
+	})
+
+	var deliveryStatus string
+	waitForCondition(t, time.Second, func() bool {
+		if messageCalls.Load() != 1 {
+			return false
+		}
+		err := testPool.QueryRow(context.Background(), `
+			SELECT feishu_delivery_status
+			FROM inbox_item
+			WHERE issue_id = $1 AND recipient_id = $2 AND type = 'issue_assigned'
+		`, issueID, assigneeID).Scan(&deliveryStatus)
+		return err == nil && deliveryStatus == "sent"
+	})
+	if sentContent == "" || !strings.Contains(sentContent, "Issue 分配给你") {
+		t.Fatalf("expected interactive issue card content, got %q", sentContent)
+	}
+
+	if deliveryStatus != "sent" {
+		t.Fatalf("delivery status = %q, want sent", deliveryStatus)
+	}
+	if items := inboxItemsForRecipient(t, queries, assigneeID); len(items) != 0 {
+		t.Fatalf("sent feishu issue notification should be hidden from app inbox, got %d", len(items))
+	}
+	if len(inboxEvents) != 0 {
+		t.Fatalf("successful feishu delivery should not publish app inbox fallback event, got %d", len(inboxEvents))
+	}
+}
+
+func TestNotification_IssueAssignedSendsRealFeishuCard(t *testing.T) {
+	liveEmail := strings.TrimSpace(os.Getenv("FEISHU_LIVE_TEST_EMAIL"))
+	if liveEmail == "" {
+		t.Skip("set FEISHU_LIVE_TEST_EMAIL to run the live Feishu issue notification test")
+	}
+	if strings.TrimSpace(os.Getenv("FEISHU_APP_ID")) == "" || strings.TrimSpace(os.Getenv("FEISHU_APP_SECRET")) == "" {
+		t.Skip("FEISHU_APP_ID and FEISHU_APP_SECRET are required for the live Feishu issue notification test")
+	}
+
+	queries := db.New(testPool)
+	assigneeID := ensureTestUserByEmail(t, liveEmail)
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	feishu := service.NewFeishuIssueServiceFromEnv(queries, testPool)
+	if feishu == nil {
+		t.Fatal("expected feishu issue service from env")
+	}
+
+	bus := newNotificationBusWithFeishu(t, queries, feishu)
+	assigneeType := "member"
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:           issueID,
+				WorkspaceID:  testWorkspaceID,
+				Title:        "Live Feishu notification test",
+				Status:       "todo",
+				Priority:     "medium",
+				CreatorType:  "member",
+				CreatorID:    testUserID,
+				AssigneeType: &assigneeType,
+				AssigneeID:   &assigneeID,
+			},
+		},
+	})
+
+	var deliveryStatus string
+	var lastError *string
+	waitForCondition(t, 20*time.Second, func() bool {
+		err := testPool.QueryRow(context.Background(), `
+			SELECT feishu_delivery_status, feishu_delivery_last_error
+			FROM inbox_item
+			WHERE issue_id = $1 AND recipient_id = $2 AND type = 'issue_assigned'
+		`, issueID, assigneeID).Scan(&deliveryStatus, &lastError)
+		if err != nil {
+			return false
+		}
+		return deliveryStatus == "sent" || deliveryStatus == "failed"
+	})
+	if deliveryStatus != "sent" {
+		if lastError != nil {
+			t.Fatalf("live Feishu delivery status = %q, error = %s", deliveryStatus, *lastError)
+		}
+		t.Fatalf("live Feishu delivery status = %q, want sent", deliveryStatus)
+	}
+	if items := inboxItemsForRecipient(t, queries, assigneeID); len(items) != 0 {
+		t.Fatalf("sent live Feishu issue notification should be hidden from app inbox, got %d", len(items))
+	}
+}
+
+func ensureTestUserByEmail(t *testing.T, email string) string {
+	t.Helper()
+	var userID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
+		ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+		RETURNING id
+	`, "Live Feishu Test User", email).Scan(&userID); err != nil {
+		t.Fatalf("ensure live test user: %v", err)
+	}
+	return userID
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }
 
 // TestNotification_IssueCreated_AssigneeNotified verifies that when an issue is

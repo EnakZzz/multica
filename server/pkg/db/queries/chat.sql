@@ -147,3 +147,74 @@ WHERE id = $1;
 -- unread boundary stable across multiple incoming replies.
 UPDATE chat_session SET unread_since = now()
 WHERE id = $1 AND unread_since IS NULL;
+
+-- name: GetFeishuChatSessionBinding :one
+SELECT *
+FROM feishu_chat_session_binding
+WHERE workspace_id = $1
+  AND user_id = $2
+  AND feishu_chat_id = $3
+  AND feishu_root_id = $4
+LIMIT 1;
+
+-- name: GetFeishuChatSessionBindingBySession :one
+SELECT *
+FROM feishu_chat_session_binding
+WHERE chat_session_id = $1
+LIMIT 1;
+
+-- name: GetRecentFeishuChatSessionBindingForUserChat :one
+SELECT *
+FROM feishu_chat_session_binding
+WHERE user_id = $1
+  AND feishu_chat_id = $2
+  AND feishu_root_id = $3
+ORDER BY updated_at DESC
+LIMIT 1;
+
+-- name: CreateFeishuChatSessionBinding :one
+INSERT INTO feishu_chat_session_binding (
+    workspace_id, user_id, agent_id, chat_session_id,
+    feishu_chat_id, feishu_root_id, last_message_id, project_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, sqlc.narg('project_id'))
+ON CONFLICT (workspace_id, user_id, feishu_chat_id, feishu_root_id) DO UPDATE
+SET agent_id = EXCLUDED.agent_id,
+    chat_session_id = EXCLUDED.chat_session_id,
+    project_id = COALESCE(EXCLUDED.project_id, feishu_chat_session_binding.project_id),
+    last_message_id = EXCLUDED.last_message_id,
+    updated_at = now()
+RETURNING *;
+
+-- name: UpdateFeishuChatBindingLastMessage :exec
+UPDATE feishu_chat_session_binding
+SET last_message_id = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateFeishuChatBindingProject :exec
+UPDATE feishu_chat_session_binding
+SET project_id = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: CreateFeishuChatPendingSelection :one
+INSERT INTO feishu_chat_pending_selection (
+    user_id, open_id, feishu_chat_id, feishu_root_id, feishu_message_id,
+    original_content, candidate_project_ids, expires_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, now() + sqlc.arg('ttl')::interval)
+RETURNING *;
+
+-- name: GetFeishuChatPendingSelection :one
+SELECT *
+FROM feishu_chat_pending_selection
+WHERE id = $1
+LIMIT 1;
+
+-- name: ConsumeFeishuChatPendingSelection :one
+UPDATE feishu_chat_pending_selection
+SET status = 'consumed',
+    selected_project_id = $2,
+    consumed_at = now(),
+    updated_at = now()
+WHERE id = $1
+  AND status = 'pending'
+  AND expires_at > now()
+RETURNING *;
