@@ -506,6 +506,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetPlan)
 					r.Patch("/", h.UpdatePlan)
+					r.Delete("/", h.DeletePlan)
 					r.Post("/rerun", h.RerunPlan)
 					r.Post("/clarify-spec", h.ClarifyPlanSpec)
 					r.Post("/approve-spec", h.ApprovePlanSpec)
@@ -627,6 +628,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/reject", h.RejectSkillProposal)
 					r.Post("/apply", h.ApplySkillProposal)
 				})
+			})
+
+			r.Route("/api/review-items", func(r chi.Router) {
+				r.Get("/", h.ListReviewItems)
+				r.Post("/{id}/action", h.ActOnReviewItem)
 			})
 
 			// Usage

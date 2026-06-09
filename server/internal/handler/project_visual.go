@@ -997,6 +997,7 @@ func (h *Handler) CompleteProjectVisualNodeGeneration(w http.ResponseWriter, r *
 		writeError(w, http.StatusInternalServerError, "failed to record visual generation")
 		return
 	}
+	h.createArtifactReviewItemForVisualNode(r.Context(), project, node, nodeID, taskID, issueID, attachmentID, note, noteZh)
 	h.publishProjectVisualUpdated(project.WorkspaceID, project.ID, nodeID, "completed")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

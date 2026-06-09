@@ -921,6 +921,30 @@ type ProjectWorkspaceLink struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type ReviewItem struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	Type             string             `json:"type"`
+	Status           string             `json:"status"`
+	RiskLevel        string             `json:"risk_level"`
+	Title            string             `json:"title"`
+	Summary          string             `json:"summary"`
+	SourceActorType  pgtype.Text        `json:"source_actor_type"`
+	SourceActorID    pgtype.UUID        `json:"source_actor_id"`
+	SourceObjectType string             `json:"source_object_type"`
+	SourceObjectID   pgtype.UUID        `json:"source_object_id"`
+	TargetObjectType string             `json:"target_object_type"`
+	TargetObjectID   pgtype.UUID        `json:"target_object_id"`
+	Payload          []byte             `json:"payload"`
+	Diff             string             `json:"diff"`
+	AvailableActions []string           `json:"available_actions"`
+	ReviewerID       pgtype.UUID        `json:"reviewer_id"`
+	ReviewNote       string             `json:"review_note"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	ReviewedAt       pgtype.Timestamptz `json:"reviewed_at"`
+}
+
 type Skill struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
