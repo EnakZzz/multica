@@ -619,6 +619,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			r.Route("/api/skill-proposals", func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Get("/", h.ListSkillProposals)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetSkillProposal)
+					r.Post("/reject", h.RejectSkillProposal)
+					r.Post("/apply", h.ApplySkillProposal)
+				})
+			})
+
 			// Usage
 			r.Route("/api/usage", func(r chi.Router) {
 				r.Get("/daily", h.GetWorkspaceUsageByDay)

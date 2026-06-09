@@ -10,6 +10,8 @@ export const workspaceKeys = {
   myInvitations: () => ["invitations", "mine"] as const,
   agents: (wsId: string) => ["workspaces", wsId, "agents"] as const,
   skills: (wsId: string) => ["workspaces", wsId, "skills"] as const,
+  skillProposals: (wsId: string, status = "pending") =>
+    ["workspaces", wsId, "skill-proposals", status] as const,
   assigneeFrequency: (wsId: string) => ["workspaces", wsId, "assignee-frequency"] as const,
 };
 
@@ -55,6 +57,13 @@ export function skillDetailOptions(wsId: string, skillId: string) {
     queryKey: [...workspaceKeys.skills(wsId), skillId] as const,
     queryFn: () => api.getSkill(skillId),
     enabled: !!skillId,
+  });
+}
+
+export function skillProposalListOptions(wsId: string, status = "pending") {
+  return queryOptions({
+    queryKey: workspaceKeys.skillProposals(wsId, status),
+    queryFn: () => api.listSkillProposals({ status }),
   });
 }
 

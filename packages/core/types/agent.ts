@@ -331,6 +331,61 @@ export interface SkillFile {
   updated_at: string;
 }
 
+export type SkillProposalOperation = "insert" | "update" | "delete";
+export type SkillProposalStatus = "pending" | "rejected" | "applied";
+export type SkillProposalRisk = "low" | "medium" | "high";
+export type SkillProposalValidationStatus = "not_run" | "skipped" | "passed" | "failed";
+export type SkillProposalConfidence = "unknown" | "low" | "medium" | "high";
+
+export interface SkillProposalEditOp {
+  op: "add" | "delete" | "replace";
+  path: string;
+  section?: string;
+  content?: string;
+  old_content?: string;
+  new_content?: string;
+}
+
+export interface SkillProposal {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  source_task_id: string | null;
+  source_issue_id: string | null;
+  operation: SkillProposalOperation;
+  target_skill_id: string | null;
+  status: SkillProposalStatus;
+  title: string;
+  summary: string;
+  rationale: string;
+  risk_level: SkillProposalRisk;
+  proposed_name: string;
+  proposed_description: string;
+  proposed_content: string;
+  proposed_files: { path: string; content: string }[];
+  base_content_hash: string;
+  diff: string;
+  evidence_refs: Array<Record<string, unknown>>;
+  edit_ops: SkillProposalEditOp[];
+  validation_status: SkillProposalValidationStatus;
+  validation_score_before: number | null;
+  validation_score_after: number | null;
+  rejected_similar_count: number;
+  token_delta: number;
+  gate_reason: string;
+  confidence: SkillProposalConfidence;
+  curator_model: string;
+  curator_prompt_hash: string;
+  created_by: string | null;
+  reviewed_by: string | null;
+  rejected_reason: string;
+  applied_skill_id: string | null;
+  created_at: string;
+  updated_at: string;
+  reviewed_at: string | null;
+  applied_at: string | null;
+}
+
 export interface CreateSkillRequest {
   name: string;
   description?: string;

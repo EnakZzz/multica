@@ -33,6 +33,7 @@ import type {
   User,
   Skill,
   SkillSummary,
+  SkillProposal,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,
@@ -1519,6 +1520,27 @@ export class ApiClient {
     return this.fetch("/api/skills/import", {
       method: "POST",
       body: JSON.stringify(data),
+    });
+  }
+
+  async listSkillProposals(params?: { status?: string; limit?: number }): Promise<SkillProposal[]> {
+    const search = new URLSearchParams();
+    if (params?.status) search.set("status", params.status);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return this.fetch<SkillProposal[]>(`/api/skill-proposals${suffix}`);
+  }
+
+  async applySkillProposal(id: string): Promise<SkillProposal> {
+    return this.fetch<SkillProposal>(`/api/skill-proposals/${id}/apply`, {
+      method: "POST",
+    });
+  }
+
+  async rejectSkillProposal(id: string, reason = ""): Promise<SkillProposal> {
+    return this.fetch<SkillProposal>(`/api/skill-proposals/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
     });
   }
 

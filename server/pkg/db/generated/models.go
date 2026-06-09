@@ -944,6 +944,46 @@ type SkillFile struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type SkillProposal struct {
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	ProjectID             pgtype.UUID        `json:"project_id"`
+	SourceTaskID          pgtype.UUID        `json:"source_task_id"`
+	SourceIssueID         pgtype.UUID        `json:"source_issue_id"`
+	Operation             string             `json:"operation"`
+	TargetSkillID         pgtype.UUID        `json:"target_skill_id"`
+	Status                string             `json:"status"`
+	Title                 string             `json:"title"`
+	Summary               string             `json:"summary"`
+	Rationale             string             `json:"rationale"`
+	RiskLevel             string             `json:"risk_level"`
+	ProposedName          string             `json:"proposed_name"`
+	ProposedDescription   string             `json:"proposed_description"`
+	ProposedContent       string             `json:"proposed_content"`
+	ProposedFiles         []byte             `json:"proposed_files"`
+	BaseContentHash       string             `json:"base_content_hash"`
+	Diff                  string             `json:"diff"`
+	EvidenceRefs          []byte             `json:"evidence_refs"`
+	CuratorModel          string             `json:"curator_model"`
+	CuratorPromptHash     string             `json:"curator_prompt_hash"`
+	CreatedBy             pgtype.UUID        `json:"created_by"`
+	ReviewedBy            pgtype.UUID        `json:"reviewed_by"`
+	RejectedReason        string             `json:"rejected_reason"`
+	AppliedSkillID        pgtype.UUID        `json:"applied_skill_id"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	ReviewedAt            pgtype.Timestamptz `json:"reviewed_at"`
+	AppliedAt             pgtype.Timestamptz `json:"applied_at"`
+	EditOps               []byte             `json:"edit_ops"`
+	ValidationStatus      string             `json:"validation_status"`
+	ValidationScoreBefore pgtype.Float8      `json:"validation_score_before"`
+	ValidationScoreAfter  pgtype.Float8      `json:"validation_score_after"`
+	RejectedSimilarCount  int32              `json:"rejected_similar_count"`
+	TokenDelta            int32              `json:"token_delta"`
+	GateReason            string             `json:"gate_reason"`
+	Confidence            string             `json:"confidence"`
+}
+
 type TaskMessage struct {
 	ID        pgtype.UUID        `json:"id"`
 	TaskID    pgtype.UUID        `json:"task_id"`

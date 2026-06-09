@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
   BookOpen,
+  GitMerge,
   Plus,
   Search,
 } from "lucide-react";
@@ -40,10 +41,12 @@ import { PageHeader } from "../../layout/page-header";
 import { canEditSkill } from "../hooks/use-can-edit-skill";
 import { readOrigin } from "../lib/origin";
 import { CreateSkillDialog } from "./create-skill-dialog";
+import { SkillProposalsPanel } from "./skill-proposals-panel";
 import { type SkillRow, useSkillColumns } from "./skill-columns";
 import { useT } from "../../i18n";
 
 type FilterKey = "all" | "used" | "unused" | "mine";
+type ViewKey = "library" | "proposals";
 
 const SCOPE_KEYS: FilterKey[] = ["all", "used", "unused", "mine"];
 
@@ -196,6 +199,7 @@ export default function SkillsPage() {
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [view, setView] = useState<ViewKey>("library");
   const [createOpen, setCreateOpen] = useState(false);
 
   const assignments = useMemo(
@@ -217,6 +221,13 @@ export default function SkillsPage() {
 
   const myRole =
     members.find((m) => m.user_id === currentUserId)?.role ?? null;
+  const canReviewProposals = myRole === "owner" || myRole === "admin";
+
+  useEffect(() => {
+    if (!canReviewProposals && view === "proposals") {
+      setView("library");
+    }
+  }, [canReviewProposals, view]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -361,7 +372,30 @@ export default function SkillsPage() {
       )}
 
       <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
-        {!showEmpty && (
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={view === "library" ? "default" : "outline"}
+            onClick={() => setView("library")}
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+            Library
+          </Button>
+          {canReviewProposals && (
+            <Button
+              type="button"
+              size="sm"
+              variant={view === "proposals" ? "default" : "outline"}
+              onClick={() => setView("proposals")}
+            >
+              <GitMerge className="h-3.5 w-3.5" />
+              Proposals
+            </Button>
+          )}
+        </div>
+
+        {view === "library" && !showEmpty && (
           <div className="max-w-3xl rounded-r-md border-l-2 border-l-brand bg-brand/5 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
             <span className="font-medium text-foreground">
               {t(($) => $.page.intro_banner.title)}
@@ -372,7 +406,9 @@ export default function SkillsPage() {
             </span>
           </div>
         )}
-        {showEmpty ? (
+        {view === "proposals" ? (
+          <SkillProposalsPanel />
+        ) : showEmpty ? (
           <div className="flex flex-1 items-center justify-center">
             <EmptyState onCreate={() => setCreateOpen(true)} />
           </div>

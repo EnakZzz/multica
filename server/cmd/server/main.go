@@ -324,6 +324,7 @@ func main() {
 	autopilotSvc := service.NewAutopilotService(queries, pool, bus, taskSvc)
 	projectKnowledgeSvc := service.NewProjectKnowledgeService(queries, pool, nil)
 	registerAutopilotListeners(bus, autopilotSvc)
+	registerSkillCuratorListeners(bus, queries)
 	registerFeishuChatListeners(bus, &service.FeishuChatService{
 		Queries:     queries,
 		TxStarter:   pool,
@@ -347,6 +348,7 @@ func main() {
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
 	go runDBStatsLogger(sweepCtx, pool)
 	go runProjectKnowledgeEmbeddingWorker(sweepCtx, projectKnowledgeSvc)
+	go runSkillCuratorSleepWorker(sweepCtx, queries, envSkillCuratorSleepConfig())
 
 	if metricsServer != nil {
 		go func() {
