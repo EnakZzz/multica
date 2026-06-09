@@ -1,0 +1,124 @@
+version: 1
+name: Dynamic fan-out feature development
+description: >
+  Workflow for broad cross-module changes. It classifies the task, fans out
+  implementation and verification work into clean contexts, synthesizes the
+  branch, runs adversarial review, and creates a PR/MR only after the gates
+  pass.
+nodes:
+  - key: classify-and-plan
+    type: subagent-driven-development
+    repo: multica
+    title: Classify the task and create the fan-out plan
+    description: >
+      Classify the issue by affected surfaces: backend, frontend/views,
+      packages/core, runtime/daemon, database/migrations, CI/release, docs, and
+      E2E/browser behavior. Produce a concrete fan-out plan with work packages,
+      shared contracts, expected files, required tests, and stop conditions.
+
+      Keep the plan bounded. If a work package has no independent value or
+      cannot be verified separately, merge it into another package. If the
+      issue is actually narrow, stop and recommend Review gated feature
+      development instead.
+    position:
+      x: 120
+      y: 120
+
+  - key: backend-work
+    type: issue
+    repo: multica
+    title: Backend and data-plane implementation
+    description: >
+      Implement the backend, database, daemon, CLI, or API portions identified
+      by classify-and-plan. Keep server state in the backend/React Query
+      contract, update sqlc/migrations/tests when needed, and publish exact
+      verification commands.
+    depends_on:
+      - classify-and-plan
+    position:
+      x: 480
+      y: 20
+
+  - key: frontend-work
+    type: issue
+    repo: multica
+    title: Frontend and shared package implementation
+    description: >
+      Implement the packages/core, packages/views, packages/ui, app bridge, or
+      UI behavior identified by classify-and-plan. Preserve package boundaries:
+      core has no react-dom/localStorage/process.env, ui has no core import,
+      views has no next or react-router import.
+    depends_on:
+      - classify-and-plan
+    position:
+      x: 480
+      y: 220
+
+  - key: verification-work
+    type: check
+    repo: multica
+    title: Focused verification for all fan-out work
+    description: >
+      Run focused Go, TypeScript, browser, or self-host checks for each work
+      package. Exercise the real login flow for authenticated UI checks. Record
+      commands, outputs, screenshots or URLs when relevant, and unresolved
+      failures.
+    depends_on:
+      - backend-work
+      - frontend-work
+    position:
+      x: 840
+      y: 120
+
+  - key: synthesize-and-integrate
+    type: merge
+    repo: multica
+    title: Synthesize fan-out results into one branch
+    description: >
+      Combine the independent work into a coherent branch. Resolve contract
+      mismatches between backend and frontend, remove duplicate or abandoned
+      paths, update docs when behavior changed, and ensure the branch has a
+      single final verification summary.
+
+      Do not proceed if any work package is missing evidence or if two packages
+      changed the same contract incompatibly.
+    depends_on:
+      - verification-work
+    position:
+      x: 1200
+      y: 120
+
+  - key: adversarial-review
+    type: code_review
+    repo: multica
+    title: Adversarial review of the synthesized branch
+    description: >
+      Review the synthesized branch as an independent skeptic. Look for hidden
+      cross-module regressions, stale cache keys, permissions drift,
+      workspace-scoping mistakes, migration risk, missing tests, broken package
+      boundaries, and UI/runtime mismatches. Findings must block PR/MR creation
+      until fixed or explicitly accepted by the owner.
+    depends_on:
+      - synthesize-and-integrate
+    position:
+      x: 1560
+      y: 120
+
+  - key: create-pr
+    type: issue
+    repo: multica
+    title: Create PR/MR after fan-out review passes
+    description: >
+      Push the final branch and create or reuse a PR/MR using:
+
+      multica repo integrate --strategy pr-first --test-result "<summary>"
+
+      The PR/MR body must include the fan-out plan, completed work packages,
+      verification evidence, adversarial review result, and residual risks. If
+      PR/MR creation fails, leave the issue blocked with the exact command and
+      error; do not mark the handoff ready.
+    depends_on:
+      - adversarial-review
+    position:
+      x: 1920
+      y: 120

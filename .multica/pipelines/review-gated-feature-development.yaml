@@ -1,8 +1,8 @@
 version: 1
 name: Review gated feature development
 description: >
-  Feature workflow that stops after implementation for spec compliance review,
-  then code quality review, then a pull request and explicit human-ready
+  Feature workflow that uses a classify step, isolated implementation,
+  focused verification, adversarial review gates, then PR/MR-first human
   handoff. Upstream commit merge requests use this same pipeline after the
   owner assigns the generated upstream commit review issue to a developer
   agent.
@@ -36,6 +36,26 @@ nodes:
       x: 120
       y: 120
 
+  - key: classify-and-scope
+    type: check
+    repo: multica
+    title: Classify scope, risks, and verification route
+    description: >
+      Classify the requested work before implementation. Decide whether the
+      task is backend-only, frontend-only, full-stack, data/migration,
+      runtime/daemon, CI/release, or documentation-only. Record the affected
+      modules, expected files, required tests, project rules from AGENTS.md and
+      CLAUDE.md, and any constraints that must survive context compaction.
+
+      If the issue is too broad for one implementation node, stop and ask the
+      owner to run Dynamic fan-out feature development instead. Do not start
+      implementation until the expected verification route is explicit.
+    depends_on:
+      - prepare-branch
+    position:
+      x: 420
+      y: 120
+
   - key: implement-feature
     type: issue
     repo: multica
@@ -59,9 +79,28 @@ nodes:
       surface and keep the branch limited to the approved upstream commit plus
       required conflict fixes.
     depends_on:
-      - prepare-branch
+      - classify-and-scope
     position:
-      x: 460
+      x: 740
+      y: 120
+
+  - key: focused-verification
+    type: check
+    repo: multica
+    title: Run focused verification and publish evidence
+    description: >
+      Run the verification route selected by classify-and-scope. Prefer
+      focused tests for the changed surface first, then broader checks only
+      when the branch is stable. Capture exact commands, pass/fail status,
+      relevant logs, and any intentionally skipped checks with reasons.
+
+      Do not mark this node done while a known failing command remains
+      unexplained. If verification exposes a real implementation bug, send the
+      work back to implement-feature with the concrete failure and root cause.
+    depends_on:
+      - implement-feature
+    position:
+      x: 1060
       y: 120
 
   - key: spec-compliance-review
@@ -73,9 +112,9 @@ nodes:
       issue context, and success criteria. Fail the gate when the implementation
       misses required behavior, scope boundaries, or acceptance criteria.
     depends_on:
-      - implement-feature
+      - focused-verification
     position:
-      x: 800
+      x: 1380
       y: 120
 
   - key: code-quality-review
@@ -89,7 +128,7 @@ nodes:
     depends_on:
       - spec-compliance-review
     position:
-      x: 1140
+      x: 1700
       y: 120
 
   - key: create-pr
@@ -98,20 +137,24 @@ nodes:
     title: Create pull request for human review
     description: >
       After spec and code review gates pass, push the dedicated branch and
-      create a GitHub pull request against the fork's main branch. Use gh pr
-      create when available. The PR title should match the pipeline run title
-      or summarize the upstream commit being merged. The PR body must include
-      the upstream SHA, source URL, conflict resolutions, local fork changes
-      retained or dropped because upstream superseded them, tests run, review
-      gate results, and residual risks.
+      create or reuse a GitHub pull request or GitLab merge request against the
+      approved target branch. Prefer the repository's integration primitive:
 
-      If gh is missing, not authenticated, lacks permission, or the push fails,
-      do not mark this issue done. Report the exact command, stderr, current
-      branch, remote URLs, and whether the branch was pushed.
+      multica repo integrate --strategy pr-first --test-result "<summary>"
+
+      The PR/MR title should match the pipeline run title or summarize the
+      upstream commit being merged. The body must include the upstream SHA when
+      relevant, source URL, conflict resolutions, local fork changes retained
+      or dropped because upstream superseded them, tests run, review gate
+      results, and residual risks.
+
+      If PR/MR creation fails, do not mark this issue done or move the parent
+      to in_review. Report the exact command, stderr, current branch, remote
+      URLs, auth environment names present, and whether the branch was pushed.
     depends_on:
       - code-quality-review
     position:
-      x: 1480
+      x: 2020
       y: 120
 
   - key: ready-for-human
@@ -124,5 +167,5 @@ nodes:
     depends_on:
       - create-pr
     position:
-      x: 1820
+      x: 2340
       y: 120

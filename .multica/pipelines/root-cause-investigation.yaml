@@ -1,0 +1,117 @@
+version: 1
+name: Root-cause investigation
+description: >
+  Structured investigation workflow for failures, regressions, self-host
+  issues, CLI/runtime bugs, and hard-to-reproduce behavior. It separates
+  evidence collection, independent hypotheses, repro verification, synthesis,
+  and the fix/escalation decision so the agent does not settle on its first
+  explanation.
+nodes:
+  - key: collect-evidence
+    type: issue
+    repo: multica
+    title: Collect failure evidence and reproduction boundary
+    description: >
+      Collect the exact failing command, URL, issue/comment ID, screenshot,
+      logs, environment, branch, commit, service status, and any user-provided
+      reproduction steps. If the user provided a failing command, reproduce
+      that command before changing the target.
+
+      Record what is confirmed, what is inferred, and what is unknown. Do not
+      propose a workaround until the failure surface and first failing boundary
+      are explicit.
+    position:
+      x: 120
+      y: 120
+
+  - key: source-hypotheses
+    type: issue
+    repo: multica
+    title: Generate source-level hypotheses
+    description: >
+      Trace the relevant code path from the observed entry point to the likely
+      failing component. Produce at least two plausible source-level hypotheses
+      with file/function references, expected symptoms, and the smallest check
+      that could confirm or refute each one.
+
+      Prefer actual source reads and tests over speculation. If current source
+      contradicts older memory or docs, trust the current checkout and mention
+      the drift.
+    depends_on:
+      - collect-evidence
+    position:
+      x: 480
+      y: 20
+
+  - key: runtime-state-hypotheses
+    type: issue
+    repo: multica
+    title: Generate runtime and state hypotheses
+    description: >
+      Inspect runtime state that could explain the failure: database rows,
+      local config, daemon state, Docker/self-host service status, CLI config,
+      environment variables, git remotes, auth tokens by name only, and recent
+      task/comment records. Produce independent hypotheses with the exact state
+      check needed to prove or disprove each one.
+
+      Never print secret token values. For authenticated API checks, use the
+      configured CLI token and matching workspace slug.
+    depends_on:
+      - collect-evidence
+    position:
+      x: 480
+      y: 220
+
+  - key: repro-verification
+    type: check
+    repo: multica
+    title: Verify and falsify hypotheses
+    description: >
+      Run targeted checks to confirm or falsify the source and runtime
+      hypotheses. Prefer the smallest reproducible command, focused test, API
+      call, or browser/UI flow that exercises the real failing path.
+
+      For local self-host pages, stay on the active self-host URL and use the
+      dev verification-code login flow. Do not start a separate dev server or
+      seed localStorage unless the issue explicitly requires it.
+    depends_on:
+      - source-hypotheses
+      - runtime-state-hypotheses
+    position:
+      x: 840
+      y: 120
+
+  - key: synthesize-root-cause
+    type: spec_review
+    repo: multica
+    title: Synthesize root cause and reject weak explanations
+    description: >
+      Synthesize the investigation into one root cause, rejected alternatives,
+      evidence links, and the minimal fix boundary. The result must identify
+      the first bad condition, why the observed symptom follows from it, and
+      what change would prevent recurrence.
+
+      If evidence is insufficient, mark the investigation blocked with the
+      smallest missing observation. Do not claim root cause from correlation
+      alone.
+    depends_on:
+      - repro-verification
+    position:
+      x: 1200
+      y: 120
+
+  - key: fix-or-escalate
+    type: issue
+    repo: multica
+    title: Apply fix or create a bounded follow-up
+    description: >
+      If the root cause is confirmed and the fix is in scope, implement the
+      smallest durable fix with focused tests and a concise final comment. If
+      the fix is out of scope or needs owner input, create a bounded follow-up
+      issue with evidence, reproduction steps, and the exact unresolved
+      decision.
+    depends_on:
+      - synthesize-root-cause
+    position:
+      x: 1560
+      y: 120

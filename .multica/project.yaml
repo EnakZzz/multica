@@ -20,6 +20,12 @@ roles:
   - key: reviewer
     name: Reviewer
     description: Reviews branches before merge or deployment.
+  - key: investigator
+    name: Investigator
+    description: Runs structured root-cause investigation from logs, source, state, and repro evidence.
+  - key: orchestrator
+    name: Orchestrator
+    description: Breaks large issues into independent work nodes and synthesizes their results.
   - key: deployer
     name: Deployer
     description: Runs the self-host Docker update after reviewed changes land on main.
@@ -38,9 +44,28 @@ pipelines:
   - path: pipelines/review-gated-feature-development.yaml
     role_bindings:
       prepare-branch: developer
+      classify-and-scope: orchestrator
       implement-feature: developer
+      focused-verification: developer
       spec-compliance-review: reviewer
       code-quality-review: reviewer
+      create-pr: developer
+  - path: pipelines/root-cause-investigation.yaml
+    role_bindings:
+      collect-evidence: investigator
+      source-hypotheses: investigator
+      runtime-state-hypotheses: investigator
+      repro-verification: investigator
+      synthesize-root-cause: investigator
+      fix-or-escalate: developer
+  - path: pipelines/dynamic-fanout-feature-development.yaml
+    role_bindings:
+      classify-and-plan: orchestrator
+      backend-work: developer
+      frontend-work: developer
+      verification-work: developer
+      synthesize-and-integrate: orchestrator
+      adversarial-review: reviewer
       create-pr: developer
   - path: pipelines/upstream-sync-watch.yaml
     role_bindings:
