@@ -138,6 +138,59 @@ export interface SearchProjectsResponse {
   total: number;
 }
 
+export type ReviewItemType =
+  | "skill_review"
+  | "issue_change_review"
+  | "plan_review"
+  | "artifact_review";
+
+export type ReviewItemStatus =
+  | "pending"
+  | "approved"
+  | "changes_requested"
+  | "rejected"
+  | "superseded";
+
+export type ReviewItemRiskLevel = "low" | "medium" | "high";
+
+export type ReviewItemAction =
+  | "approve"
+  | "reject"
+  | "request_changes"
+  | "promote"
+  | "assign"
+  | "rerun"
+  | "open_source";
+
+export interface ReviewItem {
+  id: string;
+  workspace_id: string;
+  type: ReviewItemType;
+  status: ReviewItemStatus;
+  risk_level: ReviewItemRiskLevel;
+  title: string;
+  summary: string;
+  source_actor_type: string | null;
+  source_actor_id: string | null;
+  source_object_type: string;
+  source_object_id: string | null;
+  target_object_type: string;
+  target_object_id: string | null;
+  payload: Record<string, unknown>;
+  diff: string;
+  available_actions: ReviewItemAction[];
+  reviewer_id: string | null;
+  review_note: string;
+  created_at: string;
+  updated_at: string;
+  reviewed_at: string | null;
+}
+
+export interface ReviewItemActionRequest {
+  action: ReviewItemAction;
+  note?: string;
+}
+
 export interface UpdateMeRequest {
   name?: string;
   avatar_url?: string;

@@ -11,6 +11,10 @@ import type {
   UpdateMemberRequest,
   ListIssuesParams,
   ListGroupedIssuesParams,
+  ReviewItem,
+  ReviewItemActionRequest,
+  ReviewItemStatus,
+  ReviewItemType,
   Agent,
   CreateAgentRequest,
   AgentTemplate,
@@ -724,6 +728,12 @@ export class ApiClient {
     });
   }
 
+  async deletePlan(id: string): Promise<void> {
+    await this.fetch<unknown>(`/api/plans/${id}`, {
+      method: "DELETE",
+    });
+  }
+
   async approvePlanSpec(id: string, data: ApprovePlanSpecRequest = {}): Promise<Plan> {
     const raw = await this.fetch<unknown>(`/api/plans/${id}/approve-spec`, {
       method: "POST",
@@ -1369,6 +1379,25 @@ export class ApiClient {
 
   async archiveCompletedInbox(): Promise<{ count: number }> {
     return this.fetch("/api/inbox/archive-completed", { method: "POST" });
+  }
+
+  // Review items / 决策台
+  async listReviewItems(params: {
+    status?: ReviewItemStatus | "all";
+    type?: ReviewItemType | "all";
+  } = {}): Promise<ReviewItem[]> {
+    const query = new URLSearchParams();
+    if (params.status && params.status !== "all") query.set("status", params.status);
+    if (params.type && params.type !== "all") query.set("type", params.type);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return this.fetch(`/api/review-items${suffix}`);
+  }
+
+  async actOnReviewItem(id: string, data: ReviewItemActionRequest): Promise<ReviewItem> {
+    return this.fetch(`/api/review-items/${id}/action`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   }
 
   // Notification preferences
